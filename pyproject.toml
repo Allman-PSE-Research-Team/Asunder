@@ -8,7 +8,7 @@ version = "0.1.1"
 description = "Asunder: Constrained Structure Detection on Undirected Graphs."
 readme = "README.md"
 license = "BSD-3-Clause"
-authors = [{ name = "Fortune Adekogbe", email = "fortunea@umich.edu" }, { name = "Allman Group", email = "allmanaa@umich.edu" }]
+authors = [{ name = "Allman Group", email = "allmanaa@umich.edu" }, { name = "Fortune Adekogbe", email = "fortunea@umich.edu" }]
 requires-python = ">=3.10,<3.14"
 dependencies = [
   "numpy>=1.26",
