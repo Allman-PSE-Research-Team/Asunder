@@ -1,8 +1,8 @@
 # Asunder
 
-Asunder is a Python package for constrained structure detection on undirected graphs, with workflows centered on column generation and customizable master/subproblem pipelines.
+Asunder is a Python package for constrained network structure detection (graph clustering) on undirected graphs, with workflows centered on column generation and customizable master/subproblem pipelines. In said workflows, expensive Integer Linear Program (ILP) subproblems are replaced with heuristic clustering algorithms while ensuring that dual information from the master problem are respected. This enables the solution of a wide range of constrained structure detection (graph clustering) problems, insofar as a master problem, and any other relevant custom element, can be properly formulated. See [problem fit section](#problem-fit) for more detail.
 
-Development of Asunder is led by the Allman Group at the University of Michigan.
+Development of Asunder is led by Andrew Allman's Process Systems Research Team at the University of Michigan.
 
 ## Install
 
@@ -37,10 +37,19 @@ import numpy as np
 from asunder import CSDDecomposition, CSDDecompositionConfig
 
 A = np.array([
-    [0, 1, 1, 0],
-    [1, 0, 1, 0],
-    [1, 1, 0, 0],
-    [0, 0, 0, 0],
+    [0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1],
+    [0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0]
 ], dtype=float)
 
 cfg = CSDDecompositionConfig(
@@ -65,7 +74,7 @@ solver = create_solver("gurobi_direct")
 
 ## Problem Fit
 
-Asunder works well out of the box for optimization problems where coordination or operations are coupled across time and those interactions can be represented as a graph over constraints.
+Asunder works well out of the box for optimization problems where coordination or operations are coupled across space (e.g. central coupling) and/or time and those interactions can be represented as a graph over constraints.
 
 Asunder also supports general constrained partitioning beyond these domain examples when requirements can be expressed as must-link and cannot-link constraints.
 
@@ -84,6 +93,15 @@ Representative domains:
 - network configuration and resource management in telecommunications
 
 For a fuller guide on where default workflows are sufficient vs where customization helps, see `docs/problem_fit.rst`.
+
+## Customization Points
+
+For custom problems, typical extension points are:
+
+1. Initial feasible partition generator.
+2. `solve_master_problem` replacement.
+3. Optional heuristic or ILP subproblem replacement.
+4. Optional partition refinement stage.
 
 ## Constraint Graph Compatibility
 
@@ -108,15 +126,6 @@ How these are used:
 
 If you are not using `run_evaluation` and instead calling decomposition APIs directly, you can work from an adjacency matrix plus explicit `must_link`, `cannot_link`, and optional `worthy_edges`.
 
-## Customization Points
-
-For custom problems, typical extension points are:
-
-1. Initial feasible partition generator.
-2. `solve_master_problem` replacement.
-3. Heuristic or ILP subproblem replacement.
-4. Optional partition refinement stage.
-
 ## Examples
 
 - Nonlinear B&P-style decomposition: `examples/nonlinear_bp.py`
@@ -130,6 +139,8 @@ Sphinx docs are scaffolded in `docs/` and intended for Read the Docs deployment.
 
 Asunder integrates or wraps methods from:
 
+- networkx
+- sklearn
 - python-igraph / leidenalg
 - scikit-network
 - signed-louvain style algorithms
