@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "put-asunder"
+version = "0.1.1"
+description = "Asunder: Constrained Structure Detection on Undirected Graphs."
+readme = "README.md"
+license = "BSD-3-Clause"
+authors = [{ name = "Fortune Adekogbe", email = "fortunea@umich.edu" }, { name = "Allman Group", email = "allmanaa@umich.edu" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.13",
+  "networkx>=3.2",
+  "scikit-learn>=1.5",
+  "scikit-network>=0.33",
+  "tqdm>=4.66",
+  "pyomo>=6.8",
+  "gurobipy>=11.0",
+]
+keywords = ["graph", "constrained-clustering", "graph-clustering", "community-detection", "core-periphery", "column-generation", "constrained-network-structure-detection", "branch-and-price"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Intended Audience :: Science/Research",
+]
+
+[project.optional-dependencies]
+graph = ["python-igraph>=0.11", "leidenalg>=0.10"]
+viz = ["matplotlib>=3.8", "seaborn>=0.13"]
+legacy = ["cpnet"]
+docs = [
+  "sphinx>=7.4",
+  "furo>=2024.8.6",
+  "myst-parser>=3.0",
+  "sphinx-autodoc-typehints>=2.3",
+]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=5.0",
+  "ruff>=0.7",
+  "mypy>=1.12",
+  "pre-commit>=3.8",
+]
+
+[project.urls]
+Homepage = "https://github.com/allman-group/asunder"
+Documentation = "https://put-asunder.readthedocs.io"
+Repository = "https://github.com/allman-group/asunder"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["asunder*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "legacy: tests that require best-effort legacy dependencies",
+  "solver: tests that require an available Pyomo solver backend",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "E741", "B", "UP"]
