@@ -36,10 +36,10 @@ Where the default approach works well
 
 The default pipeline is usually a good first choice when:
 
+- must-link, cannot-link, or worthy-edge semantics are meaningful in the model
 - coordination or operations are coupled across time
 - constraints can be mapped to nodes and shared-variable interactions to edges
 - the problem has mixed discrete-continuous behavior with local clusters and global coupling
-- must-link, cannot-link, or worthy-edge semantics are meaningful in the model
 - you want interpretable groups (for example modules, teams, corridors, network regions)
 
 Domain examples
