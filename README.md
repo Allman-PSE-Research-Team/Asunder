@@ -1,5 +1,5 @@
-# Asunder
-
+![](assets/asunder.gif)
+---
 Asunder is a Python package for constrained network structure detection (graph clustering) on undirected graphs, with workflows centered on column generation and customizable master/subproblem pipelines. In said workflows, expensive Integer Linear Program (ILP) subproblems are replaced with heuristic clustering algorithms while ensuring that dual information from the master problem are respected. This enables the solution of a wide range of constrained structure detection (graph clustering) problems, insofar as a master problem, and any other relevant custom element, can be properly formulated. See [problem fit section](#problem-fit) for more detail.
 
 Development of Asunder is led by [Andrew Allman's Process Systems Research Team](https://allmanaa.engin.umich.edu/) at the University of Michigan.
@@ -36,6 +36,7 @@ pip install "put-asunder[legacy]"
 import numpy as np
 from asunder import CSDDecomposition, CSDDecompositionConfig
 
+# graph adjacency
 A = np.array([
     [0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -52,6 +53,7 @@ A = np.array([
     [0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0]
 ], dtype=float)
 
+# ifc_params contains function and parameters for generating initial feasible partition(s) 
 cfg = CSDDecompositionConfig(
     ifc_params={"generator": lambda N, **_: [np.ones((N, N))], "num": 1, "args": {"N": A.shape[0]}},
     extract_dual=False,
@@ -74,19 +76,17 @@ solver = create_solver("gurobi_direct")
 
 ## Problem Fit
 
-Asunder works well out of the box for optimization problems where coordination or operations are coupled across space (e.g. central coupling) and/or time and those interactions can be represented as a graph over constraints.
+Asunder supports general constrained partitioning when requirements can be expressed as must-link and cannot-link constraints.
 
-Asunder also supports general constrained partitioning beyond these domain examples when requirements can be expressed as must-link and cannot-link constraints.
+Asunder also works well out of the box for optimization problems where coordination or operations are coupled across space (e.g. central coupling) and/or time and those interactions can be represented as a graph over constraints.
 
-Typical fit signals:
-
+Sample fit signals:
+- a useful interpretation of must-link/cannot-link or worthy-edge constraints
 - coupling across time periods, units, or resources
 - mixed discrete-continuous structure with meaningful constraint interactions
-- a useful interpretation of must-link/cannot-link or worthy-edge constraints
 - value from multilevel partitioning or core-periphery structure detection
 
-Representative domains:
-
+Some representative domains:
 - stochastic design and dispatch in energy systems
 - scheduling and resource allocation in healthcare systems
 - planning, routing, and location in supply chain and logistics
