@@ -1,4 +1,6 @@
-# Asunder
+![](assets/asunder.gif)
+---
+# Asunder: A constrained network structure detection toolkit
 
 Asunder is a Python package for constrained network structure detection (graph clustering) on undirected graphs, with workflows centered on column generation and customizable master/subproblem pipelines. In said workflows, expensive Integer Linear Program (ILP) subproblems are replaced with heuristic clustering algorithms while ensuring that dual information from the master problem are respected. This enables the solution of a wide range of constrained structure detection (graph clustering) problems, insofar as a master problem, and any other relevant custom element, can be properly formulated. See [problem fit section](#problem-fit) for more detail.
 
