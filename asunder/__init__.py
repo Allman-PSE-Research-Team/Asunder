@@ -1,7 +1,7 @@
 """Asunder: Constrained structure detection on undirected graphs."""
 
-from asunder.column_generation.master import solve_master_problem
-from asunder.column_generation.subproblem import solve_subproblem
+from asunder.base.column_generation.master import solve_master_problem
+from asunder.base.column_generation.subproblem import solve_subproblem
 from asunder.config import CSDDecompositionConfig
 from asunder.orchestrator import CSDDecomposition, run_csd_decomposition
 from asunder.solvers import create_solver
@@ -9,12 +9,22 @@ from asunder.types import DecompositionResult, IterationRecord
 
 
 def run_evaluation(*args, **kwargs):
-    """Run benchmark evaluations using :mod:`asunder.evaluation.runner`.
-
-    This lazy import keeps optional evaluation dependencies out of import-time
-    paths for users who only need decomposition APIs.
     """
-    from asunder.evaluation.runner import run_evaluation as _run_evaluation
+    Run benchmark evaluations using :mod:`asunder.nlbp.case_studies.runner`.
+    
+    Parameters
+    ----------
+    *args : Any
+        Additional positional arguments.
+    **kwargs : Any
+        Additional keyword arguments.
+    
+    Returns
+    -------
+    Any
+        Computed result.
+    """
+    from asunder.nlbp.case_studies.runner import run_evaluation as _run_evaluation
 
     return _run_evaluation(*args, **kwargs)
 

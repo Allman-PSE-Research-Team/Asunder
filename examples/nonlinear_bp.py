@@ -2,7 +2,7 @@ import networkx as nx
 import numpy as np
 
 from asunder import CSDDecomposition, CSDDecompositionConfig
-from asunder.case_studies import build_circle_cutting_graph
+from asunder.nlbp.case_studies import build_circle_cutting_graph
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
         extract_dual=False,
         final_master_solve=False,
         max_iterations=3,
-        verbosity=0,
+        verbose=0,
     )
     result = CSDDecomposition(config=cfg).run(A)
     print("iterations:", result.metadata["n_iterations"])

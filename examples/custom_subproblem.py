@@ -1,7 +1,7 @@
 import numpy as np
 
 from asunder import CSDDecomposition, CSDDecompositionConfig
-from asunder.column_generation.subproblem import heuristic_subproblem
+from asunder.base.column_generation.subproblem import heuristic_subproblem
 
 
 def my_subproblem(A, a, m, duals, **kwargs):
@@ -28,7 +28,7 @@ def main():
         extract_dual=False,
         final_master_solve=False,
         max_iterations=2,
-        verbosity=0,
+        verbose=0,
     )
     result = CSDDecomposition(config=cfg, subproblem_fn=my_subproblem).run(A)
     print("final objective:", result.final_master_obj)

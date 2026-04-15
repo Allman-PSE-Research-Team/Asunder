@@ -5,21 +5,33 @@ from collections import defaultdict
 import numpy as np
 import pytest
 
-import asunder.evaluation.runner as runner
-from asunder.algorithms.community import refine_partition_linear_group
-from asunder.case_studies.circle_cutting import build_circle_cutting_graph
-from asunder.case_studies.cpcong import build_cpcong_graph
-from asunder.column_generation.decomposition import CSD_decomposition
-from asunder.column_generation.master import compute_f_star, solve_master_problem
-from asunder.column_generation.subproblem import custom_heuristic_subproblem
-from asunder.evaluation.metrics import permuted_accuracy
-from asunder.evaluation.runner import run_evaluation
+import asunder.nlbp.case_studies.runner as runner
+from asunder.base.column_generation.decomposition import CSD_decomposition
+from asunder.base.column_generation.master import compute_f_star, solve_master_problem
+from asunder.base.column_generation.subproblem import custom_heuristic_subproblem
+from asunder.base.evaluation.metrics import permuted_accuracy
+from asunder.base.utils.graph import partition_matrix_to_vector
+from asunder.base.utils.partition_generation import make_simple_partition
+from asunder.nlbp.algorithms.refinement import refine_partition_linear_group
+from asunder.nlbp.case_studies.circle_cutting import build_circle_cutting_graph
+from asunder.nlbp.case_studies.cpcong import build_cpcong_graph
+from asunder.nlbp.case_studies.runner import run_evaluation
 from asunder.solvers import set_default_solver
-from asunder.utils.graph import partition_matrix_to_vector
-from asunder.utils.partition_generation import make_simple_partition
 
 
 def _assert_metric_payload(payload, *, expect_gap=False, require_nonnegative_gap=False):
+    """
+    Tests metric validity given a payload.
+
+    Parameters
+    ----------
+    payload: dict[str, float]
+        Map from metric name to values.
+    expect_gap: bool
+        Shows that the optimality gap is included in the test.
+    require_nonnegative_gap: bool
+        Determines whether we require nonnegative gap or not.
+    """
     expected_keys = {"NMI", "ARI", "VI", "Accuracy", "time"}
     if expect_gap:
         expected_keys.add("Gap")
@@ -37,6 +49,9 @@ def _assert_metric_payload(payload, *, expect_gap=False, require_nonnegative_gap
 
 
 def test_cpcong_small_instance_builder_shape_and_tags():
+    """
+    Tests small instance of cpcong with 2 production units, 3 products and 5 time periods.
+    """
     K, J, T = 2, 3, 5
     G, constraint_labels, var_to_constraints = build_cpcong_graph(K=K, J=J, T=T)
 
@@ -57,6 +72,9 @@ def test_cpcong_small_instance_builder_shape_and_tags():
 
 
 def test_circle_cutting_small_instance_builder_shape_and_tags():
+    """
+    Tests small instance of circcut with 4 circles (products), 5 rectangles (raw materials) and 2 dimensions.
+    """
     num_circles, num_rectangles = 4, 5
     dims = ["x", "y"]
     G, constraint_labels, var_to_constraints = build_circle_cutting_graph(
@@ -85,6 +103,7 @@ def test_circle_cutting_small_instance_builder_shape_and_tags():
 
 
 def test_run_evaluation_cpcong_small_instance_spec_smoke():
+    """Smoke test of small cpcong instance."""
     results = run_evaluation(
         problem="cpcong",
         build_params={"K": 2, "J": 3, "T": 5},
@@ -97,6 +116,7 @@ def test_run_evaluation_cpcong_small_instance_spec_smoke():
 
 
 def test_run_evaluation_circcut_small_instance_spec_smoke():
+    """Smoke test of small circcut instance."""
     results = run_evaluation(
         problem="circcut",
         build_params={"num_circles": 4, "num_rectangles": 5, "dimensions": ["x", "y"]},
@@ -109,6 +129,7 @@ def test_run_evaluation_circcut_small_instance_spec_smoke():
 
 
 def test_run_evaluation_cd_refine_handles_partition_tuple_without_solver(monkeypatch):
+    """Tests community detection evaluation workflow with tiny circcut instance and without a solver"""
     def fake_csd_decomposition(A, a, m, mp_function, sp_function, **kwargs):
         return [{"z_sol": np.eye(A.shape[0], dtype=int)}]
 
@@ -127,13 +148,14 @@ def test_run_evaluation_cd_refine_handles_partition_tuple_without_solver(monkeyp
 
 @pytest.mark.solver
 def test_run_evaluation_cd_refine_cpcong_calls_partitioned_gt(monkeypatch):
+    """Tests community detection evaluation workflow with small cpcong instance"""
     _configure_solver_or_skip()
     calls = {"count": 0}
     original = runner.partititon_periphery_components
 
-    def wrapped(A, labels, return_sparse=False):
+    def wrapped(A, labels):
         calls["count"] += 1
-        return original(A, labels, return_sparse=return_sparse)
+        return original(A, labels)
 
     monkeypatch.setattr(runner, "partititon_periphery_components", wrapped)
 
@@ -151,13 +173,14 @@ def test_run_evaluation_cd_refine_cpcong_calls_partitioned_gt(monkeypatch):
 
 @pytest.mark.solver
 def test_run_evaluation_cd_refine_circcut_calls_partitioned_gt(monkeypatch):
+    """Tests community detection evaluation workflow with small circcut instance"""
     _configure_solver_or_skip()
     calls = {"count": 0}
     original = runner.partititon_periphery_components
 
-    def wrapped(A, labels, return_sparse=False):
+    def wrapped(A, labels):
         calls["count"] += 1
-        return original(A, labels, return_sparse=return_sparse)
+        return original(A, labels)
 
     monkeypatch.setattr(runner, "partititon_periphery_components", wrapped)
 
@@ -174,6 +197,7 @@ def test_run_evaluation_cd_refine_circcut_calls_partitioned_gt(monkeypatch):
 
 
 def _configure_solver_or_skip():
+    """Configure solver for tests."""
     require_solver = os.environ.get("ASUNDER_REQUIRE_SOLVER_TESTS", "").strip().lower() in {
         "1",
         "true",
@@ -214,6 +238,7 @@ def _configure_solver_or_skip():
 
 
 def _assert_real_decomposition_quality(A, labels_gt, results):
+    """Tests validity of decomposition result"""
     assert results, "CSD_decomposition should return iteration records."
     final_z = results[-1]["z_sol"]
     assert final_z is not None
@@ -221,7 +246,7 @@ def _assert_real_decomposition_quality(A, labels_gt, results):
     a = A.sum(axis=1)
     m = a.sum()
     baseline = np.ones((A.shape[0], A.shape[0]), dtype=int)
-    baseline_score = compute_f_star(A, a, m, baseline, algo="louvain")
+    baseline_score = compute_f_star(A, a, m, baseline)
     best_score = max(results[-1]["f_stars"])
     assert best_score > baseline_score + 1e-8
 
@@ -237,6 +262,7 @@ def _assert_real_decomposition_quality(A, labels_gt, results):
 
 
 def _tracked_package_refine(counter):
+    """Track refinement"""
     def _refine(A, partition, **kwargs):
         counter["count"] += 1
         return refine_partition_linear_group(A=A, partition=partition, **kwargs)
@@ -246,6 +272,9 @@ def _tracked_package_refine(counter):
 
 @pytest.mark.solver
 def test_cd_refine_real_decomposition_quality_cpcong_small_instance():
+    """
+    Tests real decomposition quality of small instance of cpcong with 2 production units, 3 products and 5 time periods.
+    """
     _configure_solver_or_skip()
 
     G, _, _ = build_cpcong_graph(K=2, J=3, T=5)
@@ -254,7 +283,7 @@ def test_cd_refine_real_decomposition_quality_cpcong_small_instance():
     A = runner.nx.to_numpy_array(G)
     n = A.shape[0]
 
-    labels_gt, _ = runner.partititon_periphery_components(A, labels_gt, return_sparse=False)
+    labels_gt, _ = runner.partititon_periphery_components(A, labels_gt)
 
     node_labels = list(G.nodes())
     label_node_map = {label: i for i, label in enumerate(node_labels)}
@@ -300,6 +329,9 @@ def test_cd_refine_real_decomposition_quality_cpcong_small_instance():
 
 @pytest.mark.solver
 def test_cd_refine_real_decomposition_quality_circcut_small_instance():
+    """
+    Tests real decomposition quality of small instance of circcut with 4 circles, 5 rectangles and 2 dimensions.
+    """
     _configure_solver_or_skip()
 
     G, _, _ = build_circle_cutting_graph(num_circles=4, num_rectangles=5, dimensions=["x", "y"])
@@ -307,7 +339,7 @@ def test_cd_refine_real_decomposition_quality_circcut_small_instance():
     A = runner.nx.to_numpy_array(G)
     n = A.shape[0]
 
-    labels_gt, _ = runner.partititon_periphery_components(A, labels_gt, return_sparse=False)
+    labels_gt, _ = runner.partititon_periphery_components(A, labels_gt)
 
     node_labels = list(G.nodes())
     label_node_map = {label: i for i, label in enumerate(node_labels)}

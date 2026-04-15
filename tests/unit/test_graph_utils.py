@@ -1,6 +1,6 @@
 import numpy as np
 
-from asunder.utils.graph import (
+from asunder.base.utils.graph import (
     contract_adj_matrix_new,
     expand_z_matrix,
     partition_matrix_to_vector,
@@ -9,6 +9,7 @@ from asunder.utils.graph import (
 
 
 def test_partition_vector_roundtrip():
+    """Tests partition vector roundtrip."""
     labels = np.array([0, 0, 1, 2, 2])
     z = partition_vector_to_2d_matrix(labels)
     got = partition_matrix_to_vector(z)
@@ -17,6 +18,7 @@ def test_partition_vector_roundtrip():
 
 
 def test_contract_and_expand_shape():
+    """Tests graph contraction and expansion."""
     A = np.array(
         [
             [0, 1, 1, 0],

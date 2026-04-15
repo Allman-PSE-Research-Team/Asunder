@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "put-asunder"
-version = "0.1.1"
-description = "Asunder: Constrained Structure Detection on Undirected Graphs."
+version = "0.1.2"
+description = "Asunder: Constrained Network Structure Detection on Undirected Graphs."
 readme = "README.md"
 license = "BSD-3-Clause"
 authors = [{ name = "Allman Group", email = "allmanaa@umich.edu" }, { name = "Fortune Adekogbe", email = "fortunea@umich.edu" }]
@@ -49,9 +49,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/allman-group/asunder"
-Documentation = "https://put-asunder.readthedocs.io"
-Repository = "https://github.com/allman-group/asunder"
+Homepage = "https://github.com/Allman-PSE-Research-Team/Asunder"
+Documentation = "https://asunder.readthedocs.io/"
+Repository = "https://github.com/Allman-PSE-Research-Team/Asunder"
 
 [tool.setuptools]
 include-package-data = true
