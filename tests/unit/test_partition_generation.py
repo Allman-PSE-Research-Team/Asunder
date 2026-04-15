@@ -1,9 +1,10 @@
 import numpy as np
 
-from asunder.utils.partition_generation import make_partitions_random_links_only
+from asunder.base.utils.partition_generation import make_partitions_random_links_only
 
 
 def test_random_partitions_respect_shape():
+    """Tests that random partition generation respects shape"""
     parts = make_partitions_random_links_only(
         N=6,
         must_link=[(0, 1)],

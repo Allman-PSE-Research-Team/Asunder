@@ -7,15 +7,26 @@ from typing import Any
 
 import numpy as np
 
-from asunder.column_generation.decomposition import CSD_decomposition
-from asunder.column_generation.master import solve_master_problem
-from asunder.column_generation.subproblem import heuristic_subproblem
+from asunder.base.column_generation.decomposition import CSD_decomposition
+from asunder.base.column_generation.master import solve_master_problem
+from asunder.base.column_generation.subproblem import heuristic_subproblem
 from asunder.config import CSDDecompositionConfig
 from asunder.types import DecompositionResult, IterationRecord, MasterProblemFn, SubproblemFn
 
 
 class CSDDecomposition:
-    """High-level driver that wires configuration to master/subproblem hooks."""
+    """
+    High-level driver that wires configuration to master/subproblem hooks.
+    
+    Parameters
+    ----------
+    config : CSDDecompositionConfig | None
+        Column generation configuration.
+    master_fn : MasterProblemFn
+        Master problem function.
+    subproblem_fn : SubproblemFn
+        Subproblem function.
+    """
 
     def __init__(
         self,
@@ -28,15 +39,33 @@ class CSDDecomposition:
         self.subproblem_fn = subproblem_fn
 
     def run(self, A: np.ndarray, a: np.ndarray | None = None, m: float | None = None, **overrides: Any) -> DecompositionResult:
-        """Execute decomposition and return typed iteration records."""
+        """
+        Execute decomposition and return typed iteration records.
+        
+        Parameters
+        ----------
+        A : np.ndarray of int | float, shape (N, N)
+            Adjacency / weight matrix.
+        a : np.ndarray of int | float, shape (N,)
+            Degree-like vector; defaults to row sums of the symmetrized adjacency.
+        m : float
+            Twice the total weight in the graph.
+        **overrides : Any
+            Additional keyword arguments.
+        
+        Returns
+        -------
+        DecompositionResult
+            Computed decomposition result object.
+        """
         if a is None:
             a = A.sum(axis=1)
         if m is None:
             m = float(np.sum(a))
         cfg = asdict(self.config)
         cfg.update(overrides)
-        verbosity = int(cfg.pop("verbosity", 1))
-        cfg["verbose"] = -1 if verbosity <= 0 else verbosity
+        verbose = int(cfg.pop("verbose", 1))
+        cfg["verbose"] = -1 if verbose <= 0 else verbose
         raw = CSD_decomposition(A, a, m, self.master_fn, self.subproblem_fn, **cfg)
         if raw is None:
             return DecompositionResult(records=[], final_partition=None, final_master_obj=None, metadata={"status": "infeasible"})
@@ -78,6 +107,30 @@ def run_csd_decomposition(
     subproblem_fn: SubproblemFn = heuristic_subproblem,
     **kwargs: Any,
 ) -> DecompositionResult:
-    """Convenience wrapper for one-shot decomposition runs."""
+    """
+    Convenience wrapper for one-shot decomposition runs.
+    
+    Parameters
+    ----------
+    A : np.ndarray of int | float, shape (N, N)
+        Adjacency / weight matrix.
+    a : np.ndarray of int | float, shape (N,)
+        Degree-like vector; defaults to row sums of the symmetrized adjacency.
+    m : float
+        Twice the total weight in the graph.
+    config : CSDDecompositionConfig | None
+        Column generation configuration.
+    master_fn : MasterProblemFn
+        Master problem function.
+    subproblem_fn : SubproblemFn
+        Subproblem function.
+    **kwargs : Any
+        Additional keyword arguments.
+    
+    Returns
+    -------
+    DecompositionResult
+        Computed decomposition result object.
+    """
     orchestrator = CSDDecomposition(config=config, master_fn=master_fn, subproblem_fn=subproblem_fn)
     return orchestrator.run(A, a=a, m=m, **kwargs)

@@ -16,6 +16,7 @@ def _subproblem(A, a, m, duals, **kwargs):
 
 
 def test_custom_master_and_subproblem_wiring():
+    """Tests custom master and subproblem wiring."""
     A = np.array(
         [
             [0, 1, 0],
@@ -30,7 +31,7 @@ def test_custom_master_and_subproblem_wiring():
         final_master_solve=False,
         max_iterations=3,
         tolerance=1e-8,
-        verbosity=0,
+        verbose=0,
     )
     result = CSDDecomposition(config=cfg, master_fn=_master, subproblem_fn=_subproblem).run(A)
     assert result.records

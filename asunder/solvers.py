@@ -9,10 +9,20 @@ _DEFAULT_SOLVER = None
 
 
 def create_solver(solver_name: str = "gurobi_direct", **solver_kwargs: Any):
-    """Create a pyomo solver instance.
-
-    If `solver_name` starts with `gurobi` and no explicit options are supplied,
-    this function relies on the `GRB_LICENSE_FILE` environment variable.
+    """
+    Create a pyomo solver instance.
+    
+    Parameters
+    ----------
+    solver_name : str
+        Name of solver.
+    **solver_kwargs : Any
+        Additional keyword arguments.
+    
+    Returns
+    -------
+    Any
+        Solver object.
     """
     try:
         from pyomo.opt import SolverFactory
@@ -25,13 +35,27 @@ def create_solver(solver_name: str = "gurobi_direct", **solver_kwargs: Any):
 
 
 def set_default_solver(solver: Any) -> None:
-    """Set the process-wide default solver instance used by Asunder."""
+    """
+    Set the process-wide default solver instance used by Asunder.
+    
+    Parameters
+    ----------
+    solver : Any
+        Solver object.
+    """
     global _DEFAULT_SOLVER
     _DEFAULT_SOLVER = solver
 
 
 def get_default_solver():
-    """Return the configured default solver, creating one lazily if needed."""
+    """
+    Return the configured default solver, creating one lazily if needed.
+    
+    Returns
+    -------
+    Any
+        Solver object.
+    """
     global _DEFAULT_SOLVER
     if _DEFAULT_SOLVER is None:
         _DEFAULT_SOLVER = create_solver()
