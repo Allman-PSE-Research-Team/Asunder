@@ -10,7 +10,7 @@ from asunder.base.utils.graph import partition_matrix_to_vector, partition_vecto
 
 
 def refine_partition_linear_group(
-    A, partition, *, p=1, prob_method="threshold", threshold=0.8, verbose=False
+    A, partition, *, p=1, prob_method="threshold", threshold=0.8, verbose=False, seed=None
 ):
     """
     Refine a partition by separating a linear-only group from the remaining nodes.

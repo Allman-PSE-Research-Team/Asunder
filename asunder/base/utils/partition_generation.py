@@ -621,7 +621,7 @@ def make_partitions_random_links_only(
     return [{"name": name, "g": g, "K_used": K_used} for name, g, K_used in parts_g]
 def make_simple_partition(
     N: int,
-    cannot_link: Sequence[tuple[int, int]] | None = None,
+    cannot_link: Sequence[tuple[int, int]] | None = None, seed=None
 ):
     """
     Create a single all-ones partition matrix with cannot-link zeroed pairs.
