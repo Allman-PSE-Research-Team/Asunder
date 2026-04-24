@@ -171,28 +171,28 @@ def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=Fals
 
     model = ConcreteModel()
     model.I = RangeSet(0, I - 1)
-    model.z = Var(model.I, model.I, domain=Binary)
+    pairs = [(i, j) for i in range(I) for j in range(i + 1, I)]
+    model.P = pyo.Set(initialize=pairs, dimen=2)
+    model.z = pyo.Var(model.P, domain=pyo.Binary, initialize=0)
     model.DiagonalUnity = Constraint(model.I, rule=lambda mdl, i: mdl.z[i, i] == 1)
 
-    def z_symmetry_rule(mdl, i, j):
-        """
-        Z symmetry rule.
-        """
-        if i < j:
-            return mdl.z[i, j] == mdl.z[j, i]
-        return Constraint.Skip
+    def zpair(i, j):
+        if i == j:
+            return 1.0
+        return model.z[min(i, j), max(i, j)]
 
-    model.ZSymmetry = Constraint(model.I, model.I, rule=z_symmetry_rule)
+    model.T = pyo.Set(
+        dimen=3,
+        initialize=[(i, j, k) for i in range(I) for j in range(i + 1, I) for k in range(j + 1, I)]
+    )
 
-    def transitivity_rule(mdl, i, j, k):
-        """
-        Transitivity rule.
-        """
-        if len(set([i, j, k])) == 3:
-            return mdl.z[i, j] + mdl.z[i, k] - mdl.z[j, k] <= 1
-        return Constraint.Skip
+    model.Transitivity = pyo.ConstraintList()
 
-    model.Transitivity = Constraint(model.I, model.I, model.I, rule=transitivity_rule)
+    for i, j, k in model.T:
+        model.Transitivity.add(zpair(i, j) + zpair(i, k) - zpair(j, k) <= 1)
+        model.Transitivity.add(zpair(i, j) + zpair(j, k) - zpair(i, k) <= 1)
+        model.Transitivity.add(zpair(i, k) + zpair(j, k) - zpair(i, j) <= 1)
+
 
     def sub_objective_rule(mdl):
         """
@@ -218,13 +218,13 @@ def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=Fals
             mod_a = modA.sum(axis=1)
             mod_m = mod_a.sum()
             M = sum(
-                ((modA[i, j] / mod_m) - ((mod_a[i] * mod_a[j]) / (mod_m**2))) * mdl.z[i, j]
+                ((modA[i, j] / mod_m) - ((mod_a[i] * mod_a[j]) / (mod_m**2))) * zpair(i, j)
                 for i in mdl.I
                 for j in mdl.I
             )
         else:
             M = sum(
-                ((A[i, j] / m) - ((a[i] * a[j]) / (m**2)) - dualW[i, j]) * mdl.z[i, j]
+                ((A[i, j] / m) - ((a[i] * a[j]) / (m**2)) - dualW[i, j]) * zpair(i, j)
                 for i in mdl.I
                 for j in mdl.I
             )
@@ -236,7 +236,7 @@ def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=Fals
         lb = getattr(res.problem, "lower_bound", None)
         ub = getattr(res.problem, "upper_bound", None)
         print(f"[Pricing] bounds: lower={lb}, upper={ub}")
-    z_sol = np.array([[value(model.z[i, j]) for j in model.I] for i in model.I])
+    z_sol = np.array([[value(zpair(i, j)) for j in model.I] for i in model.I])
     return value(model.OBJ), z_sol
 
 
