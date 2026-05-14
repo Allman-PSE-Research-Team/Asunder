@@ -1363,6 +1363,8 @@ def modular_very_fortunate_descent(
                 step = 0
                 while step < max_steps:
                     step += 1
+                    if step > math.sqrt(max_steps):
+                        print(f"`repair_min_sizes` has been running for {step - 1} steps.")
                     under = [g for g in range(K_used) if gsz[g] < r_min]
                     if not under:
                         return True

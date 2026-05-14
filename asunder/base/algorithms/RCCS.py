@@ -409,6 +409,8 @@ def _tabu_sweep(
     n_non_improving = 0
 
     for step in range(1, max_tabu_steps + 1):
+        if step > np.sqrt(max_tabu_steps):
+            print(f"`_tabu_sweep` has been running for {step - 1} steps.")
         best_improving: tuple[float, int, int, int] | None = None
         best_any: tuple[float, int, int, int] | None = None
 
