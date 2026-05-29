@@ -335,7 +335,7 @@ def make_partitions_links_only(
     must_link=None,
     cannot_link=None,
     n_cols: int = 15,
-    seed: int = 42,
+    seed: int | None = None,
     nodes=None,
     max_K_increase: int = 50,
 ):
@@ -496,7 +496,7 @@ def make_partitions_random_links_only(
     K: Optional[int] = None,
     must_link=None,
     cannot_link=None,
-    seed: int = 42,
+    seed: int | None = None,
     return_Z: bool = True,
     max_K_increase: int = 50,
     n_parts: int = 10,

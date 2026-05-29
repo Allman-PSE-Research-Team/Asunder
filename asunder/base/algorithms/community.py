@@ -179,7 +179,7 @@ def best_girvan_newman_partition(G, max_levels=10):
     return best_communities, best_mod
 
 
-def run_modularity(modified_A, algo="louvain", package="networkx", resolution=1, verbose=False, refine=True, refine_params=None):
+def run_modularity(modified_A, algo="louvain", package="networkx", seed=None, resolution=1, verbose=False, refine=True, refine_params=None):
     """
     Run modularity-style community detection and return ``(partition, score)``.
     
@@ -192,6 +192,8 @@ def run_modularity(modified_A, algo="louvain", package="networkx", resolution=1,
         Algorithm to be used for modularity based community detection.
     package : str
         Python package to be used for modularity based community detection.
+    seed : int | None
+        Random seed value.
     resolution : int or float
         Resolution parameter (gamma) used in modularity based methods.
     verbose : bool
@@ -208,7 +210,7 @@ def run_modularity(modified_A, algo="louvain", package="networkx", resolution=1,
     metric: float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
     """
-    assert modified_A.min() >= 0, "Adjacency / weight matrix includes negative values."
+    assert modified_A.min() >= 0, "Adjacency / weight matrix includes negative values." # ToDo: may need to drop this.
     assert algo in ["louvain", "leiden", "greedy", "girvan_newman"]
     modG = nx.from_numpy_array(modified_A.astype([("weight", "float")]))
     metric = None
@@ -221,10 +223,10 @@ def run_modularity(modified_A, algo="louvain", package="networkx", resolution=1,
 
     if algo == "louvain":
         if package == "networkx":
-            communities = nx.community.louvain_communities(modG, weight="weight", resolution=resolution)
+            communities = nx.community.louvain_communities(modG, weight="weight", resolution=resolution, seed=seed)
         elif package == "sknetwork":
             Louvain, _, _, _, _, _ = _import_sknetwork()
-            partition = Louvain().fit_predict(modified_A)
+            partition = Louvain(resolution=resolution).fit_predict(modified_A)
             communities = {}
             for i, val in enumerate(partition):
                 communities.setdefault(val, set()).add(int(i))
@@ -235,8 +237,10 @@ def run_modularity(modified_A, algo="louvain", package="networkx", resolution=1,
         if package == "leidenalg":
             la = _import_leidenalg()
             partition = la.find_partition(
-                ig_graph, la.ModularityVertexPartition, seed=42, weights="weight"
+                ig_graph, la.ModularityVertexPartition, seed=seed, weights="weight"
             )
+            resolution = None
+            # TODO: Add CPMVertexPartition which handles positive and negative weights and has resolution parameter.
             # TODO:Test negative weight handling
             # g_pos = ig_graph.subgraph_edges(ig_graph.es.select(weight_gt=0), delete_vertices=False)
             # g_neg = ig_graph.subgraph_edges(ig_graph.es.select(weight_lt=0), delete_vertices=False)
@@ -253,7 +257,7 @@ def run_modularity(modified_A, algo="louvain", package="networkx", resolution=1,
             communities = list(membership.values())
         elif package == "sknetwork":
             _, Leiden, _, _, _, _ = _import_sknetwork()
-            partition = Leiden().fit_predict(modified_A)
+            partition = Leiden(resolution=resolution).fit_predict(modified_A)
             communities = {}
             for i, val in enumerate(partition):
                 communities.setdefault(val, set()).add(int(i))
@@ -279,10 +283,12 @@ def run_modularity(modified_A, algo="louvain", package="networkx", resolution=1,
             for i, val in enumerate(clustering.membership):
                 communities.setdefault(val, set()).add(int(i))
             communities = communities.values()
+            resolution = None
         else:
             raise NotImplementedError(f"Invalid package: {package}")
     else:
         communities, _ = best_girvan_newman_partition(modG, max_levels=modified_A.shape[0])
+        resolution = None
 
     oneD_z = np.zeros(shape=(modified_A.shape[0]), dtype=np.int64)
     for i, community in enumerate(communities):
@@ -297,7 +303,7 @@ def run_modularity(modified_A, algo="louvain", package="networkx", resolution=1,
         # TODO: Recompute metric or decide to leave as None.
     else:
         zii = np.equal.outer(oneD_z, oneD_z).astype(int)
-        metric = nx.community.modularity(modG, communities)
+        metric = nx.community.modularity(modG, communities, resolution=resolution if resolution is not None else 1)
     return zii, metric
 
 
@@ -395,18 +401,18 @@ def run_igraph(modified_A, algo="infomap", resolution=1):
     elif algo == "multilevel":
         clustering = ig_graph.community_multilevel(weights="weight", resolution=resolution)
     elif algo == "voronoi":
-        clustering = ig_graph.community_voronoi(weights="weight", radius=resolution)
+        clustering = ig_graph.community_voronoi(weights="weight")
     elif algo == "walktrap":
         clustering = ig_graph.community_walktrap(weights="weight").as_clustering()
     else:
         raise NotImplementedError("Invalid Igraph Algorithm")
     oneD_z = clustering.membership
     zii = np.equal.outer(oneD_z, oneD_z).astype(int)
-    metric = ig_graph.modularity(clustering, weights="weight", resolution=resolution)
+    metric = ig_graph.modularity(clustering, weights="weight", resolution=resolution if  algo == "multilevel" else 1)
     return zii, metric
 
 
-def run_signed_louvain(modified_A):
+def run_signed_louvain(modified_A, seed=None):
     """
     Run signed Louvain on positive/negative layers and return ``(partition, score)``.
     
@@ -415,6 +421,8 @@ def run_signed_louvain(modified_A):
     modified_A : ndarray of float, shape (N, N)
         Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
         The original adjacency / weight matrix can also be parsed.
+    seed : int or None
+        Random seed value
     
     Returns
     -------
@@ -435,10 +443,10 @@ def run_signed_louvain(modified_A):
         k=2,
         initial_membership=None,
         weight="weight",
-        random_state=None,
         pass_max=40,
         return_dendogram=False,
         silent=True,
+        random_state=seed
     )
     oneD_z = np.zeros(shape=(modified_A.shape[0]), dtype=np.int64)
     for node, community in communities.items():

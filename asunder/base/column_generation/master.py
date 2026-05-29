@@ -60,7 +60,7 @@ def compute_f_star(A, a, m, z, gamma=1.0):
     metric: float
         Modularity score.
     """
-    metric = np.sum((A / m - np.outer(a, a) / (m * m)) * z)
+    metric = np.sum((A / m - gamma * np.outer(a, a) / (m * m)) * z)
     return metric
 
 

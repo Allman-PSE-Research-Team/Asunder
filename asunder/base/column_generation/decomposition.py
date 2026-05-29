@@ -26,6 +26,7 @@ def CSD_decomposition(
     check_flat_pricing=True,
     algo="louvain",
     package="sknetwork",
+    seed=None,
     extract_dual=False,
     # initial feasible column generator
     ifc_params: dict = {},
@@ -34,7 +35,8 @@ def CSD_decomposition(
     refine_params: dict={},
     use_refined_column=False,
     final_master_solve=True,
-    max_iterations=1000, tolerance=1e-10, verbose=False,
+    max_iterations=1000, disable_tqdm=False,
+    tolerance=1e-10, verbose=False,
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
@@ -91,6 +93,8 @@ def CSD_decomposition(
             ``"leiden"``
         ``None``:
             ``"signed_louvain"``, ``"spinglass"``
+    seed : int or None
+        Random seed value.
     extract_dual : bool
         Boolean that determines whether we extract duals from the master problem or not.
     ifc_params : dict[str, callable or dict or int]
@@ -105,6 +109,8 @@ def CSD_decomposition(
         Boolean that determines whether a final master solve is executed or not.
     max_iterations : int
         Maximum number of column generation iterations.
+    disable_tqdm : bool
+        Whether to disable the progress bar or not.
     tolerance : float
         Tolerance value for terminating column generation.
     verbose : int or bool
@@ -139,6 +145,21 @@ def CSD_decomposition(
     # deque to track flat pricing for termination
     SUB_OBJS = deque(maxlen=stopping_window)
 
+    # preprocess R_bounds if available for load balancing usecases to handle different cases
+    if additional_constraints["R_bounds"] is not None:
+        R_min, R_max = additional_constraints["R_bounds"]
+        if R_min is None and R_max is None:
+            # no load balancing without bounds or a way to infer bound
+            additional_constraints["LB"] = False
+            additional_constraints["R_bounds"] = None
+        else:
+            if R_min is None:
+                R_min = 1
+            if R_max is None:
+                R_max = np.shape(A)[0]
+            assert R_min <= R_max, "Cardinality bounds are improperly defined."
+            additional_constraints["R_bounds"] = (R_min, R_max)
+
     if (columns is not None and f_stars is not None) and len(columns) > 0:
         # initialize from parameters
         Z_star = columns
@@ -146,7 +167,7 @@ def CSD_decomposition(
     else:
         # generate initial feasible columns
         ifc_generator = ifc_params["generator"]
-        feasible_columns = ifc_generator(**ifc_params["args"])
+        feasible_columns = ifc_generator(**ifc_params["args"], seed=seed)
 
         # without feasible columns, terminate
         if len(feasible_columns) == 0:
@@ -170,7 +191,7 @@ def CSD_decomposition(
 
     # main column generation loop
     # for iteration in tqdm(range(max_iterations)):
-    with tqdm(total=max_iterations, disable=(verbose == -1)) as pbar:
+    with tqdm(total=max_iterations, disable=disable_tqdm) as pbar:
         iteration = 1
 
         while True:
@@ -208,7 +229,8 @@ def CSD_decomposition(
                         A, a, m, duals, algo=algo,
                         refine=refine_in_subproblem,
                         refine_params=refine_params,
-                        verbose=verbose
+                        verbose=verbose,
+                        seed=seed
                     )
                 else:
                     # uses package based heuristic subproblem
@@ -217,7 +239,8 @@ def CSD_decomposition(
                         algo=algo, package=package,
                         refine=refine_in_subproblem,
                         refine_params=refine_params,
-                        verbose=verbose
+                        verbose=verbose,
+                        seed=seed
                     )
             except Exception:
                 # uses ILP subproblem
@@ -250,7 +273,8 @@ def CSD_decomposition(
                     heuristic_col = refine_params["refine_func"](
                         A=A,
                         partition=z_sol,
-                        **refine_params["kwargs"]
+                        **refine_params["kwargs"],
+                        seed=seed
                     )
                     if heuristic_col is not None:
                         results[-1]["heuristic_col"] = heuristic_col
@@ -292,10 +316,13 @@ def CSD_decomposition(
         wz = np.zeros_like(Z_star[0]).astype(np.float64)
         for lambda_, column in zip(lambda_sol, Z_star):
             wz += (lambda_ * column)
+        if "shake_rounds" in refine_params["kwargs"]:
+            refine_params["kwargs"]["shake_rounds"] = 3
         heuristic_col = refine_params["refine_func"](
                 A=A,
                 partition=wz,
-                **refine_params["kwargs"]
+                **refine_params["kwargs"],
+                seed=seed
             )
         if heuristic_col is not None:
             Z_star.append(heuristic_col)

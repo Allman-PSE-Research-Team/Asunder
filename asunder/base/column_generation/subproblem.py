@@ -16,7 +16,7 @@ from asunder.base.algorithms.louvain_modified import ModifiedLouvain
 from asunder.base.algorithms.RCCS import search_partition_by_reduced_cost
 from asunder.base.algorithms.spectral import full_spectral_bisection
 from asunder.base.column_generation.master import compute_f_star
-from asunder.base.utils.graph import partition_vector_to_2d_matrix
+from asunder.base.utils.graph import partition_matrix_to_vector, partition_vector_to_2d_matrix
 from asunder.solvers import get_default_solver
 
 try:
@@ -45,6 +45,9 @@ def heuristic_subproblem(
     refine=False,
     refine_params=None,
     verbose=False,
+    gamma=1,
+    exact_rc=True,
+    seed=None
 ):
     """
     Solve pricing heuristically via selected clustering backend.
@@ -73,7 +76,14 @@ def heuristic_subproblem(
         ``-1``: No output
         ``False`` | ``0``: Minimal output
         ``True`` | ``1``: Detailed output
-    
+    gamma : int
+        Resolution parameter which controls the scale and size of the detected clusters.
+        Should be left as default (``1``) if:
+        ``algo`` is ``leiden`` and ``package`` is ``leidenalg"`` 
+        ``algo`` is ``greedy`` or ``multilevel`` and ``package`` is ``igraph``
+        ``algo`` is ``girvan_newman`` and ``package`` is ``networkx``
+    seed : int or None
+        Random seed value
     Returns
     -------
     Any
@@ -102,12 +112,12 @@ def heuristic_subproblem(
     modA_positive[modA_positive < 0] = 0
 
     if package == "igraph" and algo != "lpa":
-        zii, metric = run_igraph(modA, algo=algo, resolution=1)
+        zii, metric = run_igraph(modA, algo=algo, resolution=gamma)
     elif algo == "spinglass":
         zii = run_igraph_spinglass(modA)
         metric = compute_f_star(modA, mod_a, mod_m, zii)
     elif algo == "signed_louvain":
-        zii, metric = run_signed_louvain(modA)
+        zii, metric = run_signed_louvain(modA, seed=seed)
     elif algo == "lpa":
         if package == "sknetwork":
             zii, metric = run_lpa(modA)
@@ -122,14 +132,16 @@ def heuristic_subproblem(
             package=package,
             refine=refine,
             refine_params=refine_params,
-            resolution=1,
+            resolution=gamma,
             verbose=verbose,
         )
         if metric is None:
             mod_a_p = modA_positive.sum(axis=0)
             mod_m_p = np.sum(mod_a_p)
-            modB_p = (modA_positive / mod_m_p) - np.outer(mod_a_p, mod_a_p) / (mod_m_p**2)
+            modB_p = (modA_positive / mod_m_p) - gamma * np.outer(mod_a_p, mod_a_p) / (mod_m_p**2)
             metric = np.sum(modB_p * zii)
+    # TODO: algo param may be necessary if igraph algorithms require a different quality function.
+    metric = compute_f_star(A, a, m, zii, gamma=gamma) - np.sum(dualW * zii) if exact_rc else metric
     sub_obj_val = metric - constant_terms
     return sub_obj_val, zii
 
@@ -251,6 +263,7 @@ def custom_heuristic_subproblem(
     refine_params=None,
     max_iterations=50,
     tolerance=1e-8,
+    seed=None
 ):
     """
     Run in-package custom pricing heuristics (spectral/modified Louvain).
@@ -281,12 +294,15 @@ def custom_heuristic_subproblem(
         Maximum number of iterations.
     tolerance : float
         Tolerance value.
+    seed : int or None
+        Random seed value
     
     Returns
     -------
     Any
         Computed result.
     """
+    # TODO: Add gamma parameter to algorithms and this top level function.
     assert algo in {"spectral", "full_louvain", "one_level_louvain", "RCCS"}
     I = A.shape[0]
     constant_terms = 0
@@ -305,7 +321,7 @@ def custom_heuristic_subproblem(
             constant_terms += dual
 
     if "louvain" in algo:
-        louvain_model = ModifiedLouvain(random_state=None)
+        louvain_model = ModifiedLouvain(random_state=seed)
         if algo.startswith("full_"):
             louvain_model.fit(A, duals)
         else:
@@ -319,7 +335,7 @@ def custom_heuristic_subproblem(
             metric = louvain_model.obj_val_
     else:
         if algo == "RCCS":
-            res = search_partition_by_reduced_cost(adjacency=A, duals=duals)#, random_seed=seed)
+            res = search_partition_by_reduced_cost(adjacency=A, duals=duals, random_seed=seed)
             best_labels = res["best_labels"]
             z_sol = partition_vector_to_2d_matrix(best_labels)
             metric = res["best_reduced_cost"] + constant_terms # for normalization sake
