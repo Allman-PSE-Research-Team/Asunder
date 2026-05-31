@@ -1,4 +1,4 @@
-"""Very Fortunate Descent (VFD):  A greedy + local search algorithm for partition refinement under pairwise constraints and optionally, balance constraints."""
+"""Modular Very Fortunate Descent (VFD):  A local search algorithm for partition refinement under pairwise constraints and optionally, balance constraints."""
 
 from __future__ import annotations
 
@@ -868,7 +868,9 @@ def _resolve_k_control(
     K : int or None
         Baseline number of communities.
     R : int or None
-        Range parameter used by ``_range_bounds_from_KR`` when the K-constraint is active.
+        Width of the allowed cluster-size range. Also corresponds to the load balance tightness (smaller R implies tighter load balance).
+        For a selected cluster count, the lower and upper bounds are computed from the corresponding
+        balanced range rule. Used when the K-constraint is active.
     use_K_constraint : bool
         If True, use K/R-derived balance bounds and only test K-neighborhood values.
         If False, remove K-derived balance bounds and instead test ``candidate_Ks``.
@@ -977,7 +979,7 @@ def modular_very_fortunate_descent(
     orbit_fallback: bool = False,
 ) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
     """
-    Build a feasible decomposition column from co-association structure and local search.
+    Modular function for building a feasible decomposition column from co-association structure and local search.
 
     Parameters
     ----------
@@ -993,7 +995,9 @@ def modular_very_fortunate_descent(
         Baseline number of communities. Used directly only when ``use_K_constraint=True``.
         When ``use_K_constraint=False``, it is treated only as an optional search hint.
     R : int or None
-        Range parameter for ``_range_bounds_from_KR`` when ``use_K_constraint=True``.
+        Width of the allowed cluster-size range. Also corresponds to the load balance tightness (smaller R implies tighter load balance).
+        For a selected cluster count, the lower and upper bounds are computed from the corresponding
+        balanced range rule. Used when ``use_K_constraint=True``.
     must_link : sequence of tuple of int
         Must-link pairs.
     cannot_link : sequence of tuple of int

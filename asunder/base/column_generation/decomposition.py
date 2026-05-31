@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+import inspect
 
 import numpy as np
 from tqdm.auto import tqdm
@@ -173,7 +174,7 @@ def CSD_decomposition(
         if len(feasible_columns) == 0:
             if verbose != -1:
                 print("A feasible initial partition cannot be generated.")
-            return None, None, None
+            return None
 
         # initialize columns and their scores
         if ifc_params["num"] == 1:
@@ -214,7 +215,7 @@ def CSD_decomposition(
 
             # call it a day if RMP is infeasible
             if master_obj_val is None:
-                return None, None, None
+                return None
 
             if verbose != -1:
                 print(duals)
@@ -270,6 +271,8 @@ def CSD_decomposition(
             try:
                 if use_refined_column or final_master_solve:
                     # refine z_sol if needed in column generation or final master solve
+                    if "shake_rounds" in inspect.signature(refine_params["refine_func"]).parameters:
+                        refine_params["kwargs"]["shake_rounds"] = 0
                     heuristic_col = refine_params["refine_func"](
                         A=A,
                         partition=z_sol,
@@ -316,8 +319,6 @@ def CSD_decomposition(
         wz = np.zeros_like(Z_star[0]).astype(np.float64)
         for lambda_, column in zip(lambda_sol, Z_star):
             wz += (lambda_ * column)
-        if "shake_rounds" in refine_params["kwargs"]:
-            refine_params["kwargs"]["shake_rounds"] = 3
         heuristic_col = refine_params["refine_func"](
                 A=A,
                 partition=wz,

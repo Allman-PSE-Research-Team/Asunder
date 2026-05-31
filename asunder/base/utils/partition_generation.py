@@ -367,10 +367,6 @@ def make_partitions_links_only(
     -------
     Z_star: list(array)
         List of generated partitions.
-    info: list(dict)
-        List of partition metadata.
-    nodes : array-like, optional
-        List of Graph nodes.
     """
     rng = np.random.default_rng(seed)
 
@@ -489,7 +485,7 @@ def make_partitions_links_only(
 
     Z_star = [Z for Z, _ in cols]
     info = [meta for _, meta in cols]
-    return Z_star, info, nodes
+    return Z_star # , info, nodes
 
 def make_partitions_random_links_only(
     N: int,
