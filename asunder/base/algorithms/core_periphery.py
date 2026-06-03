@@ -221,10 +221,10 @@ class EnhancedGeneticBE:
         init_mut_rate: float = 0.1,
         elitism_size: int = 2,
         tournament_size: int = 3,
-        seed: int | None = None,
+        seed: int | None = 42,
     ) -> None:
-        if seed is not None:
-            np.random.seed(seed)
+        
+        self.rng = np.random.default_rng(seed)
 
         self.A = np.asarray(A)
         self.n = self.A.shape[0]
@@ -266,7 +266,7 @@ class EnhancedGeneticBE:
         """
         population: list[np.ndarray] = []
         for _ in range(self.pop_size):
-            z = np.random.randint(0, 2, size=self.n)
+            z = self.rng.integers(0, 2, size=self.n)
             self._enforce_blocks(z)
             population.append(z)
         return population
@@ -308,7 +308,7 @@ class EnhancedGeneticBE:
         np.ndarray of int, shape (N,)
             Individual tournament winner.
         """
-        idx = np.random.choice(len(pop), self.tournament_size, replace=False)
+        idx = self.rng.choice(len(pop), self.tournament_size, replace=False)
         best = idx[np.argmax([fits[i] for i in idx])]
         return pop[int(best)]
 
@@ -330,8 +330,8 @@ class EnhancedGeneticBE:
         c2 : np.ndarray of int, shape (N,)
             Child 2 from parents.
         """
-        if np.random.rand() < 0.9:
-            a, b = sorted(np.random.choice(range(1, self.n), size=2, replace=False))
+        if self.rng.random() < 0.9:
+            a, b = sorted(self.rng.choice(range(1, self.n), size=2, replace=False))
             c1 = np.concatenate([p1[:a], p2[a:b], p1[b:]])
             c2 = np.concatenate([p2[:a], p1[a:b], p2[b:]])
         else:
@@ -357,7 +357,7 @@ class EnhancedGeneticBE:
             mutated individual.
         """
         rate = self.init_mut_rate * (1 - gen / max(1, self.generations))
-        flips = np.random.rand(self.n) < rate
+        flips = self.rng.random(self.n) < rate
         z[flips] = 1 - z[flips]
         self._enforce_blocks(z)
         return z
@@ -440,10 +440,10 @@ class FullContinuousGeneticBE:
         mutation_rate: float = 0.1,
         tournament_size: int = 3,
         gene_init_scale: float = 1.0,
-        seed: int | None = None,
+        seed: int | None = 42,
     ) -> None:
-        if seed is not None:
-            np.random.seed(seed)
+        
+        self.rng = np.random.default_rng(seed)
 
         self.A = np.asarray(A)
         self.n = self.A.shape[0]
@@ -505,7 +505,7 @@ class FullContinuousGeneticBE:
         """
         population: list[np.ndarray] = []
         for _ in range(self.pop_size):
-            c = np.random.rand(self.n) * self.scale
+            c = self.rng.random(self.n) * self.scale
             self._enforce_blocks(c)
             population.append(c)
         return population
@@ -568,7 +568,7 @@ class FullContinuousGeneticBE:
         np.ndarray of int, shape (N,)
             Individual tournament winner.
         """
-        idx = np.random.choice(len(pop), self.tournament_size, replace=False)
+        idx = self.rng.choice(len(pop), self.tournament_size, replace=False)
         best = idx[np.argmax([fits[i] for i in idx])]
         return pop[int(best)]
 
@@ -590,9 +590,9 @@ class FullContinuousGeneticBE:
         c2 : np.ndarray of int, shape (N,)
             Child 2 from parents.
         """
-        if np.random.rand() > self.crossover_rate:
+        if self.rng.random() > self.crossover_rate:
             return p1.copy(), p2.copy()
-        alpha = np.random.rand(self.n)
+        alpha = self.rng.random(self.n)
         c1 = alpha * p1 + (1 - alpha) * p2
         c2 = alpha * p2 + (1 - alpha) * p1
         self._enforce_blocks(c1)
@@ -613,8 +613,8 @@ class FullContinuousGeneticBE:
         np.ndarray of int, shape (N,)
             mutated individual.
         """
-        flips = np.random.rand(self.n) < self.mutation_rate
-        noise = np.random.normal(scale=self.scale * 0.1, size=self.n)
+        flips = self.rng.random(self.n) < self.mutation_rate
+        noise = self.rng.normal(scale=self.scale * 0.1, size=self.n)
         c[flips] = c[flips] + noise[flips]
         np.clip(c, 0, self.scale, out=c)
         self._enforce_blocks(c)
@@ -687,7 +687,7 @@ class FullContinuousGeneticBE:
         list[np.ndarray]
             Entire population in block space.
         """
-        return [np.random.rand(self.n_blocks) * self.scale for _ in range(self.pop_size)]
+        return [self.rng.random(self.n_blocks) * self.scale for _ in range(self.pop_size)]
 
     def run_de(self, F: float = 0.7, CR: float = 0.9) -> tuple[dict[int, float], float]:
         """
@@ -711,15 +711,15 @@ class FullContinuousGeneticBE:
             for i in range(self.pop_size):
                 idxs = np.arange(self.pop_size)
                 idxs = idxs[idxs != i]
-                r1, r2, r3 = np.random.choice(idxs, 3, replace=False)
+                r1, r2, r3 = self.rng.choice(idxs, 3, replace=False)
                 a, b, c = pop[int(r1)], pop[int(r2)], pop[int(r3)]
 
                 v = a + F * (b - c)
                 np.clip(v, 0.0, self.scale, out=v)
 
                 u = pop[i].copy()
-                cross = np.random.rand(self.n_blocks) < CR
-                cross[np.random.randint(self.n_blocks)] = True
+                cross = self.rng.random(self.n_blocks) < CR
+                cross[self.rng.integers(self.n_blocks)] = True
                 u[cross] = v[cross]
                 np.clip(u, 0.0, self.scale, out=u)
 
@@ -780,7 +780,7 @@ def detect_continuous_KL(
     must_links: list[tuple[int, int]],
     nonlinear_nodes: list[int],
     max_iter: int = 100,
-    seed: int | None = None,
+    seed: int | None = 42,
 ) -> tuple[np.ndarray, float]:
     """
     Continuous- BE vcorenessia constrained block updates.
@@ -805,8 +805,8 @@ def detect_continuous_KL(
     best_r: float
         Pearson correlation achieved.
     """
-    if seed is not None:
-        np.random.seed(seed)
+    
+    rng = np.random.default_rng(seed)
 
     n = A_csr.shape[0]
     tri_i, tri_j = upper_triangle(A_csr)
@@ -821,7 +821,7 @@ def detect_continuous_KL(
             uf.union(base, node)
     blocks, _ = uf.components()
 
-    c = np.random.rand(n)
+    c = rng.random(n)
     for block in blocks:
         mean_val = c[block].mean()
         c[block] = mean_val
