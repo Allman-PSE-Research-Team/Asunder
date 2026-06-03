@@ -23,12 +23,12 @@ def very_fortunate_descent_legacy(
     A: np.ndarray,
     a: np.ndarray,
     m: float,
-    K: int = None,
-    R: int = None,
+    K: int = 2,
+    R: int = 1,
     R_bounds: tuple|None = None,
     must_link: Sequence[Tuple[int, int]] = [],
     cannot_link: Sequence[Tuple[int, int]] = [],
-    seed: int | None = None,
+    seed: int | None = 42,
     fingerprint_decimals: int = 6,
     allow_block_splitting: bool = True,
     max_K_increase: int = 0, # If 0, keep K_used == K
@@ -554,12 +554,12 @@ def very_fortunate_descent(
     a: np.ndarray,
     m: float,
     # constraint parameters
-    K: int = None,
-    R: int = None,
+    K: int = 2,
+    R: int = 1,
     R_bounds: tuple|None = None,
     must_link: Sequence[Tuple[int, int]] = [],
     cannot_link: Sequence[Tuple[int, int]] = [],
-    seed: int | None = None,
+    seed: int | None = 42,
     fingerprint_decimals: int = 6,
     allow_block_splitting: bool = True,
     max_K_increase: int = 0, # If 0, keep K_used == K
@@ -1486,15 +1486,14 @@ def very_fortunate_descent(
             comp2g = best_local_comp2g.copy()
 
             # Score and keep best
-            Q = float(totB.sum())
-            # Q = 0.0
-            # for g in range(K_used):
-            #     # modularity sum within group
-            #     comps_g = np.where(comp2g == g)[0]
-            #     if comps_g.size == 0:
-            #         Q = -np.inf
-            #         break
-            #     Q += float(W_B[np.ix_(comps_g, comps_g)].sum())
+            Q = 0.0
+            for g in range(K_used):
+                # modularity sum within group
+                comps_g = np.where(comp2g == g)[0]
+                if comps_g.size == 0:
+                    Q = -np.inf
+                    break
+                Q += float(W_B[np.ix_(comps_g, comps_g)].sum())
 
             if not np.isfinite(Q):
                 continue
@@ -1539,12 +1538,12 @@ def refine_partition(
     a: np.ndarray,
     m: float,
     # constraint parameters
-    K: int = None,
-    R: int = None,
+    K: int = 2,
+    R: int = 1,
     R_bounds: tuple|None = None,
     must_link: Sequence[Tuple[int, int]] = [],
     cannot_link: Sequence[Tuple[int, int]] = [],
-    seed: int | None = None,
+    seed: int | None = 42,
     fingerprint_decimals: int = 6,
     allow_block_splitting: bool = True,
     max_K_increase: int = 0, # If 0, keep K_used == K
