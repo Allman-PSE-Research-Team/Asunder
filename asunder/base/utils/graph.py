@@ -260,8 +260,8 @@ def expand_z_matrix(
     z_full : np.ndarray[int]
         Expanded 1D label vector or binary co-association matrix.
     """
-    # returns z if node2comp is empty.
-    if node2comp is None:
+    # returns z if node2comp or z is empty.
+    if node2comp is None or z is None:
         return z
     n = len(node2comp)
     if dim == 2:
