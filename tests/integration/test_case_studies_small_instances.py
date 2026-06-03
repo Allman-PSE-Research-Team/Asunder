@@ -213,7 +213,7 @@ def _configure_solver_or_skip():
             pytest.fail(f"Pyomo solver stack unavailable but required: {exc}")
         pytest.skip(f"Pyomo solver stack unavailable: {exc}")
 
-    for name in ("appsi_highs", "highs", "glpk", "cbc", "gurobi_direct"):
+    for name in ("gurobi_direct", "appsi_highs", "highs", "glpk", "cbc"):
         try:
             solver = SolverFactory(name)
             if solver is not None and solver.available(False):
