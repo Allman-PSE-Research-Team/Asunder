@@ -264,7 +264,7 @@ class Status(Wrapper):
         weight_label : str
             the name of the edge weight label in the graph data
         """
-        self.start_time = time.time()
+        self.start_time = time.perf_counter()
         self.times_to_build_k_hop_graph = []
         self.k = k
         self.consider_empty_community = consider_empty_community
@@ -367,9 +367,9 @@ class Status(Wrapper):
         Initialises the status of a graph with every node in one community, 
         unless a specific partition `part` is provided.
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         self._build_k_hop_graph()
-        self.times_to_build_k_hop_graph += [time.time() - start_time]
+        self.times_to_build_k_hop_graph += [time.perf_counter() - start_time]
         
         count = 0
         self.node2com = {} 
@@ -574,7 +574,7 @@ def generate_dendrogram(layers=[nx.Graph(), nx.Graph()],
         status.update_layers(cur_layers)
         status.init(part=None)
     if not silent:
-        print('computing time:', time.time() - status.start_time)
+        print('computing time:', time.perf_counter() - status.start_time)
         print('computing times to build k-graph:', status.times_to_build_k_hop_graph)
     return status_list[:]
 
