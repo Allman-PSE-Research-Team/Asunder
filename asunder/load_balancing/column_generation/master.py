@@ -34,7 +34,7 @@ def solve_master_problem(
     f_stars,
     LB=True, 
     R=1, 
-    K=None, 
+    K=2, 
     R_bounds=None,
     cannot_link=None,
     must_link=None,
@@ -112,7 +112,8 @@ def solve_master_problem(
             # ⌊(I/K - R/2) + 1/2⌋ = ((2*I) - K*(R - 1)) // (2*K)
             # We, however, do not anticipate such issues as a graph that big should only be looked at from afar.
             if R==0:
-                assert I % K == 0, "Infeasible R and K combination given I."
+                if I % K != 0:
+                    raise ValueError("Infeasible R and K combination, given the number of nodes.")
             R_min = max(1, math.floor((I/K - R/2) + 1/2))
             R_max = R_min + R
         elif R_bounds is not None:
@@ -183,10 +184,10 @@ def solve_master_problem(
         model.dual = Suffix(direction=Suffix.IMPORT)
 
     res = solver.solve(model, tee=bool(verbose is True))
+    if res.solver.termination_condition == TerminationCondition.infeasible:
+        return (None, None, None) if extract_dual else (None, None)
     lambda_sol = [value(model.lmbd[c]) for c in model.C]
     master_obj_val = value(model.OBJ)
-    if res.solver.termination_condition == TerminationCondition.infeasible:
-        master_obj_val = None
 
     if not extract_dual:
         return lambda_sol, master_obj_val
