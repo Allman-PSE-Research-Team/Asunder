@@ -804,7 +804,7 @@ def compute_modularity_reduced_cost(
 def search_partition_by_reduced_cost(
     adjacency: np.ndarray,
     duals: dict[str, object],
-    current_labels: np.ndarray | list[int],
+    current_labels: np.ndarray | list[int] | None = None,
     *,
     n_restarts: int = 12,
     max_local_passes: int = 25,
@@ -814,7 +814,7 @@ def search_partition_by_reduced_cost(
     shake_rounds: int = 3,
     shake_fraction: float = 0.06,
     split_trigger_no_improve_passes: int = 3,
-    random_seed: int | None = None,
+    random_seed: int | None = 42,
 ) -> dict[str, object]:
     """
     Heuristically search for a partition with high reduced cost.
