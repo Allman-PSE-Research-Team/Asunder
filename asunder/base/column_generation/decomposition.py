@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+import copy
 import inspect
 
 import numpy as np
@@ -27,7 +28,7 @@ def CSD_decomposition(
     check_flat_pricing=True,
     algo="louvain",
     package="sknetwork",
-    seed=None,
+    seed=42,
     extract_dual=False,
     # initial feasible column generator
     ifc_params: dict = {},
@@ -99,11 +100,11 @@ def CSD_decomposition(
     extract_dual : bool
         Boolean that determines whether we extract duals from the master problem or not.
     ifc_params : dict[str, callable or dict or int]
-        Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments.
+        Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments (excluding seed values).
     refine_in_subproblem : bool
         Boolean value that determines whether a refinement operation is run in the subproblem.
     refine_params : dict[str, callable or dict]
-        Refinement function and its corresponding arguments.
+        Refinement function and its corresponding arguments (excluding seed values).
     use_refined_column : bool
         Boolean that determines whether refined columns are used in the main column generation loop or not.
     final_master_solve : bool
@@ -127,39 +128,27 @@ def CSD_decomposition(
         ``lambda_sol``, dual terms, ``master_obj_val``, ``z_sol``,
         ``sub_obj_val``, ``columns``, ``f_stars``, and ``heuristic_col``.
     """
+    # drop seed values from parameters if included
+    ifc_params.get("args", {}).pop('seed', None)
+    refine_params.get("kwargs", {}).pop('seed', None)
 
     # cold start
     if columns is None:
         columns = []
 
     # contract graph if necessary
-    if contract_graph and (must_link or additional_constraints["worthy_edges"]):
-        A, node2comp = contract_adj_matrix_new(A, additional_constraints["worthy_edges"], must_link)
+    if contract_graph and (must_link or additional_constraints.get("worthy_edges")):
+        A, node2comp = contract_adj_matrix_new(A, additional_constraints.get("worthy_edges"), must_link)
         a = A.sum(axis=0)
         m = np.sum(a)
         additional_constraints["worthy_edges"] = None
-        if "N" in ifc_params["args"]:
+        if "N" in ifc_params.get("args", {}):
             ifc_params["args"]["N"] = np.shape(A)[0]
     else:
         node2comp = None
 
     # deque to track flat pricing for termination
     SUB_OBJS = deque(maxlen=stopping_window)
-
-    # preprocess R_bounds if available for load balancing usecases to handle different cases
-    if additional_constraints["R_bounds"] is not None:
-        R_min, R_max = additional_constraints["R_bounds"]
-        if R_min is None and R_max is None:
-            # no load balancing without bounds or a way to infer bound
-            additional_constraints["LB"] = False
-            additional_constraints["R_bounds"] = None
-        else:
-            if R_min is None:
-                R_min = 1
-            if R_max is None:
-                R_max = np.shape(A)[0]
-            assert R_min <= R_max, "Cardinality bounds are improperly defined."
-            additional_constraints["R_bounds"] = (R_min, R_max)
 
     if (columns is not None and f_stars is not None) and len(columns) > 0:
         # initialize from parameters
@@ -223,8 +212,13 @@ def CSD_decomposition(
                 print("Master Obj:", master_obj_val)
                 print("lambda: ", lambda_sol)
 
-            try:
-                if algo in {"spectral", "full_louvain", "one_level_louvain"}:
+            if getattr(sp_function, "__name__", None) == "solve_subproblem":
+                # uses ILP subproblem
+                sub_obj_val, z_sol = sp_function(
+                    A, a, m, duals, verbose=verbose
+                )
+            else:
+                if algo in {"spectral", "full_louvain", "one_level_louvain", "RCCS"}:
                     # uses custom heuristic subproblem
                     sub_obj_val, z_sol = sp_function(
                         A, a, m, duals, algo=algo,
@@ -242,12 +236,7 @@ def CSD_decomposition(
                         refine_params=refine_params,
                         verbose=verbose,
                         seed=seed
-                    )
-            except Exception:
-                # uses ILP subproblem
-                sub_obj_val, z_sol = sp_function(
-                    A, a, m, duals, verbose=verbose
-                )
+                    )                
 
             if verbose != -1:
                 print(f"Subproblem obj: {sub_obj_val}")
@@ -271,12 +260,13 @@ def CSD_decomposition(
             try:
                 if use_refined_column or final_master_solve:
                     # refine z_sol if needed in column generation or final master solve
+                    in_loop_kwargs = copy.deepcopy(refine_params["kwargs"])
                     if "shake_rounds" in inspect.signature(refine_params["refine_func"]).parameters:
-                        refine_params["kwargs"]["shake_rounds"] = 0
+                        in_loop_kwargs["shake_rounds"] = 0
                     heuristic_col = refine_params["refine_func"](
                         A=A,
                         partition=z_sol,
-                        **refine_params["kwargs"],
+                        **in_loop_kwargs,
                         seed=seed
                     )
                     if heuristic_col is not None:
@@ -361,13 +351,14 @@ def CSD_decomposition(
             **additional_constraints,
             verbose=verbose
         )
+        if lambda_sol is not None:
+            z_sol = Z_star[np.argmax(lambda_sol)]
+        else:
+            if verbose != -1:
+                print("Final master solve is infeasible.")
+            z_sol = None
 
-        z_sol = Z_star[np.argmax(lambda_sol)]
-
-        if verbose != -1:
-            print(z_sol)
-
-        empty_duals = {k:None for k,v in duals.items()}
+        empty_duals = {k:None for k, _ in duals.items()}
 
         results.append({
             "lambda_sol": lambda_sol,
