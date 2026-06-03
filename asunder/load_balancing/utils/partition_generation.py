@@ -31,7 +31,7 @@ def assign_from_order_with_links_range(
     max_restarts: int = 8,
     branch: int = 6,
     max_attempts: int = 100,
-    seed: int | None = None,
+    seed: int | None = 42,
     w_contig: float = 1.0,
     w_switch: float = 0.25,
     w_target: float = 0.15,
@@ -128,6 +128,8 @@ def assign_from_order_with_links_range(
     cid = comp["cid"]
     comps = comp["comps"]
     csz = comp["csz"]
+    use_bitmask = comp["use_bitmask"]
+    comp_bit = comp["comp_bit"]
     forb_mask = comp["forb_mask"]
 
     if C == 0:
@@ -152,7 +154,7 @@ def assign_from_order_with_links_range(
         deficit = np.full(K_used, r_min, dtype=int)  # deficit[g] = max(0, r_min - used[g])
         deficit_sum = int(deficit.sum())
 
-        in_mask = [0] * K_used
+        in_mask = ([0] * K_used) if use_bitmask else [set() for _ in range(K_used)]
         last_pos = np.full(K_used, -10**9, dtype=int)
         last_g = -1
 
@@ -163,10 +165,11 @@ def assign_from_order_with_links_range(
         frames = []  # each: (c, cand_list, next_i, assigned_g, prev_last_pos, prev_last_g, sc, prev_def)
         t = 0
         attempts = 0
+        attempt_limit = C + max_attempts  # allow one full forward pass before charging retries
         assigned_sum = 0
 
         while True:
-            if attempts > max_attempts:
+            if attempts > attempt_limit:
                 return None
 
             if t == C:
@@ -177,14 +180,17 @@ def assign_from_order_with_links_range(
             c = int(comp_order[t])
             sc = int(csz[c])
             pc = int(pos_of_comp[c])
-            cf = int(forb_mask[c])
+            cf = forb_mask[c]
 
             if len(frames) <= t:
                 feas = []
                 for g in range(K_used):
                     if used[g] + sc > r_max:
                         continue
-                    if (cf & int(in_mask[g])) != 0:
+                    if use_bitmask:
+                        if (int(cf) & int(in_mask[g])) != 0:
+                            continue
+                    elif cf & in_mask[g]:
                         continue
 
                     contig = 0 if last_pos[g] <= -10**8 else abs(pc - int(last_pos[g]))
@@ -209,7 +215,10 @@ def assign_from_order_with_links_range(
                     # undo assignment of frame t
                     used[g0] -= sc0
                     assigned_sum -= sc0
-                    in_mask[g0] ^= (1 << c0)
+                    if use_bitmask:
+                        in_mask[g0] ^= int(comp_bit[c0])
+                    else:
+                        in_mask[g0].remove(c0)
                     last_pos[g0] = prev_lp
                     last_g = prev_lg
                     new_def = max(0, r_min - int(used[g0]))
@@ -233,7 +242,10 @@ def assign_from_order_with_links_range(
                 (c1, cand1, idx1, g1, prev_lp1, prev_lg1, sc1, prev_def1) = frames[t]
                 used[g1] -= sc1
                 assigned_sum -= sc1
-                in_mask[g1] ^= (1 << c1)
+                if use_bitmask:
+                    in_mask[g1] ^= int(comp_bit[c1])
+                else:
+                    in_mask[g1].remove(c1)
                 last_pos[g1] = prev_lp1
                 last_g = prev_lg1
                 new_def = max(0, r_min - int(used[g1]))
@@ -250,7 +262,10 @@ def assign_from_order_with_links_range(
             prev_def_g = int(deficit[g])
             used[g] += sc0
             assigned_sum += sc0
-            in_mask[g] |= (1 << c0)
+            if use_bitmask:
+                in_mask[g] |= int(comp_bit[c0])
+            else:
+                in_mask[g].add(c0)
             last_pos[g] = pc
             last_g = g
             comp2g[c0] = g
@@ -264,7 +279,10 @@ def assign_from_order_with_links_range(
                 # undo and continue trying next candidate
                 used[g] -= sc0
                 assigned_sum -= sc0
-                in_mask[g] ^= (1 << c0)
+                if use_bitmask:
+                    in_mask[g] ^= int(comp_bit[c0])
+                else:
+                    in_mask[g].remove(c0)
                 last_pos[g] = frames[t][4]
                 last_g = frames[t][5]
                 deficit_sum += (prev_def_g - int(deficit[g]))
@@ -301,7 +319,7 @@ def make_partitions(
     must_link: list|None = None,
     cannot_link: list|None = None,
     n_cols: int = 15,
-    seed: int | None = None,
+    seed: int | None = 42,
     nodes=None,
 ):
     """
@@ -350,7 +368,7 @@ def make_partitions(
         cannot_link = []
 
     if nodes is None:
-        nodes = sorted(G.nodes())
+        nodes = list(G.nodes())
     N = len(nodes)
     node_to_idx = {u: i for i, u in enumerate(nodes)}
 
@@ -487,7 +505,7 @@ def make_one_feasible_partition_mrv_restarts(
     R_bounds=None,
     must_link=None,
     cannot_link=None,
-    seed=None,
+    seed=42,
     max_tries=200,
     jitter_top=2,
     max_K_increase=50,
@@ -610,14 +628,14 @@ def make_one_feasible_partition_mrv_restarts(
 
             def feas_groups(c):
                 sc = int(csz[c])
-                cf = int(forb_mask[c])
+                cf = forb_mask[c]
                 F = []
                 for g in range(K_used):
                     if sz[g] + sc > r_max:
                         continue
 
                     if use_bitmask:
-                        if (cf & int(in_mask[g])) != 0:
+                        if (int(cf) & int(in_mask[g])) != 0:
                             continue
                     else:
                         if forb_mask[c] & in_mask[g]:
@@ -698,7 +716,7 @@ def make_partitions_random(
     N, K, R, R_bounds=None,
     must_link=None,
     cannot_link=None,
-    seed=None,
+    seed=42,
     return_Z=True,
     max_K_increase=50,
 ):
@@ -792,19 +810,22 @@ def make_partitions_random(
         deficit_sum = int(deficit.sum())
         rem_nodes = int(N)
 
-        in_mask = [0] * K_used
+        in_mask = ([0] * K_used) if use_bitmask else [set() for _ in range(K_used)]
         comp2g = -np.ones(C, dtype=int)
 
         for c in order:
             c = int(c)
             sc = int(csz[c])
-            cf = int(forb_mask[c])
+            cf = forb_mask[c]
 
             feas = []
             for g in range(K_used):
                 if sz[g] + sc > r_max:
                     continue
-                if (cf & int(in_mask[g])) != 0:
+                if use_bitmask:
+                    if (int(cf) & int(in_mask[g])) != 0:
+                        continue
+                elif cf & in_mask[g]:
                     continue
                 old_def = int(deficit[g])
                 new_def = max(0, r_min - int(sz[g] + sc))
@@ -832,7 +853,10 @@ def make_partitions_random(
             old_def = int(deficit[g])
             sz[g] += sc
             rem_nodes -= sc
-            in_mask[g] |= (1 << c)
+            if use_bitmask:
+                in_mask[g] |= int(comp_bit[c])
+            else:
+                in_mask[g].add(c)
             comp2g[c] = g
 
             new_def = max(0, r_min - int(sz[g]))
