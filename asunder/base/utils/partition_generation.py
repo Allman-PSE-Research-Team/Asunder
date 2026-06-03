@@ -335,7 +335,7 @@ def make_partitions_links_only(
     must_link=None,
     cannot_link=None,
     n_cols: int = 15,
-    seed: int | None = None,
+    seed: int | None = 42,
     nodes=None,
     max_K_increase: int = 50,
 ):
@@ -371,7 +371,7 @@ def make_partitions_links_only(
     rng = np.random.default_rng(seed)
 
     if nodes is None:
-        nodes = sorted(G.nodes())
+        nodes = list(G.nodes())
     N = len(nodes)
     node_to_idx = {u: i for i, u in enumerate(nodes)}
 
@@ -492,7 +492,7 @@ def make_partitions_random_links_only(
     K: Optional[int] = None,
     must_link=None,
     cannot_link=None,
-    seed: int | None = None,
+    seed: int | None = 42,
     return_Z: bool = True,
     max_K_increase: int = 50,
     n_parts: int = 10,
@@ -617,7 +617,7 @@ def make_partitions_random_links_only(
     return [{"name": name, "g": g, "K_used": K_used} for name, g, K_used in parts_g]
 def make_simple_partition(
     N: int,
-    cannot_link: Sequence[tuple[int, int]] | None = None, seed=None
+    cannot_link: Sequence[tuple[int, int]] | None = None, seed=42
 ):
     """
     Create a single all-ones partition matrix with cannot-link zeroed pairs.
