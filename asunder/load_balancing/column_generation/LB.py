@@ -4,6 +4,7 @@ import numpy as np
 import networkx as nx
 
 from asunder.base.column_generation.decomposition import CSD_decomposition
+from asunder.base.column_generation.master import compute_f_star
 from asunder.base.column_generation.subproblem import heuristic_subproblem
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
 
@@ -14,12 +15,12 @@ from asunder.load_balancing.utils.partition_generation import make_partitions, m
 def LoadBalancer(
     G, 
     R=1, 
-    K=None, 
+    K=2, 
     R_bounds=None, 
     algorithm="greedy", 
     package="networkx", 
     ifc_generator="random", 
-    seed=None, 
+    seed=42, 
     must_link=[], 
     cannot_link=[], 
     disable_tqdm=False,
@@ -36,7 +37,7 @@ def LoadBalancer(
         Width of the allowed cluster-size range. Also corresponds to the load balance tightness (smaller R implies tighter load balance).
         For a selected cluster count, the lower and upper bounds are computed from the corresponding
         balanced range rule.
-    K : int | None
+    K : int
         Number of communities.
     R_bounds : tuple[int, int] | None
         Minimum and maximum number of nodes per community (community size constraint).
@@ -68,9 +69,9 @@ def LoadBalancer(
         ``"ordered"`` if the initial feasible column should be generated with some structure-based ordering.
     seed : int, default=None
         Random seed.
-    must_link : list[tuple[int, int]] or None
+    must_link : list[tuple[int, int]]
         List of node pairs that must be together.
-    cannot_link : list[tuple[int, int]] or None
+    cannot_link : list[tuple[int, int]]
         List of node pairs that must not be together.
     disable_tqdm : bool
         Whether to disable progress bar or not.
@@ -82,25 +83,51 @@ def LoadBalancer(
     
     Returns
     -------
-    lambda_sol: list or ndarray of float
-        A list/vector which sums to ``1`` that indicates what weight is assigned to each column (and by implication, what columns are active).
-    duals: dict[str, ndarray or float]
-        Dual values computed from the master problem. This could be a 1D array, 2D array or a float.
-    master_obj_val: float
-        The objective value of the master problem.
+    z: numpy.ndarray
+        Binary ``N x N`` co-clustering matrix. ``z[i, j] = 1`` indicates that
+        nodes ``i`` and ``j`` are assigned to the same cluster.
+    community_map_labels: dict[str or int]
+        Mapping from node IDs to integer community identifier.
+    elapsed: float
+        The total elapsed time in seconds.
     """
     A = nx.to_numpy_array(G)
     a = np.sum(A, axis=1)
     m = a.sum()
     node_label_map = {i: label for i, label in enumerate(list(G.nodes()))}
+    label_node_map = {label: i for i, label in enumerate(list(G.nodes()))}
 
-    ifc_params = {"num": 1, "must_link": must_link, "cannot_link": cannot_link, "R_bounds": R_bounds}
+    # normalize constraint labels
+    must_link = [(label_node_map[i], label_node_map[j]) for i, j in must_link]
+    cannot_link = [(label_node_map[i], label_node_map[j]) for i, j in cannot_link]
+
+    # preprocess R_bounds if available for load balancing usecases to handle different cases
+    if R_bounds is not None:
+        R_min, R_max = R_bounds
+        if R_min is None and R_max is None:
+            # no bounds
+            R_bounds = None
+        else:
+            if R_min is None:
+                R_min = 1
+            if R_max is None:
+                R_max = np.shape(A)[0]
+            if R_min > R_max:
+                raise ValueError("Cardinality bounds are improperly defined.")
+            R_bounds = (R_min, R_max)
+
+    ifc_params = {
+        "num": 1, 
+        "args": {"must_link": must_link, "cannot_link": cannot_link, "R_bounds": R_bounds}
+    }
     if ifc_generator == "ordered":
         ifc_params["generator"] = make_partitions
-        ifc_params["args"] = dict(G=G, K=K, R=R, n_cols=1)
-    else:
+        ifc_params["args"] = dict(G=G, K=K, R=R, n_cols=1, **ifc_params["args"])
+    elif ifc_generator == "random":
         ifc_params["generator"] = make_partitions_random
-        ifc_params["args"] = dict(N=A.shape[0], K=K, R=R)
+        ifc_params["args"] = dict(N=A.shape[0], K=K, R=R,  **ifc_params["args"])
+    else:
+        raise ValueError("ifc_generator must be either 'random' or 'ordered'.")
 
     refine_params = {
         "refine_func": refine_partition,
@@ -116,7 +143,7 @@ def LoadBalancer(
         {"LB": True, "R": R, "K": K, "R_bounds": R_bounds}
     )
 
-    start = time.time()
+    start = time.perf_counter()
 
     colgen_results = CSD_decomposition(
         A, a, m,
@@ -139,10 +166,17 @@ def LoadBalancer(
         final_master_solve=False,
         max_iterations=None, tolerance=1e-8, verbose=verbose,
     )
-    elapsed = time.time() - start
+    elapsed = time.perf_counter() - start
+    if colgen_results is None:
+        raise RuntimeError("Column generation failed due to infeasbility (No feasible initial columns could be generated or RMP is infeasible).")
 
     z = colgen_results[-1]['z_sol']
     community_map, _ = group_nodes_by_community(np.array(z))
     community_map_labels = map_community_labels(community_map, node_label_map)
+    metadata = {
+        "community_map_labels": community_map_labels,
+        "modularity": compute_f_star(A, a, m, z),
+        "execution_time": elapsed
+    }
 
-    return z, community_map_labels, elapsed
+    return z, metadata
