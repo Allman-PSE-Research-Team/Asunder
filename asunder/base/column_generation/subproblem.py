@@ -24,9 +24,11 @@ try:
         Binary,
         ConcreteModel,
         Constraint,
+        ConstraintList,
         Objective,
         RangeSet,
         TerminationCondition,
+        Set,
         Var,
         maximize,
         value,
@@ -47,7 +49,7 @@ def heuristic_subproblem(
     verbose=False,
     gamma=1,
     exact_rc=True,
-    seed=None
+    seed=42
 ):
     """
     Solve pricing heuristically via selected clustering backend.
@@ -134,6 +136,7 @@ def heuristic_subproblem(
             refine_params=refine_params,
             resolution=gamma,
             verbose=verbose,
+            seed=seed
         )
         if metric is None:
             mod_a_p = modA_positive.sum(axis=0)
@@ -184,21 +187,21 @@ def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=Fals
     model = ConcreteModel()
     model.I = RangeSet(0, I - 1)
     pairs = [(i, j) for i in range(I) for j in range(i + 1, I)]
-    model.P = pyo.Set(initialize=pairs, dimen=2)
-    model.z = pyo.Var(model.P, domain=pyo.Binary, initialize=0)
-    model.DiagonalUnity = Constraint(model.I, rule=lambda mdl, i: mdl.z[i, i] == 1)
+    model.P = Set(initialize=pairs, dimen=2)
+    model.z = Var(model.P, domain=Binary, initialize=0)
+    # model.DiagonalUnity = Constraint(model.I, rule=lambda mdl, i: mdl.z[i, i] == 1)
 
     def zpair(i, j):
         if i == j:
             return 1.0
         return model.z[min(i, j), max(i, j)]
 
-    model.T = pyo.Set(
+    model.T = Set(
         dimen=3,
         initialize=[(i, j, k) for i in range(I) for j in range(i + 1, I) for k in range(j + 1, I)]
     )
 
-    model.Transitivity = pyo.ConstraintList()
+    model.Transitivity = ConstraintList()
 
     for i, j, k in model.T:
         model.Transitivity.add(zpair(i, j) + zpair(i, k) - zpair(j, k) <= 1)
@@ -263,7 +266,7 @@ def custom_heuristic_subproblem(
     refine_params=None,
     max_iterations=50,
     tolerance=1e-8,
-    seed=None
+    seed=42
 ):
     """
     Run in-package custom pricing heuristics (spectral/modified Louvain).
