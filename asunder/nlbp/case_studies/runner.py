@@ -122,7 +122,7 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
             algo_res = {"NMI": -np.inf, "ARI": -np.inf, "VI": np.inf, "Accuracy": -np.inf}
             runs = []
             for _ in range(repeat):
-                start = time.time()
+                start = time.perf_counter()
                 if algo.upper() == "KL":
                     labels_blk, _ = detect_continuous_KL(csr_matrix(A), unworthy_edges, nonlinear_nodes, max_iter=50)
                     integer_labels = probability_to_integer_labels(np.array(labels_blk).reshape(-1, 1), method="gaussian_mixture")
@@ -149,7 +149,7 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
                     labels = find_core(A, integer_labels)
                 else:
                     raise NotImplementedError(f"Unsupported CP algorithm: {algo}")
-                end = time.time()
+                end = time.perf_counter()
 
                 acc = permuted_accuracy(labels_gt, labels)[0]
                 algo_res["NMI"] = max(algo_res["NMI"], nmi_sklearn(labels_gt, labels))
@@ -178,7 +178,7 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
                 "kwargs": {"prob_method": "DBSCAN" if problem == "cpcong" else "gaussian_mixture", "verbose": False},
             }
             additional_constraints = defaultdict(lambda: None, {"worthy_edges": worthy_edges})
-            start = time.time()
+            start = time.perf_counter()
             cg_results = CSD_decomposition(
                 A,
                 a,
@@ -198,7 +198,7 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
                 tolerance=1e-8,
                 verbose=-1,
             )
-            end = time.time()
+            end = time.perf_counter()
             labels = partition_matrix_to_vector(cg_results[-1]["z_sol"])
             results[algo] = {
                 "NMI": nmi_sklearn(labels_gt, labels),
