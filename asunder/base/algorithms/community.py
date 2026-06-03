@@ -179,7 +179,7 @@ def best_girvan_newman_partition(G, max_levels=10):
     return best_communities, best_mod
 
 
-def run_modularity(modified_A, algo="louvain", package="networkx", seed=None, resolution=1, verbose=False, refine=True, refine_params=None):
+def run_modularity(modified_A, algo="louvain", package="networkx", seed=42, resolution=1, verbose=False, refine=False, refine_params=None):
     """
     Run modularity-style community detection and return ``(partition, score)``.
     
@@ -412,7 +412,7 @@ def run_igraph(modified_A, algo="infomap", resolution=1):
     return zii, metric
 
 
-def run_signed_louvain(modified_A, seed=None):
+def run_signed_louvain(modified_A, seed=42):
     """
     Run signed Louvain on positive/negative layers and return ``(partition, score)``.
     
