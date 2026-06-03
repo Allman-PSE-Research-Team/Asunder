@@ -4,7 +4,34 @@ Asunder Documentation
 .. image:: ../assets/asunder.gif
    :alt: A banner image for the asunder package.
 
-Asunder is a package for constrained structure detection on undirected graphs. In machine learning terms, this is called constrained graph clustering and in some other communities, constrained graph partitioning.
+Asunder is a package for constrained structure detection on undirected graphs.
+In machine learning terms, this is constrained graph clustering; in other
+communities, it is constrained graph partitioning.
+
+The fastest built-in workflow is load-balanced graph partitioning:
+
+.. code-block:: python
+
+   from asunder.load_balancing import LoadBalancer
+
+   z, metadata = LoadBalancer(G, K=4, R=1)
+
+Use ``asunder.load_balancing`` when you have a graph and need communities whose
+sizes are equal, near-equal, or bounded by explicit lower and upper limits. The
+workflow includes initial feasible partition generation, load balancing
+constraints, master problem handling, and refinement.
+
+Asunder also provides ``asunder.base`` for reusable decomposition and
+column-generation building blocks, plus ``asunder.nlbp`` for the packaged
+nonlinear branch-and-price application workflow where cardinality and edge-based constraints are imposed.
+
+Start here:
+
+- :doc:`getting_started/quickstart` for load balancing and decomposition
+  examples.
+- :doc:`learn/guides/problem_fit` to decide between the load balancing,
+  reusable base, and nonlinear branch-and-price workflows.
+- :doc:`api/load_balancing/index` for the load balancing API reference.
 
 .. toctree::
    :maxdepth: 2

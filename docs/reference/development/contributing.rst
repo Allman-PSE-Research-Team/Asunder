@@ -51,6 +51,7 @@ Contribution Expectations
 Contributions should preserve the current package layering:
 
 - reusable code belongs in ``asunder.base``
+- load balancing specific code belongs in ``asunder.load_balancing``
 - nonlinear branch-and-price specific code belongs in ``asunder.nlbp``
 - top-level ``asunder`` should remain a thin facade for orchestration and
   convenience entry points
@@ -62,6 +63,8 @@ In practice, that means:
 
 - put reusable algorithms, utilities, and decomposition helpers in
   ``asunder.base``
+- put load balancing initial column generation, master, and refinement logic in
+  ``asunder.load_balancing``
 - put NLBP-specific refinement and case-study logic in ``asunder.nlbp``
 - avoid importing ``asunder.nlbp`` from reusable modules unless that dependency
   is genuinely intended
@@ -87,7 +90,8 @@ Suggested Pull Request Checklist
 
 Before opening or merging a change, check the following:
 
-- the code lives in the correct layer: ``base`` vs ``nlbp``
+- the code lives in the correct layer: ``base`` vs ``load_balancing`` vs
+  ``nlbp``
 - tests covering the changed public behavior were added or updated
 - docs were updated where the public surface changed
 - ``pytest`` passes for the affected scope

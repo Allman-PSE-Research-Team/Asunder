@@ -22,6 +22,14 @@ Put code in ``asunder.nlbp`` when:
 - it depends on NLBP case-study conventions
 - it exists mainly to support the built-in evaluation path
 
+Put code in ``asunder.load_balancing`` when:
+
+- it is specific to balanced or bounded-size graph partitioning
+- it depends on load balancing semantics such as ``K``, ``R``, or
+  ``R_bounds``
+- it supports the packaged ``LoadBalancer`` workflow rather than a reusable
+  base-layer contract
+
 Initial Feasible Column Generator Contract
 ------------------------------------------
 
@@ -89,7 +97,8 @@ The callable should return either:
 - ``None`` when no refined result should be added
 
 Use refinement in ``asunder.base`` only when the logic is reusable. Keep
-workflow-specific refinement in application packages such as ``asunder.nlbp``.
+workflow-specific refinement in application packages such as
+``asunder.load_balancing`` or ``asunder.nlbp``.
 
 Case-Study Evaluation Contract
 ------------------------------

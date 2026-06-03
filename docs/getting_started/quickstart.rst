@@ -1,10 +1,51 @@
 Quickstart Guide
 ================
 
-This page shows the smallest realistic workflow that exercises the public
-decomposition API. The example is intentionally simple and uses a trivial
-initial feasible column generator so that the focus stays on the package
-structure and call pattern.
+This page shows the two most useful starting points: the packaged load
+balancing workflow and the lower-level decomposition API. Start with load
+balancing when you need balanced graph communities. Drop to the decomposition
+API when you need to customize the column-generation pieces directly.
+
+Load Balancing Run
+------------------
+
+.. code-block:: python
+
+   import networkx as nx
+
+   from asunder.load_balancing import LoadBalancer
+
+
+   G = nx.Graph()
+   G.add_edges_from(
+       [
+           ("a", "b"),
+           ("a", "c"),
+           ("b", "c"),
+           ("c", "d"),
+           ("d", "e"),
+           ("e", "f"),
+           ("d", "f"),
+       ]
+   )
+
+   z, metadata = LoadBalancer(
+       G,
+       K=2,
+       R=1,
+       must_link=[("a", "b")],
+       cannot_link=[("a", "f")],
+       disable_tqdm=True,
+   )
+
+   print(z)
+   print(metadata["modularity"])
+
+``LoadBalancer`` accepts node labels from the input graph in ``must_link`` and
+``cannot_link`` constraints, then returns a partition matrix plus metadata that
+maps communities back to those labels. Use ``K`` and ``R`` for near-equal
+communities, or use ``R_bounds=(lower, upper)`` when every community must stay
+inside explicit size bounds.
 
 Minimal Decomposition Run
 -------------------------
@@ -62,7 +103,7 @@ appropriate only for smoke tests and first experiments.
 Using Canonical Namespaces
 --------------------------
 
-The canonical reusable imports now live under ``asunder.base``. For example:
+The canonical reusable imports live under ``asunder.base``. For example:
 
 .. code-block:: python
 
@@ -75,6 +116,13 @@ The nonlinear branch-and-price application pieces live under ``asunder.nlbp``:
 
    from asunder.nlbp.case_studies import build_circle_cutting_graph, run_evaluation
    from asunder.nlbp.algorithms.refinement import refine_partition_linear_group
+
+The load balancing application pieces live under ``asunder.load_balancing``:
+
+.. code-block:: python
+
+   from asunder.load_balancing import LoadBalancer
+   from asunder.load_balancing.utils.partition_generation import make_partitions
 
 Built-In NLBP Evaluation
 ------------------------
@@ -100,6 +148,7 @@ Where To Go Next
 ----------------
 
 - For direct reusable APIs, see ``API -> Base API``.
+- For balanced graph partitioning, see ``API -> Load Balancing API``.
 - For the built-in NLBP workflow, see ``API -> NLBP API``.
 - For a fuller explanation of when the package works well as-is versus when you
   should customize it, see :doc:`../learn/guides/problem_fit`.
