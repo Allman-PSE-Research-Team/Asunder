@@ -23,6 +23,7 @@ from asunder.load_balancing.utils.partition_generation import (
     assign_from_order_with_links_range,
     make_partitions_random,
 )
+from asunder.types import DecompositionResult
 
 
 def _small_graph():
@@ -45,14 +46,14 @@ def test_load_balancer_normalizes_external_node_labels(monkeypatch):
     """Regression coverage for public graph labels in LoadBalancer constraints."""
     captured = {}
 
-    def fake_decomposition(A, a, m, mp_function, sp_function, **kwargs):
-        captured.update(kwargs)
-        return [{"z_sol": np.eye(A.shape[0], dtype=int)}]
+    def fake_decomposition(A, a, m, config, master_fn, subproblem_fn, **kwargs):
+        captured.update(vars(config))
+        return DecompositionResult([], np.eye(A.shape[0], dtype=int), None)
 
-    monkeypatch.setattr(lb_module, "CSD_decomposition", fake_decomposition)
+    monkeypatch.setattr(lb_module, "run_csd_decomposition", fake_decomposition)
 
     G = nx.path_graph(["z", "a", "m", "b"])
-    _, metadata = lb_module.LoadBalancer(
+    result = lb_module.LoadBalancer(
         G,
         K=2,
         R=1,
@@ -63,18 +64,18 @@ def test_load_balancer_normalizes_external_node_labels(monkeypatch):
 
     assert captured["must_link"] == [(0, 1)]
     assert captured["cannot_link"] == [(2, 3)]
-    assert set(metadata["community_map_labels"]) == {"z", "a", "m", "b"}
+    assert set(result.metadata["community_map_labels"]) == {"z", "a", "m", "b"}
 
 
 def test_load_balancer_normalizes_nonconsecutive_integer_labels(monkeypatch):
     """Regression coverage for graph labels that are integers but not row indices."""
     captured = {}
 
-    def fake_decomposition(A, a, m, mp_function, sp_function, **kwargs):
-        captured.update(kwargs)
-        return [{"z_sol": np.eye(A.shape[0], dtype=int)}]
+    def fake_decomposition(A, a, m, config, master_fn, subproblem_fn, **kwargs):
+        captured.update(vars(config))
+        return DecompositionResult([], np.eye(A.shape[0], dtype=int), None)
 
-    monkeypatch.setattr(lb_module, "CSD_decomposition", fake_decomposition)
+    monkeypatch.setattr(lb_module, "run_csd_decomposition", fake_decomposition)
 
     G = nx.path_graph([10, 20, 30, 40])
     lb_module.LoadBalancer(G, K=2, R=1, must_link=[(10, 20)], disable_tqdm=True)
@@ -86,11 +87,11 @@ def test_load_balancer_bounds_and_generator_validation(monkeypatch):
     """Regression coverage for R_bounds normalization and generator validation."""
     captured = {}
 
-    def fake_decomposition(A, a, m, mp_function, sp_function, **kwargs):
-        captured.update(kwargs)
-        return [{"z_sol": np.eye(A.shape[0], dtype=int)}]
+    def fake_decomposition(A, a, m, config, master_fn, subproblem_fn, **kwargs):
+        captured.update(vars(config))
+        return DecompositionResult([], np.eye(A.shape[0], dtype=int), None)
 
-    monkeypatch.setattr(lb_module, "CSD_decomposition", fake_decomposition)
+    monkeypatch.setattr(lb_module, "run_csd_decomposition", fake_decomposition)
     G = nx.path_graph(4)
 
     lb_module.LoadBalancer(G, K=2, R=0, R_bounds=(None, 3), disable_tqdm=True)

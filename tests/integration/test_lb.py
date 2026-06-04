@@ -51,7 +51,8 @@ def test_load_balancing_toy_problem():
 
     G, _ = cliques_with_bridges((12,7,5), extra_bridges=1)
 
-    z, _ = LoadBalancer(G, K=3, R=0, ifc_generator="ordered", seed=42, disable_tqdm=True)
+    result = LoadBalancer(G, K=3, R=0, ifc_generator="ordered", seed=42, disable_tqdm=True)
+    z = result.final_partition
     
     assert z.sum(axis=1).max() == z.sum(axis=1).min()
 

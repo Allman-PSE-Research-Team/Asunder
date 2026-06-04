@@ -29,7 +29,7 @@ Load Balancing Run
        ]
    )
 
-   z, metadata = LoadBalancer(
+   result = LoadBalancer(
        G,
        K=2,
        R=1,
@@ -38,12 +38,12 @@ Load Balancing Run
        disable_tqdm=True,
    )
 
-   print(z)
-   print(metadata["modularity"])
+   print(result.final_partition)
+   print(result.metadata["modularity"])
 
 ``LoadBalancer`` accepts node labels from the input graph in ``must_link`` and
-``cannot_link`` constraints, then returns a partition matrix plus metadata that
-maps communities back to those labels. Use ``K`` and ``R`` for near-equal
+``cannot_link`` constraints, then returns a ``DecompositionResult`` whose
+partition and metadata map communities back to those labels. Use ``K`` and ``R`` for near-equal
 communities, or use ``R_bounds=(lower, upper)`` when every community must stay
 inside explicit size bounds.
 

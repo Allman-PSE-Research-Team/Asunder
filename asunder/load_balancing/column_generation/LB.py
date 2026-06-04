@@ -3,10 +3,12 @@ import time
 import numpy as np
 import networkx as nx
 
-from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import compute_f_star
 from asunder.base.column_generation.subproblem import heuristic_subproblem
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
+from asunder.config import CSDDecompositionConfig
+from asunder.orchestrator import run_csd_decomposition
+from asunder.types import DecompositionResult
 
 from asunder.load_balancing.column_generation.master import solve_master_problem
 from asunder.load_balancing.algorithms.VFD import refine_partition
@@ -25,7 +27,7 @@ def LoadBalancer(
     cannot_link=[], 
     disable_tqdm=False,
     verbose=-1
-):
+) -> DecompositionResult:
     """
     Solve the load-balanced structure detection problem using Asunder's column generation workflow.
     
@@ -83,13 +85,9 @@ def LoadBalancer(
     
     Returns
     -------
-    z: numpy.ndarray
-        Binary ``N x N`` co-clustering matrix. ``z[i, j] = 1`` indicates that
-        nodes ``i`` and ``j`` are assigned to the same cluster.
-    community_map_labels: dict[str or int]
-        Mapping from node IDs to integer community identifier.
-    elapsed: float
-        The total elapsed time in seconds.
+    DecompositionResult
+        Column generation result. The final co-clustering matrix is available
+        as ``final_partition`` and load-balancing summaries are in ``metadata``.
     """
     A = nx.to_numpy_array(G)
     a = np.sum(A, axis=1)
@@ -145,10 +143,7 @@ def LoadBalancer(
 
     start = time.perf_counter()
 
-    colgen_results = CSD_decomposition(
-        A, a, m,
-        solve_master_problem,
-        heuristic_subproblem,
+    config = CSDDecompositionConfig(
         must_link=must_link, cannot_link=cannot_link,
         additional_constraints=additional_constraints,
         algo=algorithm,
@@ -166,17 +161,23 @@ def LoadBalancer(
         final_master_solve=False,
         max_iterations=None, tolerance=1e-8, verbose=verbose,
     )
+    result = run_csd_decomposition(
+        A, a=a, m=m,
+        config=config,
+        master_fn=solve_master_problem,
+        subproblem_fn=heuristic_subproblem,
+    )
     elapsed = time.perf_counter() - start
-    if colgen_results is None:
+    if result.final_partition is None:
         raise RuntimeError("Column generation failed due to infeasbility (No feasible initial columns could be generated or RMP is infeasible).")
 
-    z = colgen_results[-1]['z_sol']
+    z = result.final_partition
     community_map, _ = group_nodes_by_community(np.array(z))
     community_map_labels = map_community_labels(community_map, node_label_map)
-    metadata = {
+    result.metadata.update({
         "community_map_labels": community_map_labels,
         "modularity": compute_f_star(A, a, m, z),
         "execution_time": elapsed
-    }
+    })
 
-    return z, metadata
+    return result

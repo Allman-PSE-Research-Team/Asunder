@@ -14,7 +14,7 @@ The fastest built-in workflow is load-balanced graph partitioning:
 
    from asunder.load_balancing import LoadBalancer
 
-   z, metadata = LoadBalancer(G, K=4, R=1)
+   result = LoadBalancer(G, K=4, R=1)
 
 Use ``asunder.load_balancing`` when you have a graph and need communities whose
 sizes are equal, near-equal, or bounded by explicit lower and upper limits. The

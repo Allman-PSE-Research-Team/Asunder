@@ -106,12 +106,12 @@ A = np.array([
 
 G = nx.from_numpy_array(A)
 
-z, metadata = LoadBalancer(G, K=2, R=0, disable_tqdm=True)
-print(f'Detected the partition below with a modularity of {metadata["modularity"]} in {metadata["execution_time"]:.2f} secs')
-print(z)
+result = LoadBalancer(G, K=2, R=0, disable_tqdm=True)
+print(f'Detected the partition below with a modularity of {result.metadata["modularity"]} in {result.metadata["execution_time"]:.2f} secs')
+print(result.final_partition)
 ```
 
-`z` is the detected partition matrix. `metadata` includes the modularity score, elapsed time, and label-aware community information so the result can be mapped back to the original graph nodes.
+`result.final_partition` is the detected partition matrix. `result.metadata` includes the modularity score, elapsed time, and label-aware community information so the result can be mapped back to the original graph nodes.
 
 ### Nonlinear branch-and-price
 The generic nonlinear branch-and-price workflow lives under `asunder.nlbnp` and accepts user-provided graphs instead of case-study names.
