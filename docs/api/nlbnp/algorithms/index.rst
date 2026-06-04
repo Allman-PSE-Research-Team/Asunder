@@ -1,5 +1,5 @@
-NLBP Algorithms
-===============
+NLBNP Algorithms
+================
 
 .. toctree::
    :maxdepth: 1

@@ -13,6 +13,7 @@ from asunder.base.algorithms.core_periphery import (
     EnhancedGeneticBE,
     FullContinuousGeneticBE,
     detect_continuous_KL,
+    find_core_advanced,
 )
 from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import compute_f_star
@@ -239,6 +240,17 @@ def test_core_periphery_seed_none_uses_local_rng():
     EnhancedGeneticBE(A, pop_size=4, generations=1, tournament_size=2, seed=None).run()
     FullContinuousGeneticBE(A, pop_size=4, generations=1, tournament_size=2, seed=None).run()
     detect_continuous_KL(csr_matrix(A), must_links=[], nonlinear_nodes=[], max_iter=1, seed=None)
+
+
+def test_find_core_advanced_validates_labels():
+    """Advanced core orientation validates and returns one label per node."""
+    A = np.array([[0, 1], [1, 0]], dtype=float)
+    labels, score = find_core_advanced(A, [0, 1])
+    assert labels.shape == (2,)
+    assert np.isfinite(score)
+
+    with pytest.raises(ValueError, match="one entry"):
+        find_core_advanced(A, [0])
 
 
 def test_load_balanced_sparse_component_fallbacks_above_bitmask_limit():

@@ -22,8 +22,10 @@ workflow includes initial feasible partition generation, load balancing
 constraints, master problem handling, and refinement.
 
 Asunder also provides ``asunder.base`` for reusable decomposition and
-column-generation building blocks, plus ``asunder.nlbp`` for the packaged
-nonlinear branch-and-price application workflow where cardinality and edge-based constraints are imposed.
+column-generation building blocks, plus ``asunder.nlbnp`` for nonlinear
+branch-and-price workflows. Use ``CorePeripheryPartition`` when core removal
+exposes final connected-component communities, or ``NonlinearBranchAndPrice``
+when those components require finer subdivision through column generation.
 
 Start here:
 
@@ -32,6 +34,7 @@ Start here:
 - :doc:`learn/guides/problem_fit` to decide between the load balancing,
   reusable base, and nonlinear branch-and-price workflows.
 - :doc:`api/load_balancing/index` for the load balancing API reference.
+- :doc:`api/nlbnp/index` for the NLBNP workflows and API reference.
 
 .. toctree::
    :maxdepth: 2

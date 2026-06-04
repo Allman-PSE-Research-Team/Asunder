@@ -5,7 +5,7 @@
 ### Added
 - New heuristic subproblem support in `asunder.base.column_generation.subproblem`.
 - New nonlinear branch-and-price refinement module at
-  `asunder.nlbp.algorithms.refinement`, centered on
+  `asunder.nlbnp.algorithms.refinement`, centered on
   `refine_partition_linear_group`.
 - New generic branch-and-price scaffold under `asunder.base.branch_and_price`,
   including the new symmetry detection implementation in
@@ -14,7 +14,7 @@
 
 ### Changed
 - Reorganized the package into a reusable `asunder.base` namespace and an
-  application-specific `asunder.nlbp` namespace.
+  application-specific `asunder.nlbnp` namespace.
 - Moved reusable modules to `asunder.base`:
   - `asunder.algorithms.*` -> `asunder.base.algorithms.*`
   - `asunder.branch_and_price.*` -> `asunder.base.branch_and_price.*`
@@ -23,12 +23,12 @@
   - `asunder.legacy.*` -> `asunder.base.legacy.*`
   - `asunder.utils.*` -> `asunder.base.utils.*`
   - `asunder.visualization.*` -> `asunder.base.visualization.*`
-- Moved nonlinear branch-and-price application modules to `asunder.nlbp`:
-  - `asunder.case_studies.circle_cutting` -> `asunder.nlbp.case_studies.circle_cutting`
-  - `asunder.case_studies.cpcong` -> `asunder.nlbp.case_studies.cpcong`
-  - evaluation runner -> `asunder.nlbp.case_studies.runner`
+- Moved nonlinear branch-and-price application modules to `asunder.nlbnp`:
+  - `asunder.case_studies.circle_cutting` -> `asunder.nlbnp.case_studies.circle_cutting`
+  - `asunder.case_studies.cpcong` -> `asunder.nlbnp.case_studies.cpcong`
+  - evaluation runner -> `asunder.nlbnp.case_studies.runner`
 - Kept `modular_very_fortunate_descent` in `asunder.base.algorithms`; it is
-  treated as reusable base functionality rather than NLBP-specific logic.
+  treated as reusable base functionality rather than NLBNP-specific logic.
 - Retained top-level orchestration and convenience imports in `asunder`,
   including `run_csd_decomposition`, `solve_master_problem`,
   `solve_subproblem`, `CSDDecomposition`, `CSDDecompositionConfig`, and
@@ -54,7 +54,7 @@
   `asunder.algorithms`, `asunder.branch_and_price`, `asunder.column_generation`,
   `asunder.case_studies`, `asunder.evaluation`, `asunder.legacy`,
   `asunder.utils`, and `asunder.visualization` must be updated to the new
-  `asunder.base.*` or `asunder.nlbp.*` paths.
+  `asunder.base.*` or `asunder.nlbnp.*` paths.
 - No compatibility shims are provided for the removed top-level package
   namespaces.
 

@@ -1,5 +1,5 @@
-NLBP Case Studies
-=================
+NLBNP Case Studies
+==================
 
 .. toctree::
    :maxdepth: 1

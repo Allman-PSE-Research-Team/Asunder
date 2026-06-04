@@ -13,11 +13,11 @@ Asunder is intentionally split into layers:
 - ``asunder.base`` contains reusable building blocks
 - ``asunder.load_balancing`` contains the load-balanced graph partitioning
   application layer
-- ``asunder.nlbp`` contains the nonlinear branch-and-price application layer
+- ``asunder.nlbnp`` contains the nonlinear branch-and-price application layer
 
 This split exists to keep reusable code reusable. The base layer should remain
 general enough to support additional applications without inheriting
-application-specific assumptions from the load balancing or NLBP workflows.
+application-specific assumptions from the load balancing or NLBNP workflows.
 
 Prefer Reusable Placement
 -------------------------
@@ -28,7 +28,7 @@ When new functionality is added, the default question should be:
 
 If the answer is yes, the code should usually live in ``asunder.base``. If the
 answer is no, or if the code is tightly bound to one workflow or one case-study
-family, it should live in ``asunder.load_balancing``, ``asunder.nlbp``, or in a
+family, it should live in ``asunder.load_balancing``, ``asunder.nlbnp``, or in a
 future peer application package.
 
 That principle is why:
@@ -37,7 +37,7 @@ That principle is why:
 - reusable decomposition machinery lives in ``asunder.base.column_generation``
 - load balancing master, partition generation, and refinement logic lives in
   ``asunder.load_balancing``
-- NLBP-specific refinement logic lives in ``asunder.nlbp.algorithms``
+- NLBNP-specific refinement logic lives in ``asunder.nlbnp.algorithms``
 - ``modular_very_fortunate_descent`` remains in ``asunder.base.algorithms``
 
 Keep the Top Level Thin

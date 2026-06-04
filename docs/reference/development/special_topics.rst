@@ -16,10 +16,10 @@ Put code in ``asunder.base`` when:
 - it belongs to reusable decomposition, algorithm, utility, or visualization
   infrastructure
 
-Put code in ``asunder.nlbp`` when:
+Put code in ``asunder.nlbnp`` when:
 
 - it is specific to the nonlinear branch-and-price workflow
-- it depends on NLBP case-study conventions
+- it depends on NLBNP case-study conventions
 - it exists mainly to support the built-in evaluation path
 
 Put code in ``asunder.load_balancing`` when:
@@ -98,17 +98,42 @@ The callable should return either:
 
 Use refinement in ``asunder.base`` only when the logic is reusable. Keep
 workflow-specific refinement in application packages such as
-``asunder.load_balancing`` or ``asunder.nlbp``.
+``asunder.load_balancing`` or ``asunder.nlbnp``.
+
+Generic NLBNP Workflow Contract
+------------------------------
+
+Use ``asunder.nlbnp.CorePeripheryPartition`` when removing a detected core
+leaves connected periphery components that can be used directly as final
+communities. It returns a one-dimensional community-label vector and
+label-aware metadata.
+
+Use ``asunder.nlbnp.NonlinearBranchAndPrice`` when you already have a graph or
+adjacency matrix and want the NLBNP column-generation workflow without a packaged
+case-study builder, especially when the community structure is beyond the direct 
+core-periphery logic. The workflow accepts:
+
+- ``networkx.Graph`` inputs with labeled ``worthy_edges``, ``must_link``, and
+  ``cannot_link`` pairs
+- square adjacency matrices with integer-indexed pair constraints
+- optional worthy-edge derivation through ``worthy_edge_attr`` and
+  ``worthy_edge_value``
+- optional custom refinement, including ``refine_partition_with_cp``, through
+  ``refine_params``
+
+The wrapper returns the standard ``DecompositionResult`` and adds label-aware
+metadata when the input is a ``networkx.Graph``.
 
 Case-Study Evaluation Contract
 ------------------------------
 
 The built-in ``run_evaluation`` path is application-specific and lives in
-``asunder.nlbp.case_studies.runner``. It assumes a packaged case-study style
+``asunder.nlbnp.case_studies.runner``. It assumes a packaged case-study style
 graph schema rather than a completely generic graph input.
 
 If you only need reusable decomposition behavior, prefer working directly with
-the base-layer APIs rather than routing through ``run_evaluation``.
+``NonlinearBranchAndPrice`` or the base-layer APIs rather than routing through
+``run_evaluation``.
 
 Documentation Responsibilities
 ------------------------------

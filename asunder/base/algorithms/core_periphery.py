@@ -151,7 +151,7 @@ def find_core(A: np.ndarray, labels: np.ndarray) -> np.ndarray:
     return labels if score > score_inv else labels_inv
 
 
-def find_core_advance(A: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, float]:
+def find_core_advanced(A: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, float]:
     """
     Select the best core-periphery split induced by unique label values. Used to recover best core-periphery structure from a multi-label graph split.
     
@@ -169,10 +169,13 @@ def find_core_advance(A: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, fl
     best_score: float
         Best BE score.
     """
+    labels = np.asarray(labels).reshape(-1)
+    if labels.shape[0] != np.asarray(A).shape[0]:
+        raise ValueError("labels must contain one entry per adjacency-matrix node.")
     best_score = -np.inf
     best_labels: np.ndarray | None = None
 
-    for index in set(np.asarray(labels).tolist()):
+    for index in np.unique(labels):
         trial_labels = (labels != index).astype(int)
         trial_score = normalized_BE_score(A, trial_labels)
         if trial_score > best_score:
@@ -197,7 +200,7 @@ class EnhancedGeneticBE:
     A : np.ndarray of int or float, shape (N, N)
         Graph adjacency / weight matrix.
     must_links : list[tuple[int, int]] | None
-        Nodes that must be linked.
+        Node pairs that must be linked because the edges between them cannot connect nodes in different communities.
     pop_size : int
         Size of the population.
     generations : int
@@ -410,7 +413,7 @@ class FullContinuousGeneticBE:
     A : np.ndarray of int or float, shape (N, N)
         Graph adjacency / weight matrix.
     must_links : list[tuple[int, int]] | None
-        Nodes that must be linked.
+        Node pairs that must be linked because the edges between them cannot connect nodes in different communities.
     nonlinear_nodes : list[int] | None
         Nodes that correspond to nonlinear constraints and so, should be merged.
     pop_size : int
@@ -783,14 +786,14 @@ def detect_continuous_KL(
     seed: int | None = 42,
 ) -> tuple[np.ndarray, float]:
     """
-    Continuous- BE vcorenessia constrained block updates.
+    Continuous- BE coreness via constrained block updates.
     
     Parameters
     ----------
     A_csr : csr_matrix, shape (N, N)
         Input adjacency / weight matrix as a csr matrix.
     must_links : list[tuple[int, int]]
-        Node pairs that must be linked.
+        Node pairs that must be linked because the edges between them cannot connect nodes in different communities.
     nonlinear_nodes : list[int] | None
         Nodes that correspond to nonlinear constraints and so, should be merged.
     max_iter : int
@@ -927,7 +930,7 @@ def spectral_continuous_cp_detection(
     A_csr : csr_matrix
         Input adjacency / weight matrix as a csr matrix.
     must_links : list[tuple[int, int]]
-        Node pairs that must be linked.
+        Node pairs that must be linked because the edges between them cannot connect nodes in different communities.
     nonlinear_nodes : list[int] | None
         Nodes that correspond to nonlinear constraints and so, should be merged.
     normalize : bool
@@ -1052,7 +1055,7 @@ def _core_mask_from_partition(
     return core_mask.astype(bool)
 
 
-def partititon_periphery_components(
+def partition_periphery_components(
     adj: AdjLike,
     core_periphery: np.ndarray | list[int],
     *,

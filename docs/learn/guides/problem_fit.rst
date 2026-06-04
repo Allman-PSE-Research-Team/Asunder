@@ -10,7 +10,8 @@ In those settings, the package provides three complementary layers:
 - ``asunder.base`` for reusable decomposition and partitioning tools
 - ``asunder.load_balancing`` for the built-in load-balanced graph partitioning
   workflow
-- ``asunder.nlbp`` for the built-in nonlinear branch-and-price application
+- ``asunder.nlbnp`` for generic and case-study nonlinear branch-and-price
+  workflows
 
 Choosing Between Package Layers
 -------------------------------
@@ -30,12 +31,16 @@ Use ``asunder.load_balancing`` when:
 - you want the packaged initial column generation, master problem, and
   refinement path
 
-Use ``asunder.nlbp`` when:
+Use ``asunder.nlbnp`` when:
 
+- you expect core removal to leave connected components that are meaningful
+  final communities and want ``CorePeripheryPartition``
+- you already have a graph and want a high-level nonlinear branch-and-price
+  workflow through ``NonlinearBranchAndPrice``
 - you want the packaged nonlinear branch-and-price evaluation workflow which
   imposes edge-based and cardinality constraints.
 - you want the current built-in case-study graph builders
-- you want the NLBP-specific refinement routine
+- you want the NLBNP-specific refinement routine
 
 What Good Problem Fit Looks Like
 --------------------------------
@@ -90,13 +95,26 @@ For ``asunder.load_balancing.LoadBalancer``, Asunder expects:
   ``R_bounds=(lower, upper)`` for explicit bounds
 
 The load balancing workflow does not require the case-study node and edge
-attributes used by ``asunder.nlbp``. Node attributes can still be present for
+attributes used by ``asunder.nlbnp``. Node attributes can still be present for
 application metadata, but the high-level workflow primarily uses graph topology,
 node labels, and explicit pairwise constraints.
 
+For the generic ``asunder.nlbnp.NonlinearBranchAndPrice`` workflow, Asunder can
+start from a ``networkx.Graph`` or a square adjacency matrix. ``worthy_edges``,
+``must_link``, and ``cannot_link`` can be supplied directly; for ``networkx``
+inputs, those pairs use graph node labels. Worthy edges can also be derived from
+an edge attribute with ``worthy_edge_attr`` and ``worthy_edge_value``.
+
+``asunder.nlbnp.CorePeripheryPartition`` accepts the same graph or adjacency
+input styles, plus ``unworthy_edges`` and ``nonlinear_nodes`` constraints. It
+detects a core and returns one community for that core plus one community for
+each connected periphery component. This is the preferred path when those
+components do not require further subdivision. Use ``NonlinearBranchAndPrice``
+when finer-grained periphery communities are expected.
+
 For the built-in case-study evaluation flows in ``run_evaluation``, Asunder
 expects a constraint-graph schema similar to the packaged case studies in
-``asunder.nlbp.case_studies``.
+``asunder.nlbnp.case_studies``.
 
 Required fields
 ^^^^^^^^^^^^^^^
@@ -191,7 +209,7 @@ As a rule of thumb:
 
 - customize within ``asunder.base`` when the logic is reusable across
   applications
-- extend ``asunder.load_balancing``, ``asunder.nlbp``, or add a new peer
+- extend ``asunder.load_balancing``, ``asunder.nlbnp``, or add a new peer
   application package when the logic is specific to one workflow or one family
   of case studies
 

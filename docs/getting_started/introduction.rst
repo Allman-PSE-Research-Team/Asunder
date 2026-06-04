@@ -50,15 +50,16 @@ The public package is intentionally split into layers.
    the high-level ``LoadBalancer`` workflow, load-balancing master problem,
    initial feasible partition generators, and refinement logic.
 
-``asunder.nlbp``
+``asunder.nlbnp``
    The application layer for nonlinear branch-and-price workflows. This
-   contains case studies, the built-in evaluation runner, and refinement logic
-   that is specific to that workflow.
+   contains ``CorePeripheryPartition`` for component-level partitioning after
+   core removal, the finer-grained ``NonlinearBranchAndPrice`` workflow, case
+   studies, the built-in evaluation runner, and NLBNP-specific refinement.
 
 If you are building a new application area, ``asunder.base`` is the starting
 point. If you want a complete balanced partitioning workflow, start with
 ``asunder.load_balancing``. If you want to use the existing nonlinear
-branch-and-price workflow, ``asunder.nlbp`` gives you the packaged
+branch-and-price workflow, ``asunder.nlbnp`` gives you the packaged
 application-specific pieces.
 
 Mental Model
@@ -104,11 +105,15 @@ Drop into ``asunder.base`` if:
 - you want to mix and match reusable utilities and algorithms
 - you are building a new application package on top of the reusable layer
 
-Use ``asunder.nlbp`` if:
+Use ``asunder.nlbnp`` if:
 
+- you expect core removal to expose connected components that are final
+  communities
+- you already have a graph and want the generic nonlinear branch-and-price
+  workflow
 - you want the built-in nonlinear branch-and-price case studies
 - you want the packaged evaluation runner
-- you need the NLBP-specific refinement workflow
+- you need the NLBNP-specific refinement workflow
 
 What Asunder Does Not Do For You
 --------------------------------
