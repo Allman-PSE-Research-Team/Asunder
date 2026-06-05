@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "put-asunder"
-version = "0.1.2"
+version = "0.2.0"
 description = "Asunder: Constrained Network Structure Detection on Undirected Graphs."
 readme = "README.md"
 license = "BSD-3-Clause"
