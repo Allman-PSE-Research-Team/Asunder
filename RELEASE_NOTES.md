@@ -1,6 +1,6 @@
 # Release Notes
 
-## v0.2.0 - 2026-06-05
+## v0.2.1 - 2026-06-05
 
 ### Added
 - Added `asunder.load_balancing.LoadBalancer`, a high-level load-balanced graph partitioning workflow.
@@ -8,12 +8,14 @@
 - Added `asunder.nlbnp.CorePeripheryPartition` for component-level partitioning after core removal.
 - Added core-periphery detection and NLBNP refinement utilities.
 - Added regression and integration coverage for load-balancing, decomposition, constraint, and large sparse-graph edge cases.
+- Added `__version__` attribute.
 
 ### Changed
 - Renamed the `asunder.nlbp` package and NLBP references to `asunder.nlbnp` and NLBNP.
 - Replaced `defaultdict` constraint handling with regular dictionaries and safe internal normalization.
 - Improved node-label mapping, constraint validation, infeasibility handling, and large sparse-graph partition generation.
 - Expanded README and documentation coverage for load balancing and NLBNP workflows.
+- Updated title underline in docs.
 
 ### Removed
 - Removed the old `asunder.nlbp` package path.
