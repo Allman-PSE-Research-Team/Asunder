@@ -343,6 +343,7 @@ def _build_coassociation_matrix(
     n = X.shape[0]
     if n == 0:
         return np.zeros((0, 0), dtype=float)
+    n_unique = np.unique(X, axis=0).shape[0]
 
     # For spectral with precomputed affinity, ensure diagonal is 1 and nonnegative.
     A = X.copy()
@@ -353,7 +354,8 @@ def _build_coassociation_matrix(
     total = 0
 
     for k in n_components_list:
-        if k <= 0 or k > n:
+        k = min(k, n_unique)
+        if k <= 1 or k > n:
             continue
         for sd in seeds:
             for meth in methods:
