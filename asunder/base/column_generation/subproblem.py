@@ -342,7 +342,7 @@ def custom_heuristic_subproblem(
             z_sol = partition_vector_to_2d_matrix(best_labels)
             metric = res["best_reduced_cost"] + constant_terms # for normalization sake
         else:
-            z_sol, metric = full_spectral_bisection(A, a, m, dualW, refinement=False, verbose=verbose)
+            z_sol, metric = full_spectral_bisection(A, a, m, dualW, refinement=True, verbose=verbose)
         if refine and refine_params is not None:
             z_refine = refine_params["refine_func"](A=A, partition=z_sol, **refine_params["kwargs"])
             if z_refine is not None:
