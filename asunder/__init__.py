@@ -7,10 +7,11 @@ from asunder.orchestrator import CSDDecomposition, run_csd_decomposition
 from asunder.solvers import create_solver
 from asunder.types import DecompositionResult, IterationRecord
 
+__version__ = "0.2.1"
 
 def run_evaluation(*args, **kwargs):
     """
-    Run benchmark evaluations using :mod:`asunder.nlbp.case_studies.runner`.
+    Run benchmark evaluations using :mod:`asunder.nlbnp.case_studies.runner`.
     
     Parameters
     ----------
@@ -24,7 +25,7 @@ def run_evaluation(*args, **kwargs):
     Any
         Computed result.
     """
-    from asunder.nlbp.case_studies.runner import run_evaluation as _run_evaluation
+    from asunder.nlbnp.case_studies.runner import run_evaluation as _run_evaluation
 
     return _run_evaluation(*args, **kwargs)
 

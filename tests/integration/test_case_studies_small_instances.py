@@ -1,21 +1,20 @@
 import math
 import os
-from collections import defaultdict
 
 import numpy as np
 import pytest
 
-import asunder.nlbp.case_studies.runner as runner
+import asunder.nlbnp.case_studies.runner as runner
 from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import compute_f_star, solve_master_problem
 from asunder.base.column_generation.subproblem import custom_heuristic_subproblem
 from asunder.base.evaluation.metrics import permuted_accuracy
 from asunder.base.utils.graph import partition_matrix_to_vector
 from asunder.base.utils.partition_generation import make_simple_partition
-from asunder.nlbp.algorithms.refinement import refine_partition_linear_group
-from asunder.nlbp.case_studies.circle_cutting import build_circle_cutting_graph
-from asunder.nlbp.case_studies.cpcong import build_cpcong_graph
-from asunder.nlbp.case_studies.runner import run_evaluation
+from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group
+from asunder.nlbnp.case_studies.circle_cutting import build_circle_cutting_graph
+from asunder.nlbnp.case_studies.cpcong import build_cpcong_graph
+from asunder.nlbnp.case_studies.runner import run_evaluation
 from asunder.solvers import set_default_solver
 
 
@@ -151,13 +150,13 @@ def test_run_evaluation_cd_refine_cpcong_calls_partitioned_gt(monkeypatch):
     """Tests community detection evaluation workflow with small cpcong instance"""
     _configure_solver_or_skip()
     calls = {"count": 0}
-    original = runner.partititon_periphery_components
+    original = runner.partition_periphery_components
 
     def wrapped(A, labels):
         calls["count"] += 1
         return original(A, labels)
 
-    monkeypatch.setattr(runner, "partititon_periphery_components", wrapped)
+    monkeypatch.setattr(runner, "partition_periphery_components", wrapped)
 
     results = run_evaluation(
         problem="cpcong",
@@ -176,13 +175,13 @@ def test_run_evaluation_cd_refine_circcut_calls_partitioned_gt(monkeypatch):
     """Tests community detection evaluation workflow with small circcut instance"""
     _configure_solver_or_skip()
     calls = {"count": 0}
-    original = runner.partititon_periphery_components
+    original = runner.partition_periphery_components
 
     def wrapped(A, labels):
         calls["count"] += 1
         return original(A, labels)
 
-    monkeypatch.setattr(runner, "partititon_periphery_components", wrapped)
+    monkeypatch.setattr(runner, "partition_periphery_components", wrapped)
 
     results = run_evaluation(
         problem="circcut",
@@ -213,7 +212,7 @@ def _configure_solver_or_skip():
             pytest.fail(f"Pyomo solver stack unavailable but required: {exc}")
         pytest.skip(f"Pyomo solver stack unavailable: {exc}")
 
-    for name in ("appsi_highs", "highs", "glpk", "cbc", "gurobi_direct"):
+    for name in ("gurobi_direct", "appsi_highs", "highs", "glpk", "cbc"):
         try:
             solver = SolverFactory(name)
             if solver is not None and solver.available(False):
@@ -283,7 +282,7 @@ def test_cd_refine_real_decomposition_quality_cpcong_small_instance():
     A = runner.nx.to_numpy_array(G)
     n = A.shape[0]
 
-    labels_gt, _ = runner.partititon_periphery_components(A, labels_gt)
+    labels_gt, _ = runner.partition_periphery_components(A, labels_gt)
 
     node_labels = list(G.nodes())
     label_node_map = {label: i for i, label in enumerate(node_labels)}
@@ -294,7 +293,7 @@ def test_cd_refine_real_decomposition_quality_cpcong_small_instance():
     ]
 
     ifc_params = {"generator": make_simple_partition, "num": 1, "args": {"N": n}}
-    additional_constraints = defaultdict(lambda: None, {"worthy_edges": worthy_edges})
+    additional_constraints = {"worthy_edges": worthy_edges}
     a = A.sum(axis=1)
     m = a.sum()
     refine_counter = {"count": 0}
@@ -339,7 +338,7 @@ def test_cd_refine_real_decomposition_quality_circcut_small_instance():
     A = runner.nx.to_numpy_array(G)
     n = A.shape[0]
 
-    labels_gt, _ = runner.partititon_periphery_components(A, labels_gt)
+    labels_gt, _ = runner.partition_periphery_components(A, labels_gt)
 
     node_labels = list(G.nodes())
     label_node_map = {label: i for i, label in enumerate(node_labels)}
@@ -350,7 +349,7 @@ def test_cd_refine_real_decomposition_quality_circcut_small_instance():
     ]
 
     ifc_params = {"generator": make_simple_partition, "num": 1, "args": {"N": n}}
-    additional_constraints = defaultdict(lambda: None, {"worthy_edges": worthy_edges})
+    additional_constraints = {"worthy_edges": worthy_edges}
     a = A.sum(axis=1)
     m = a.sum()
     refine_counter = {"count": 0}

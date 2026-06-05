@@ -3,19 +3,12 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 
 import networkx as nx
 import numpy as np
-from scipy.sparse import csr_matrix
 
-from asunder.base.algorithms.community import probability_to_integer_labels
 from asunder.base.algorithms.core_periphery import (
-    FullContinuousGeneticBE,
-    detect_continuous_KL,
-    find_core,
-    partititon_periphery_components,
-    spectral_continuous_cp_detection,
+    partition_periphery_components,
 )
 from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import solve_master_problem
@@ -32,9 +25,10 @@ from asunder.base.evaluation.metrics import (
 )
 from asunder.base.utils.graph import partition_matrix_to_vector, partition_vector_to_2d_matrix
 from asunder.base.utils.partition_generation import make_simple_partition
-from asunder.nlbp.algorithms.refinement import refine_partition_linear_group
-from asunder.nlbp.case_studies.circle_cutting import build_circle_cutting_graph
-from asunder.nlbp.case_studies.cpcong import build_cpcong_graph
+from asunder.nlbnp.algorithms.core_periphery import _detect_core_periphery
+from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group
+from asunder.nlbnp.case_studies.circle_cutting import build_circle_cutting_graph
+from asunder.nlbnp.case_studies.cpcong import build_cpcong_graph
 
 NX_ALGOS = ["louvain", "leiden", "greedy", "girvan_newman"]
 IGRAPH_ALGOS = ["infomap", "lpa", "multilevel", "voronoi", "walktrap"]
@@ -122,34 +116,15 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
             algo_res = {"NMI": -np.inf, "ARI": -np.inf, "VI": np.inf, "Accuracy": -np.inf}
             runs = []
             for _ in range(repeat):
-                start = time.time()
-                if algo.upper() == "KL":
-                    labels_blk, _ = detect_continuous_KL(csr_matrix(A), unworthy_edges, nonlinear_nodes, max_iter=50)
-                    integer_labels = probability_to_integer_labels(np.array(labels_blk).reshape(-1, 1), method="gaussian_mixture")
-                    labels = find_core(A, integer_labels)
-                elif algo.upper() == "GA":
-                    ga = FullContinuousGeneticBE(
-                        A,
-                        must_links=unworthy_edges,
-                        nonlinear_nodes=nonlinear_nodes,
-                        pop_size=50,
-                        generations=100,
-                        seed=42,
-                    )
-                    raw_labels, _ = ga.run()
-                    integer_labels = probability_to_integer_labels(
-                        np.array(list(raw_labels.values())).reshape(-1, 1), method="gaussian_mixture"
-                    )
-                    labels = find_core(A, integer_labels)
-                elif algo.upper() == "SPEC":
-                    labels_blk, _ = spectral_continuous_cp_detection(
-                        csr_matrix(A), unworthy_edges, nonlinear_nodes, True
-                    )
-                    integer_labels = probability_to_integer_labels(labels_blk.reshape(-1, 1), method="gaussian_mixture")
-                    labels = find_core(A, integer_labels)
-                else:
-                    raise NotImplementedError(f"Unsupported CP algorithm: {algo}")
-                end = time.time()
+                start = time.perf_counter()
+                labels, _ = _detect_core_periphery(
+                    A,
+                    unworthy_edges=unworthy_edges,
+                    nonlinear_nodes=nonlinear_nodes,
+                    algorithm=algo,
+                    prob_method="gaussian_mixture",
+                )
+                end = time.perf_counter()
 
                 acc = permuted_accuracy(labels_gt, labels)[0]
                 algo_res["NMI"] = max(algo_res["NMI"], nmi_sklearn(labels_gt, labels))
@@ -163,7 +138,7 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
         return results
 
     if style == "CD_Refine":
-        cp_partition = partititon_periphery_components(A, labels_gt)
+        cp_partition = partition_periphery_components(A, labels_gt)
         labels_gt = cp_partition[0] if isinstance(cp_partition, tuple) else cp_partition
         worthy_edges = [
             (label_node_map[i], label_node_map[j])
@@ -177,8 +152,8 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
                 "refine_func": refine_partition_linear_group,
                 "kwargs": {"prob_method": "DBSCAN" if problem == "cpcong" else "gaussian_mixture", "verbose": False},
             }
-            additional_constraints = defaultdict(lambda: None, {"worthy_edges": worthy_edges})
-            start = time.time()
+            additional_constraints = {"worthy_edges": worthy_edges}
+            start = time.perf_counter()
             cg_results = CSD_decomposition(
                 A,
                 a,
@@ -198,7 +173,7 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
                 tolerance=1e-8,
                 verbose=-1,
             )
-            end = time.time()
+            end = time.perf_counter()
             labels = partition_matrix_to_vector(cg_results[-1]["z_sol"])
             results[algo] = {
                 "NMI": nmi_sklearn(labels_gt, labels),

@@ -40,6 +40,7 @@ def draw_network_with_labels(
     legend=True,
     title=True,
     figsize=None,
+    seed=42
 ):
     """
     Draw a community-colored graph with optional labels, legend, and edge styling.
@@ -60,17 +61,20 @@ def draw_network_with_labels(
         Show title if `True`.
     figsize : tuple[int, int]
         Figure size of diagram.
+    seed : int
+        Random seed value.
     """
     import matplotlib.pyplot as plt
     import networkx as nx
     import numpy as np
 
-    pos = nx.spring_layout(G, seed=42)
+    pos = nx.spring_layout(G, seed=seed)
     unique_communities = sorted(set(community_map_labels.values()))
     num_communities = len(unique_communities)
     community_to_color_index = {comm: i for i, comm in enumerate(unique_communities)}
 
     if num_communities < 10:
+        # Use a listed colormap for distinct colors
         cmap = plt.get_cmap("tab10")
         colors = cmap(np.linspace(0, 1, cmap.N))
         if num_communities == 2:
@@ -81,6 +85,7 @@ def draw_network_with_labels(
             cmap = plt.get_cmap(cmap_name)
             colors.extend(cmap(np.linspace(0, 1, cmap.N)))
 
+    # Assign node colors based on their community index
     node_colors = [community_to_color_index[community_map_labels[node]] for node in G.nodes()]
     node_color_values = [colors[idx] for idx in node_colors]
     if figsize:

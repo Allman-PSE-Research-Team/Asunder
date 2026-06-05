@@ -1,7 +1,9 @@
 """Column generation decomposition orchestration."""
 from __future__ import annotations
 
-from collections import defaultdict, deque
+import copy
+import inspect
+from collections import deque
 
 import numpy as np
 from tqdm.auto import tqdm
@@ -20,12 +22,13 @@ def CSD_decomposition(
     sp_function,
     columns=None, f_stars=None,
     must_link=[], cannot_link=[],
-    additional_constraints=defaultdict(lambda: None),
+    additional_constraints=None,
     contract_graph=False,
     stopping_window=5,
     check_flat_pricing=True,
     algo="louvain",
     package="sknetwork",
+    seed=42,
     extract_dual=False,
     # initial feasible column generator
     ifc_params: dict = {},
@@ -34,7 +37,8 @@ def CSD_decomposition(
     refine_params: dict={},
     use_refined_column=False,
     final_master_solve=True,
-    max_iterations=1000, tolerance=1e-10, verbose=False,
+    max_iterations=1000, disable_tqdm=False,
+    tolerance=1e-10, verbose=False,
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
@@ -91,20 +95,24 @@ def CSD_decomposition(
             ``"leiden"``
         ``None``:
             ``"signed_louvain"``, ``"spinglass"``
+    seed : int or None
+        Random seed value.
     extract_dual : bool
         Boolean that determines whether we extract duals from the master problem or not.
     ifc_params : dict[str, callable or dict or int]
-        Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments.
+        Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments (excluding seed values).
     refine_in_subproblem : bool
         Boolean value that determines whether a refinement operation is run in the subproblem.
     refine_params : dict[str, callable or dict]
-        Refinement function and its corresponding arguments.
+        Refinement function and its corresponding arguments (excluding seed values).
     use_refined_column : bool
         Boolean that determines whether refined columns are used in the main column generation loop or not.
     final_master_solve : bool
         Boolean that determines whether a final master solve is executed or not.
     max_iterations : int
         Maximum number of column generation iterations.
+    disable_tqdm : bool
+        Whether to disable the progress bar or not.
     tolerance : float
         Tolerance value for terminating column generation.
     verbose : int or bool
@@ -120,18 +128,25 @@ def CSD_decomposition(
         ``lambda_sol``, dual terms, ``master_obj_val``, ``z_sol``,
         ``sub_obj_val``, ``columns``, ``f_stars``, and ``heuristic_col``.
     """
+    # drop seed values from parameters if included
+    ifc_params.get("args", {}).pop('seed', None)
+    refine_params.get("kwargs", {}).pop('seed', None)
 
     # cold start
     if columns is None:
         columns = []
 
+    additional_constraints = (
+        {} if additional_constraints is None else dict(additional_constraints)
+    )
+
     # contract graph if necessary
-    if contract_graph and (must_link or additional_constraints["worthy_edges"]):
-        A, node2comp = contract_adj_matrix_new(A, additional_constraints["worthy_edges"], must_link)
+    if contract_graph and (must_link or additional_constraints.get("worthy_edges")):
+        A, node2comp = contract_adj_matrix_new(A, additional_constraints.get("worthy_edges"), must_link)
         a = A.sum(axis=0)
         m = np.sum(a)
         additional_constraints["worthy_edges"] = None
-        if "N" in ifc_params["args"]:
+        if "N" in ifc_params.get("args", {}):
             ifc_params["args"]["N"] = np.shape(A)[0]
     else:
         node2comp = None
@@ -146,13 +161,13 @@ def CSD_decomposition(
     else:
         # generate initial feasible columns
         ifc_generator = ifc_params["generator"]
-        feasible_columns = ifc_generator(**ifc_params["args"])
+        feasible_columns = ifc_generator(**ifc_params["args"], seed=seed)
 
         # without feasible columns, terminate
         if len(feasible_columns) == 0:
             if verbose != -1:
                 print("A feasible initial partition cannot be generated.")
-            return None, None, None
+            return None
 
         # initialize columns and their scores
         if ifc_params["num"] == 1:
@@ -170,7 +185,7 @@ def CSD_decomposition(
 
     # main column generation loop
     # for iteration in tqdm(range(max_iterations)):
-    with tqdm(total=max_iterations, disable=(verbose == -1)) as pbar:
+    with tqdm(total=max_iterations, disable=disable_tqdm) as pbar:
         iteration = 1
 
         while True:
@@ -193,7 +208,7 @@ def CSD_decomposition(
 
             # call it a day if RMP is infeasible
             if master_obj_val is None:
-                return None, None, None
+                return None
 
             if verbose != -1:
                 print(duals)
@@ -201,14 +216,20 @@ def CSD_decomposition(
                 print("Master Obj:", master_obj_val)
                 print("lambda: ", lambda_sol)
 
-            try:
-                if algo in {"spectral", "full_louvain", "one_level_louvain"}:
+            if getattr(sp_function, "__name__", None) == "solve_subproblem":
+                # uses ILP subproblem
+                sub_obj_val, z_sol = sp_function(
+                    A, a, m, duals, verbose=verbose
+                )
+            else:
+                if algo in {"spectral", "full_louvain", "one_level_louvain", "RCCS"}:
                     # uses custom heuristic subproblem
                     sub_obj_val, z_sol = sp_function(
                         A, a, m, duals, algo=algo,
                         refine=refine_in_subproblem,
                         refine_params=refine_params,
-                        verbose=verbose
+                        verbose=verbose,
+                        seed=seed
                     )
                 else:
                     # uses package based heuristic subproblem
@@ -217,13 +238,9 @@ def CSD_decomposition(
                         algo=algo, package=package,
                         refine=refine_in_subproblem,
                         refine_params=refine_params,
-                        verbose=verbose
-                    )
-            except Exception:
-                # uses ILP subproblem
-                sub_obj_val, z_sol = sp_function(
-                    A, a, m, duals, verbose=verbose
-                )
+                        verbose=verbose,
+                        seed=seed
+                    )                
 
             if verbose != -1:
                 print(f"Subproblem obj: {sub_obj_val}")
@@ -247,10 +264,14 @@ def CSD_decomposition(
             try:
                 if use_refined_column or final_master_solve:
                     # refine z_sol if needed in column generation or final master solve
+                    in_loop_kwargs = copy.deepcopy(refine_params["kwargs"])
+                    if "shake_rounds" in inspect.signature(refine_params["refine_func"]).parameters:
+                        in_loop_kwargs["shake_rounds"] = 0
                     heuristic_col = refine_params["refine_func"](
                         A=A,
                         partition=z_sol,
-                        **refine_params["kwargs"]
+                        **in_loop_kwargs,
+                        seed=seed
                     )
                     if heuristic_col is not None:
                         results[-1]["heuristic_col"] = heuristic_col
@@ -295,7 +316,8 @@ def CSD_decomposition(
         heuristic_col = refine_params["refine_func"](
                 A=A,
                 partition=wz,
-                **refine_params["kwargs"]
+                **refine_params["kwargs"],
+                seed=seed
             )
         if heuristic_col is not None:
             Z_star.append(heuristic_col)
@@ -333,13 +355,14 @@ def CSD_decomposition(
             **additional_constraints,
             verbose=verbose
         )
+        if lambda_sol is not None:
+            z_sol = Z_star[np.argmax(lambda_sol)]
+        else:
+            if verbose != -1:
+                print("Final master solve is infeasible.")
+            z_sol = None
 
-        z_sol = Z_star[np.argmax(lambda_sol)]
-
-        if verbose != -1:
-            print(z_sol)
-
-        empty_duals = {k:None for k,v in duals.items()}
+        empty_duals = {k:None for k, _ in duals.items()}
 
         results.append({
             "lambda_sol": lambda_sol,

@@ -60,7 +60,9 @@ def compute_f_star(A, a, m, z, gamma=1.0):
     metric: float
         Modularity score.
     """
-    metric = np.sum((A / m - np.outer(a, a) / (m * m)) * z)
+    if  m <= 0:
+        raise ValueError("Graph must have an edge and a positive edge sum.")
+    metric = np.sum((A / m - gamma * np.outer(a, a) / (m * m)) * z)
     return metric
 
 
@@ -192,10 +194,11 @@ def solve_master_problem(
         model.dual = Suffix(direction=Suffix.IMPORT)
 
     res = solver.solve(model, tee=bool(verbose is True))
+    if res.solver.termination_condition == TerminationCondition.infeasible:
+        return (None, None, None) if extract_dual else (None, None)
+    
     lambda_sol = [value(model.lmbd[c]) for c in model.C]
     master_obj_val = value(model.OBJ)
-    if res.solver.termination_condition == TerminationCondition.infeasible:
-        master_obj_val = None
 
     if not extract_dual:
         return lambda_sol, master_obj_val

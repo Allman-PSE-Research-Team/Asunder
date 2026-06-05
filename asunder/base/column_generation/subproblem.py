@@ -23,9 +23,10 @@ try:
     from pyomo.environ import (
         Binary,
         ConcreteModel,
-        Constraint,
+        ConstraintList,
         Objective,
         RangeSet,
+        Set,
         TerminationCondition,
         Var,
         maximize,
@@ -45,6 +46,9 @@ def heuristic_subproblem(
     refine=False,
     refine_params=None,
     verbose=False,
+    gamma=1,
+    exact_rc=True,
+    seed=42
 ):
     """
     Solve pricing heuristically via selected clustering backend.
@@ -73,7 +77,14 @@ def heuristic_subproblem(
         ``-1``: No output
         ``False`` | ``0``: Minimal output
         ``True`` | ``1``: Detailed output
-    
+    gamma : int
+        Resolution parameter which controls the scale and size of the detected clusters.
+        Should be left as default (``1``) if:
+        ``algo`` is ``leiden`` and ``package`` is ``leidenalg"`` 
+        ``algo`` is ``greedy`` or ``multilevel`` and ``package`` is ``igraph``
+        ``algo`` is ``girvan_newman`` and ``package`` is ``networkx``
+    seed : int or None
+        Random seed value
     Returns
     -------
     Any
@@ -102,12 +113,12 @@ def heuristic_subproblem(
     modA_positive[modA_positive < 0] = 0
 
     if package == "igraph" and algo != "lpa":
-        zii, metric = run_igraph(modA, algo=algo, resolution=1)
+        zii, metric = run_igraph(modA, algo=algo, resolution=gamma)
     elif algo == "spinglass":
         zii = run_igraph_spinglass(modA)
         metric = compute_f_star(modA, mod_a, mod_m, zii)
     elif algo == "signed_louvain":
-        zii, metric = run_signed_louvain(modA)
+        zii, metric = run_signed_louvain(modA, seed=seed)
     elif algo == "lpa":
         if package == "sknetwork":
             zii, metric = run_lpa(modA)
@@ -122,14 +133,17 @@ def heuristic_subproblem(
             package=package,
             refine=refine,
             refine_params=refine_params,
-            resolution=1,
+            resolution=gamma,
             verbose=verbose,
+            seed=seed
         )
         if metric is None:
             mod_a_p = modA_positive.sum(axis=0)
             mod_m_p = np.sum(mod_a_p)
-            modB_p = (modA_positive / mod_m_p) - np.outer(mod_a_p, mod_a_p) / (mod_m_p**2)
+            modB_p = (modA_positive / mod_m_p) - gamma * np.outer(mod_a_p, mod_a_p) / (mod_m_p**2)
             metric = np.sum(modB_p * zii)
+    # TODO: algo param may be necessary if igraph algorithms require a different quality function.
+    metric = compute_f_star(A, a, m, zii, gamma=gamma) - np.sum(dualW * zii) if exact_rc else metric
     sub_obj_val = metric - constant_terms
     return sub_obj_val, zii
 
@@ -171,28 +185,28 @@ def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=Fals
 
     model = ConcreteModel()
     model.I = RangeSet(0, I - 1)
-    model.z = Var(model.I, model.I, domain=Binary)
-    model.DiagonalUnity = Constraint(model.I, rule=lambda mdl, i: mdl.z[i, i] == 1)
+    pairs = [(i, j) for i in range(I) for j in range(i + 1, I)]
+    model.P = Set(initialize=pairs, dimen=2)
+    model.z = Var(model.P, domain=Binary, initialize=0)
+    # model.DiagonalUnity = Constraint(model.I, rule=lambda mdl, i: mdl.z[i, i] == 1)
 
-    def z_symmetry_rule(mdl, i, j):
-        """
-        Z symmetry rule.
-        """
-        if i < j:
-            return mdl.z[i, j] == mdl.z[j, i]
-        return Constraint.Skip
+    def zpair(i, j):
+        if i == j:
+            return 1.0
+        return model.z[min(i, j), max(i, j)]
 
-    model.ZSymmetry = Constraint(model.I, model.I, rule=z_symmetry_rule)
+    model.T = Set(
+        dimen=3,
+        initialize=[(i, j, k) for i in range(I) for j in range(i + 1, I) for k in range(j + 1, I)]
+    )
 
-    def transitivity_rule(mdl, i, j, k):
-        """
-        Transitivity rule.
-        """
-        if len(set([i, j, k])) == 3:
-            return mdl.z[i, j] + mdl.z[i, k] - mdl.z[j, k] <= 1
-        return Constraint.Skip
+    model.Transitivity = ConstraintList()
 
-    model.Transitivity = Constraint(model.I, model.I, model.I, rule=transitivity_rule)
+    for i, j, k in model.T:
+        model.Transitivity.add(zpair(i, j) + zpair(i, k) - zpair(j, k) <= 1)
+        model.Transitivity.add(zpair(i, j) + zpair(j, k) - zpair(i, k) <= 1)
+        model.Transitivity.add(zpair(i, k) + zpair(j, k) - zpair(i, j) <= 1)
+
 
     def sub_objective_rule(mdl):
         """
@@ -218,13 +232,13 @@ def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=Fals
             mod_a = modA.sum(axis=1)
             mod_m = mod_a.sum()
             M = sum(
-                ((modA[i, j] / mod_m) - ((mod_a[i] * mod_a[j]) / (mod_m**2))) * mdl.z[i, j]
+                ((modA[i, j] / mod_m) - ((mod_a[i] * mod_a[j]) / (mod_m**2))) * zpair(i, j)
                 for i in mdl.I
                 for j in mdl.I
             )
         else:
             M = sum(
-                ((A[i, j] / m) - ((a[i] * a[j]) / (m**2)) - dualW[i, j]) * mdl.z[i, j]
+                ((A[i, j] / m) - ((a[i] * a[j]) / (m**2)) - dualW[i, j]) * zpair(i, j)
                 for i in mdl.I
                 for j in mdl.I
             )
@@ -236,7 +250,7 @@ def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=Fals
         lb = getattr(res.problem, "lower_bound", None)
         ub = getattr(res.problem, "upper_bound", None)
         print(f"[Pricing] bounds: lower={lb}, upper={ub}")
-    z_sol = np.array([[value(model.z[i, j]) for j in model.I] for i in model.I])
+    z_sol = np.array([[value(zpair(i, j)) for j in model.I] for i in model.I])
     return value(model.OBJ), z_sol
 
 
@@ -251,6 +265,7 @@ def custom_heuristic_subproblem(
     refine_params=None,
     max_iterations=50,
     tolerance=1e-8,
+    seed=42
 ):
     """
     Run in-package custom pricing heuristics (spectral/modified Louvain).
@@ -281,12 +296,15 @@ def custom_heuristic_subproblem(
         Maximum number of iterations.
     tolerance : float
         Tolerance value.
+    seed : int or None
+        Random seed value
     
     Returns
     -------
     Any
         Computed result.
     """
+    # TODO: Add gamma parameter to algorithms and this top level function.
     assert algo in {"spectral", "full_louvain", "one_level_louvain", "RCCS"}
     I = A.shape[0]
     constant_terms = 0
@@ -305,7 +323,7 @@ def custom_heuristic_subproblem(
             constant_terms += dual
 
     if "louvain" in algo:
-        louvain_model = ModifiedLouvain(random_state=None)
+        louvain_model = ModifiedLouvain(random_state=seed)
         if algo.startswith("full_"):
             louvain_model.fit(A, duals)
         else:
@@ -319,12 +337,12 @@ def custom_heuristic_subproblem(
             metric = louvain_model.obj_val_
     else:
         if algo == "RCCS":
-            res = search_partition_by_reduced_cost(adjacency=A, duals=duals)#, random_seed=seed)
+            res = search_partition_by_reduced_cost(adjacency=A, duals=duals, random_seed=seed)
             best_labels = res["best_labels"]
             z_sol = partition_vector_to_2d_matrix(best_labels)
             metric = res["best_reduced_cost"] + constant_terms # for normalization sake
         else:
-            z_sol, metric = full_spectral_bisection(A, a, m, dualW, refinement=False, verbose=verbose)
+            z_sol, metric = full_spectral_bisection(A, a, m, dualW, refinement=True, verbose=verbose)
         if refine and refine_params is not None:
             z_refine = refine_params["refine_func"](A=A, partition=z_sol, **refine_params["kwargs"])
             if z_refine is not None:

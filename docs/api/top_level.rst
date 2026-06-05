@@ -26,6 +26,18 @@ Common package-level imports
 - ``asunder.IterationRecord``
 - ``asunder.DecompositionResult``
 
+Application package imports
+"""""""""""""""""""""""""""
+
+- ``asunder.load_balancing.LoadBalancer`` for the built-in load-balanced graph
+  partitioning workflow
+- ``asunder.nlbnp.CorePeripheryPartition`` for component-level NLBNP
+  partitioning after core removal
+- ``asunder.nlbnp.NonlinearBranchAndPrice`` for generic nonlinear
+  branch-and-price runs on user-provided graphs
+- ``asunder.nlbnp.run_evaluation`` for the built-in nonlinear branch-and-price
+  case-study evaluation workflow
+
 Configuration
 ^^^^^^^^^^^^^
 

@@ -1,7 +1,7 @@
 Refinement
 ==========
 
-.. automodule:: asunder.nlbp.algorithms.refinement
+.. automodule:: asunder.nlbnp.algorithms.refinement
    :members:
    :member-order: bysource
    :show-inheritance:

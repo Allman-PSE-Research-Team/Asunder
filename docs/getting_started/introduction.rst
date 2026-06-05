@@ -2,11 +2,11 @@ Introduction
 ============
 
 Asunder is a Python package for constrained network structure detection on undirected
-graphs. In practice, that means it helps you take a graph whose nodes and edges are 
+graphs. In practice, that means it helps you take a graph whose nodes and edges are
 subject to constraints and generates a partition that respects those constraints.
 
 The package is built around a simple idea: many parallel computing problems can be
-viewed through a graph, and the constrained community structure detection problem can 
+viewed through a graph, and the constrained community structure detection problem can
 be decomposed using a restricted master problem plus a pricing or heuristic subproblem.
 Asunder provides reusable tooling for that pattern and leaves room for
 application-specific logic where needed.
@@ -18,13 +18,15 @@ Asunder gives you three things:
 
 - a reusable decomposition layer for graph-based constrained partitioning and
   column-generation style workflows
-- a collection of supporting algorithms, utilities, and visualization helpers
+- a built-in load balancing workflow for graph partitions with equal,
+  near-equal, or explicitly bounded community sizes
 - packaged application logic for the current nonlinear branch-and-price
-  workflow
+  workflow, plus supporting algorithms, utilities, and visualization helpers
 
-The package is therefore useful in two different modes:
+The package is therefore useful in three different modes:
 
 - as a reusable toolkit for constrained partitioning and decomposition
+- as a complete load-balanced graph partitioning workflow
 - as a concrete application package for the built-in nonlinear branch-and-price
   workflow and its case studies
 
@@ -43,14 +45,22 @@ The public package is intentionally split into layers.
    column-generation modules, evaluation metrics, legacy notebook shims,
    utilities, and visualization helpers.
 
-``asunder.nlbp``
+``asunder.load_balancing``
+   The application layer for load-balanced graph partitioning. This contains
+   the high-level ``LoadBalancer`` workflow, load-balancing master problem,
+   initial feasible partition generators, and refinement logic.
+
+``asunder.nlbnp``
    The application layer for nonlinear branch-and-price workflows. This
-   contains case studies, the built-in evaluation runner, and refinement logic
-   that is specific to that workflow.
+   contains ``CorePeripheryPartition`` for component-level partitioning after
+   core removal, the finer-grained ``NonlinearBranchAndPrice`` workflow, case
+   studies, the built-in evaluation runner, and NLBNP-specific refinement.
 
 If you are building a new application area, ``asunder.base`` is the starting
-point. If you want to use the existing nonlinear branch-and-price workflow,
-``asunder.nlbp`` gives you the packaged application-specific pieces.
+point. If you want a complete balanced partitioning workflow, start with
+``asunder.load_balancing``. If you want to use the existing nonlinear
+branch-and-price workflow, ``asunder.nlbnp`` gives you the packaged
+application-specific pieces.
 
 Mental Model
 ------------
@@ -59,17 +69,19 @@ Most workflows in Asunder follow this rough sequence:
 
 1. Build or derive a graph whose nodes represent constraints, tasks, entities,
    or other units that should be grouped.
-2. Encode constraints through available and additional constraints. This could be 
-   pairwise structure through adjacency, weights, must-link, cannot-link, or 
+2. Encode constraints through available and additional constraints. This could be
+   pairwise structure through adjacency, weights, must-link, cannot-link, or
    worthy-edge style constraints.
 3. Generate one or more initial feasible partition matrices.
 4. Run a master problem and a pricing or heuristic subproblem in a loop.
 5. Optionally apply a refinement step or application-specific post-processing.
 6. Evaluate, inspect, or visualize the resulting partition.
 
-You do not need every layer every time. Some users will call the high-level
-top-level API, while others will work directly with ``asunder.base`` modules
-and plug in their own master, subproblem, and refinement routines.
+You do not need every layer every time. Some users will call
+``asunder.load_balancing.LoadBalancer`` directly, some will use the high-level
+top-level decomposition API, and others will work directly with
+``asunder.base`` modules and plug in their own master, subproblem, and
+refinement routines.
 
 When To Start High-Level vs Low-Level
 -------------------------------------
@@ -80,6 +92,12 @@ Start with the top-level API if:
 - you are still validating whether your problem is a good fit
 - you mainly need orchestration and typed results
 
+Use ``asunder.load_balancing`` if:
+
+- you want graph communities with balanced or bounded sizes
+- you have must-link or cannot-link constraints between graph nodes
+- you want a packaged workflow instead of custom master/subproblem wiring
+
 Drop into ``asunder.base`` if:
 
 - you need a custom master problem
@@ -87,11 +105,15 @@ Drop into ``asunder.base`` if:
 - you want to mix and match reusable utilities and algorithms
 - you are building a new application package on top of the reusable layer
 
-Use ``asunder.nlbp`` if:
+Use ``asunder.nlbnp`` if:
 
+- you expect core removal to expose connected components that are final
+  communities
+- you already have a graph and want the generic nonlinear branch-and-price
+  workflow
 - you want the built-in nonlinear branch-and-price case studies
 - you want the packaged evaluation runner
-- you need the NLBP-specific refinement workflow
+- you need the NLBNP-specific refinement workflow
 
 What Asunder Does Not Do For You
 --------------------------------
@@ -111,6 +133,6 @@ Next Steps
 ----------
 
 - See :doc:`installation` for environment setup.
-- See :doc:`quickstart` for a minimal runnable example.
+- See :doc:`quickstart` for load balancing and minimal decomposition examples.
 - See :doc:`../learn/guides/problem_fit` for guidance on when the package is a
   good fit and when customization is likely to be necessary.

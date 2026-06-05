@@ -2,7 +2,7 @@ import networkx as nx
 import numpy as np
 
 from asunder import CSDDecomposition, CSDDecompositionConfig
-from asunder.nlbp.case_studies import build_circle_cutting_graph
+from asunder.nlbnp.case_studies import build_circle_cutting_graph
 
 
 def main():

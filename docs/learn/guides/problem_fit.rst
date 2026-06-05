@@ -5,13 +5,16 @@ Asunder is most useful when a larger optimization or partitioning problem has a
 meaningful graph representation and the resulting grouping decisions are useful
 for decomposition, coordination analysis, or parallel computing.
 
-In those settings, the package provides two complementary layers:
+In those settings, the package provides three complementary layers:
 
 - ``asunder.base`` for reusable decomposition and partitioning tools
-- ``asunder.nlbp`` for the built-in nonlinear branch-and-price application
+- ``asunder.load_balancing`` for the built-in load-balanced graph partitioning
+  workflow
+- ``asunder.nlbnp`` for generic and case-study nonlinear branch-and-price
+  workflows
 
-Choosing Between ``base`` and ``nlbp``
---------------------------------------
+Choosing Between Package Layers
+-------------------------------
 
 Use ``asunder.base`` when:
 
@@ -20,18 +23,31 @@ Use ``asunder.base`` when:
 - your application is not the current nonlinear branch-and-price workflow
 - you are building the next application package on top of the reusable core
 
-Use ``asunder.nlbp`` when:
+Use ``asunder.load_balancing`` when:
 
-- you want the packaged nonlinear branch-and-price evaluation workflow which 
+- you want graph communities with equal, near-equal, or bounded sizes
+- load is represented by node counts rather than a separate custom objective
+- must-link and cannot-link pairs capture required grouping rules
+- you want the packaged initial column generation, master problem, and
+  refinement path
+
+Use ``asunder.nlbnp`` when:
+
+- you expect core removal to leave connected components that are meaningful
+  final communities and want ``CorePeripheryPartition``
+- you already have a graph and want a high-level nonlinear branch-and-price
+  workflow through ``NonlinearBranchAndPrice``
+- you want the packaged nonlinear branch-and-price evaluation workflow which
   imposes edge-based and cardinality constraints.
 - you want the current built-in case-study graph builders
-- you want the NLBP-specific refinement routine
+- you want the NLBNP-specific refinement routine
 
 What Good Problem Fit Looks Like
 --------------------------------
 
 The default approach is usually a good first choice when:
 
+- balanced or bounded community sizes are part of the problem definition
 - must-link, cannot-link, or worthy-edge semantics are meaningful
 - nodes represent constraints, tasks, assets, or entities with real
   coordination structure
@@ -43,6 +59,9 @@ The default approach is usually a good first choice when:
 
 In practice, this often means the graph captures one or more of the following:
 
+- work units that must be distributed across balanced groups
+- service regions, teams, scenarios, or assets with graph-backed interaction
+  structure
 - coupling across time periods
 - shared resources or shared decision variables
 - mixed discrete-continuous interactions
@@ -56,7 +75,7 @@ Asunder is usually a poor fit when:
 
 - there is no meaningful graph representation of the problem
 - the graph is almost uniform, with little structure to exploit
-- the important constraints cannot be expressed through pairwise logic, do not 
+- the important constraints cannot be expressed through pairwise logic, do not
   fit the Nonlinear Branch and Price workflow, and no custom extension is planned
 - the application requires an exact pricing formulation and domain-specific
   logic, but you are not prepared to implement those custom pieces
@@ -66,9 +85,36 @@ Asunder is usually a poor fit when:
 Constraint Graph Compatibility
 ------------------------------
 
+For ``asunder.load_balancing.LoadBalancer``, Asunder expects:
+
+- graph type: undirected ``networkx.Graph``
+- node labels: stable identifiers that can be mapped back to the source system
+- optional constraints: ``must_link`` and ``cannot_link`` pairs using those node
+  labels
+- size controls: ``K`` and ``R`` for near-equal community sizes, or
+  ``R_bounds=(lower, upper)`` for explicit bounds
+
+The load balancing workflow does not require the case-study node and edge
+attributes used by ``asunder.nlbnp``. Node attributes can still be present for
+application metadata, but the high-level workflow primarily uses graph topology,
+node labels, and explicit pairwise constraints.
+
+For the generic ``asunder.nlbnp.NonlinearBranchAndPrice`` workflow, Asunder can
+start from a ``networkx.Graph`` or a square adjacency matrix. ``worthy_edges``,
+``must_link``, and ``cannot_link`` can be supplied directly; for ``networkx``
+inputs, those pairs use graph node labels. Worthy edges can also be derived from
+an edge attribute with ``worthy_edge_attr`` and ``worthy_edge_value``.
+
+``asunder.nlbnp.CorePeripheryPartition`` accepts the same graph or adjacency
+input styles, plus ``unworthy_edges`` and ``nonlinear_nodes`` constraints. It
+detects a core and returns one community for that core plus one community for
+each connected periphery component. This is the preferred path when those
+components do not require further subdivision. Use ``NonlinearBranchAndPrice``
+when finer-grained periphery communities are expected.
+
 For the built-in case-study evaluation flows in ``run_evaluation``, Asunder
 expects a constraint-graph schema similar to the packaged case studies in
-``asunder.nlbp.case_studies``.
+``asunder.nlbnp.case_studies``.
 
 Required fields
 ^^^^^^^^^^^^^^^
@@ -98,6 +144,16 @@ mode you can work directly from adjacency data plus explicit
 
 Representative Domains
 ----------------------
+
+Load Balancing and Balanced Decomposition
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- decomposition workloads where each block should receive a comparable number
+  of graph nodes
+- service territory, team assignment, scenario grouping, or region design
+  problems with graph-backed adjacency
+- non-optimization applications where communities must be interpretable and
+  size-balanced
 
 Stochastic Design and Dispatch in Energy Systems
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -153,8 +209,9 @@ As a rule of thumb:
 
 - customize within ``asunder.base`` when the logic is reusable across
   applications
-- extend ``asunder.nlbp`` or add a new peer application package when the logic
-  is specific to one workflow or one family of case studies
+- extend ``asunder.load_balancing``, ``asunder.nlbnp``, or add a new peer
+  application package when the logic is specific to one workflow or one family
+  of case studies
 
 See ``Reference -> Development Guide -> Special Topics`` for integration
 contracts and extension points.

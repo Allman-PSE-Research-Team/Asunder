@@ -9,4 +9,5 @@ non-private, non-imported members from the supported modules.
 
    top_level
    base/index
-   nlbp/index
+   load_balancing/index
+   nlbnp/index

@@ -53,6 +53,8 @@ class CSDDecompositionConfig:
             ``"leiden"``
         ``None``:
             ``"signed_louvain"``, ``"spinglass"``
+    seed : int or None
+        Random seed value.
     extract_dual : bool
         Boolean that determines whether we extract duals from the master problem or not.
     ifc_params : dict[str, callable or dict or int]
@@ -67,6 +69,8 @@ class CSDDecompositionConfig:
         Boolean that determines whether a final master solve is executed or not.
     max_iterations : int
         Maximum number of column generation iterations.
+    disable_tqdm : bool
+        Whether to disable the progress bar or not.
     tolerance : float
         Tolerance value for terminating column generation.
     verbose : int or bool
@@ -86,6 +90,7 @@ class CSDDecompositionConfig:
     check_flat_pricing: bool = True
     algo: str = "louvain"
     package: str = "sknetwork"
+    seed: int | None = 42
     extract_dual: bool = False
     ifc_params: Dict[str, Any] = field(default_factory=dict)
     refine_in_subproblem: bool = False
@@ -93,5 +98,6 @@ class CSDDecompositionConfig:
     use_refined_column: bool = False
     final_master_solve: bool = True
     max_iterations: Optional[int] = 1000
+    disable_tqdm: bool = False
     tolerance: float = 1e-10
     verbose: int | bool = 1

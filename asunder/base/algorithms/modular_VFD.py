@@ -1,4 +1,4 @@
-"""Very Fortunate Descent (VFD):  A greedy + local search algorithm for partition refinement under pairwise constraints and optionally, balance constraints."""
+"""Modular Very Fortunate Descent (VFD):  A local search algorithm for partition refinement under pairwise constraints and optionally, balance constraints."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+from scipy.sparse.csgraph import connected_components
 
 from asunder.base.branch_and_price.symmetry_detection import weighted_constraint_orbits
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
@@ -342,6 +343,7 @@ def _build_coassociation_matrix(
     n = X.shape[0]
     if n == 0:
         return np.zeros((0, 0), dtype=float)
+    n_unique = np.unique(X, axis=0).shape[0]
 
     # For spectral with precomputed affinity, ensure diagonal is 1 and nonnegative.
     A = X.copy()
@@ -352,7 +354,8 @@ def _build_coassociation_matrix(
     total = 0
 
     for k in n_components_list:
-        if k <= 0 or k > n:
+        k = min(k, n_unique)
+        if k <= 1 or k > n:
             continue
         for sd in seeds:
             for meth in methods:
@@ -362,6 +365,9 @@ def _build_coassociation_matrix(
                     elif meth == "gmm":
                         labels = GaussianMixture(n_components=k, random_state=int(sd)).fit(X).predict(X)
                     elif meth == "spectral":
+                        n_components, _ = connected_components(A, directed=False)
+                        if n_components > 1:
+                            continue
                         labels = SpectralClustering(
                             n_clusters=k,
                             affinity="precomputed",
@@ -868,7 +874,9 @@ def _resolve_k_control(
     K : int or None
         Baseline number of communities.
     R : int or None
-        Range parameter used by ``_range_bounds_from_KR`` when the K-constraint is active.
+        Width of the allowed cluster-size range. Also corresponds to the load balance tightness (smaller R implies tighter load balance).
+        For a selected cluster count, the lower and upper bounds are computed from the corresponding
+        balanced range rule. Used when the K-constraint is active.
     use_K_constraint : bool
         If True, use K/R-derived balance bounds and only test K-neighborhood values.
         If False, remove K-derived balance bounds and instead test ``candidate_Ks``.
@@ -977,7 +985,7 @@ def modular_very_fortunate_descent(
     orbit_fallback: bool = False,
 ) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
     """
-    Build a feasible decomposition column from co-association structure and local search.
+    Modular function for building a feasible decomposition column from co-association structure and local search.
 
     Parameters
     ----------
@@ -993,7 +1001,9 @@ def modular_very_fortunate_descent(
         Baseline number of communities. Used directly only when ``use_K_constraint=True``.
         When ``use_K_constraint=False``, it is treated only as an optional search hint.
     R : int or None
-        Range parameter for ``_range_bounds_from_KR`` when ``use_K_constraint=True``.
+        Width of the allowed cluster-size range. Also corresponds to the load balance tightness (smaller R implies tighter load balance).
+        For a selected cluster count, the lower and upper bounds are computed from the corresponding
+        balanced range rule. Used when ``use_K_constraint=True``.
     must_link : sequence of tuple of int
         Must-link pairs.
     cannot_link : sequence of tuple of int
@@ -1363,6 +1373,8 @@ def modular_very_fortunate_descent(
                 step = 0
                 while step < max_steps:
                     step += 1
+                    if step > math.sqrt(max_steps):
+                        print(f"`repair_min_sizes` has been running for {step - 1} steps.")
                     under = [g for g in range(K_used) if gsz[g] < r_min]
                     if not under:
                         return True
