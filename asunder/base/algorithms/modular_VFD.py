@@ -6,6 +6,7 @@ import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+from scipy.sparse.csgraph import connected_components
 
 from asunder.base.branch_and_price.symmetry_detection import weighted_constraint_orbits
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
@@ -362,6 +363,9 @@ def _build_coassociation_matrix(
                     elif meth == "gmm":
                         labels = GaussianMixture(n_components=k, random_state=int(sd)).fit(X).predict(X)
                     elif meth == "spectral":
+                        n_components, _ = connected_components(A, directed=False)
+                        if n_components > 1:
+                            continue
                         labels = SpectralClustering(
                             n_clusters=k,
                             affinity="precomputed",
