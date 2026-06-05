@@ -25,8 +25,8 @@ from asunder.base.evaluation.metrics import (
 )
 from asunder.base.utils.graph import partition_matrix_to_vector, partition_vector_to_2d_matrix
 from asunder.base.utils.partition_generation import make_simple_partition
-from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group
 from asunder.nlbnp.algorithms.core_periphery import _detect_core_periphery
+from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group
 from asunder.nlbnp.case_studies.circle_cutting import build_circle_cutting_graph
 from asunder.nlbnp.case_studies.cpcong import build_cpcong_graph
 

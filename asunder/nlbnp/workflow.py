@@ -13,14 +13,17 @@ import numpy as np
 
 from asunder.base.algorithms.core_periphery import partition_periphery_components
 from asunder.base.column_generation.master import solve_master_problem
-from asunder.base.column_generation.subproblem import custom_heuristic_subproblem, heuristic_subproblem
+from asunder.base.column_generation.subproblem import (
+    custom_heuristic_subproblem,
+    heuristic_subproblem,
+)
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
 from asunder.base.utils.partition_generation import make_simple_partition
 from asunder.config import CSDDecompositionConfig
-from asunder.orchestrator import run_csd_decomposition
-from asunder.types import DecompositionResult, MasterProblemFn, SubproblemFn
 from asunder.nlbnp.algorithms.core_periphery import _detect_core_periphery
 from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group
+from asunder.orchestrator import run_csd_decomposition
+from asunder.types import DecompositionResult, MasterProblemFn, SubproblemFn
 
 _CUSTOM_HEURISTIC_ALGOS = {"spectral", "full_louvain", "one_level_louvain", "RCCS"}
 

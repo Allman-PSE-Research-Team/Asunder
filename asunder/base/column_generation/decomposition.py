@@ -1,9 +1,9 @@
 """Column generation decomposition orchestration."""
 from __future__ import annotations
 
-from collections import deque
 import copy
 import inspect
+from collections import deque
 
 import numpy as np
 from tqdm.auto import tqdm

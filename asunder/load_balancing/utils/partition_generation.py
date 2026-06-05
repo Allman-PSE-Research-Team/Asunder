@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
-import math
 import networkx as nx
 import numpy as np
 
+from asunder.base.algorithms.modular_VFD import (
+    _build_components,
+    _feasible_K_range,
+    _range_bounds_from_KR,
+    _target_sizes_from_bounds,
+)
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
 from asunder.base.utils.partition_generation import _component_order_from_node_order
-from asunder.base.algorithms.modular_VFD import (
-    _range_bounds_from_KR, _feasible_K_range, 
-    _build_components, _target_sizes_from_bounds
-)
 
 # ---------------------------------------------
 # Ordered assignment with hard links + (r_min,r_max)
@@ -118,7 +120,7 @@ def assign_from_order_with_links_range(
     K_end = min(k_hi, K0 + max_K_increase)
     K_candidates = list(range(K0, K_end + 1))
 
-    rng = np.random.default_rng(seed)
+    # rng = np.random.default_rng(seed)
 
     comp = _build_components(N, must_link, cannot_link)
     if comp is None:
@@ -296,7 +298,8 @@ def assign_from_order_with_links_range(
             attempts += 1
 
     for K_used in K_candidates:
-        # global feasibility already ensured by K_candidates; still guard component max
+        # global feasibility already ensured by K_candidate
+        # still guard component max
         if int(csz.max(initial=0)) > r_max:
             continue
         for r in range(max_restarts):
@@ -362,9 +365,9 @@ def make_partitions(
 
     rng = np.random.default_rng(seed)
 
-    if must_link == None:
+    if must_link is None:
         must_link = []
-    if cannot_link == None:
+    if cannot_link is None:
         cannot_link = []
 
     if nodes is None:
@@ -415,7 +418,7 @@ def make_partitions(
 
 
 
-    # 1) spectral (Fiedler)
+    # spectral (Fiedler)
     if N <= 1:
         f = np.zeros(N)
     else:
@@ -429,9 +432,10 @@ def make_partitions(
     if out is not None:
         Z, meta = out
         key = meta["g"].tobytes()
-        cols.append((Z, meta)); seen.add(key)
+        cols.append((Z, meta))
+        seen.add(key)
 
-    # 2) BFS from max-degree node
+    # BFS from max-degree node
     start = max(nodes, key=lambda u: G.degree(u)) if N else None
     if start is not None:
         order = list(nx.bfs_tree(G, start).nodes())
@@ -449,8 +453,9 @@ def make_partitions(
             Z, meta = out
             key = meta["g"].tobytes()
             if key not in seen:
-                cols.append((Z, meta)); seen.add(key)
-    # 3) DFS
+                cols.append((Z, meta))
+                seen.add(key)
+    # DFS
     if start is not None:
         order = list(nx.dfs_preorder_nodes(G, start))
         visited = set(order)
@@ -466,17 +471,19 @@ def make_partitions(
             Z, meta = out
             key = meta["g"].tobytes()
             if key not in seen:
-                cols.append((Z, meta)); seen.add(key)
+                cols.append((Z, meta))
+                seen.add(key)
 
-    # 4) degree sorted
+    # degree sorted
     order = sorted(nodes, key=lambda u: (G.degree(u), u), reverse=True)
     out = build_from_label_order("degree_sorted", order)
     if out is not None:
         Z, meta = out
         key = meta["g"].tobytes()
         if key not in seen:
-            cols.append((Z, meta)); seen.add(key)
-    # 5) noisy spectral fill
+            cols.append((Z, meta))
+            seen.add(key)
+    # noisy spectral fill
     noise_std = 1e-6 if N else 0.0
     tries = 0
     while len(cols) < n_cols and tries < 20 * n_cols:
@@ -489,10 +496,11 @@ def make_partitions(
         Z, meta = out
         key = meta["g"].tobytes()
         if key not in seen:
-            cols.append((Z, meta)); seen.add(key)
+            cols.append((Z, meta))
+            seen.add(key)
 
     Z_star = [Z for Z, _ in cols]
-    info = [meta for _, meta in cols]
+    # info = [meta for _, meta in cols]
     return Z_star
 
 
@@ -588,7 +596,8 @@ def make_one_feasible_partition_mrv_restarts(
     if k_lo > k_hi:
         return None
 
-    # if r_min > 0, empty groups are not allowed; also components are indivisible
+    # if r_min > 0, empty groups are not allowe
+    # also components are indivisible
     if r_min > 0:
         k_hi = min(k_hi, C)
 

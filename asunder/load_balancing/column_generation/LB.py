@@ -1,17 +1,21 @@
 import time
-import numpy as np
+
 import networkx as nx
+import numpy as np
 
 from asunder.base.column_generation.master import compute_f_star
 from asunder.base.column_generation.subproblem import heuristic_subproblem
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
 from asunder.config import CSDDecompositionConfig
+from asunder.load_balancing.algorithms.VFD import refine_partition
+from asunder.load_balancing.column_generation.master import solve_master_problem
+from asunder.load_balancing.utils.partition_generation import (
+    make_partitions,
+    make_partitions_random,
+)
 from asunder.orchestrator import run_csd_decomposition
 from asunder.types import DecompositionResult
 
-from asunder.load_balancing.column_generation.master import solve_master_problem
-from asunder.load_balancing.algorithms.VFD import refine_partition
-from asunder.load_balancing.utils.partition_generation import make_partitions, make_partitions_random
 
 def LoadBalancer(
     G, 

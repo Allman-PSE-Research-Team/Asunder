@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import numpy as np
 import math
 
-from asunder.solvers import get_default_solver
+import numpy as np
+
 from asunder.base.column_generation.master import _require_pyomo
+from asunder.solvers import get_default_solver
 
 try:
     from pyomo.environ import (

@@ -1,11 +1,12 @@
-import numpy as np
 import networkx as nx
+import numpy as np
 import pytest
+from test_case_studies_small_instances import _configure_solver_or_skip
 
 from asunder.base.utils.graph import get_optimization_params_from_graph
 from asunder.load_balancing import LoadBalancer
 from asunder.load_balancing.algorithms.VFD import very_fortunate_descent
-from test_case_studies_small_instances import _configure_solver_or_skip
+
 
 # Toy Problem
 def cliques_with_bridges(clique_sizes=(12, 7, 5, 4), extra_bridges=2, seed=0):

@@ -3,7 +3,11 @@ import numpy as np
 
 import asunder.nlbnp.algorithms.refinement as refinement_module
 import asunder.nlbnp.workflow as workflow_module
-from asunder.nlbnp import CorePeripheryPartition, NonlinearBranchAndPrice, run_nonlinear_branch_and_price
+from asunder.nlbnp import (
+    CorePeripheryPartition,
+    NonlinearBranchAndPrice,
+    run_nonlinear_branch_and_price,
+)
 from asunder.nlbnp.algorithms.refinement import refine_partition_with_cp
 from asunder.types import DecompositionResult
 

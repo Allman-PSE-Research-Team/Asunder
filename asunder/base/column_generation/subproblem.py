@@ -16,19 +16,18 @@ from asunder.base.algorithms.louvain_modified import ModifiedLouvain
 from asunder.base.algorithms.RCCS import search_partition_by_reduced_cost
 from asunder.base.algorithms.spectral import full_spectral_bisection
 from asunder.base.column_generation.master import compute_f_star
-from asunder.base.utils.graph import partition_matrix_to_vector, partition_vector_to_2d_matrix
+from asunder.base.utils.graph import partition_vector_to_2d_matrix
 from asunder.solvers import get_default_solver
 
 try:
     from pyomo.environ import (
         Binary,
         ConcreteModel,
-        Constraint,
         ConstraintList,
         Objective,
         RangeSet,
-        TerminationCondition,
         Set,
+        TerminationCondition,
         Var,
         maximize,
         value,

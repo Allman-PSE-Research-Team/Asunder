@@ -7,16 +7,22 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from asunder.base.branch_and_price.symmetry_detection import weighted_constraint_orbits
 from asunder.base.algorithms.modular_VFD import (
-    _build_coassociation_matrix, _range_bounds_from_KR, 
-    _feasible_K_range, _normalize_pair, 
-    _build_components, _target_sizes_from_bounds,
-    _fingerprint_blocks_from_rounded_rows, _symmetrize_unitdiag,
-    _ensure_at_least_K_blocks, _component_sum_matrix_B, 
+    _build_coassociation_matrix,
+    _build_components,
     _component_matrices_from_node_matrix,
+    _component_sum_matrix_B,
+    _ensure_at_least_K_blocks,
+    _feasible_K_range,
+    _fingerprint_blocks_from_rounded_rows,
+    _normalize_pair,
+    _range_bounds_from_KR,
+    _symmetrize_unitdiag,
+    _target_sizes_from_bounds,
 )
+from asunder.base.branch_and_price.symmetry_detection import weighted_constraint_orbits
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
+
 
 def very_fortunate_descent_legacy(
     wz: np.ndarray,
@@ -219,7 +225,7 @@ def very_fortunate_descent_legacy(
                 b_mask = None
                 b_forb_sets = []
                 for b in blocks:
-                    s = set(b)
+                    # s = set(b)
                     f = set()
                     for c in b:
                         f |= set(forb[c])
@@ -274,7 +280,7 @@ def very_fortunate_descent_legacy(
             def remove_block_from_group(bi: int, g: int):
                 idx = np.asarray(blocks[bi], dtype=int)
 
-                cross = float((sumC[g][idx].sum()) - float(b_intC[bi]))  # includes internal; remove later
+                # cross = float((sumC[g][idx].sum()) - float(b_intC[bi]))  # includes internal; remove later
                 # totC removal uses current state; recompute using formula:
                 # current totC = sum_{u,v in G} C[u,v]
                 # removing block: totC -= 2*cross_to_rest + internal
@@ -433,7 +439,7 @@ def very_fortunate_descent_legacy(
                                     add_block_to_group(bi, g_from)
                                     for c in comps_b[1:]:
                                         blocks.append([c])
-                                        new_bi = len(blocks) - 1
+                                        # new_bi = len(blocks) - 1
                                         # append new block into donor immediately
                                         # compute minimal per-block fields on the fly for singleton
                                         # singleton internal sums:
@@ -774,7 +780,7 @@ def very_fortunate_descent(
                 b_mask = None
                 b_forb_sets = []
                 for b in blocks:
-                    s = set(b)
+                    # s = set(b)
                     f = set()
                     for c in b:
                         f |= set(forb[c])
@@ -992,7 +998,7 @@ def very_fortunate_descent(
                                     add_block_to_group(bi, g_from)
                                     for c in comps_b[1:]:
                                         blocks.append([c])
-                                        new_bi = len(blocks) - 1
+                                        # new_bi = len(blocks) - 1
                                         # append new block into donor immediately
                                         # compute minimal per-block fields on the fly for singleton
                                         # singleton internal sums:
@@ -1432,7 +1438,7 @@ def very_fortunate_descent(
             # shake_rounds = 3
             shake_moves = max(2, len(blocks) // 25)  # small, controlled perturbation
 
-            best_local_total = current_total()
+            # best_local_total = current_total()
             best_local_B = current_B_sum()
             best_local_comp2g = comp2g.copy()
 
@@ -1448,7 +1454,7 @@ def very_fortunate_descent(
                 # keep best snapshot
                 if tB > best_local_B + 1e-12:
                     best_local_B = float(tB)
-                    best_local_total = float(ttot)
+                    # best_local_total = float(ttot)
                     best_local_comp2g = comp2g_best.copy()
 
                 # perturb current state (shake) unless last round
