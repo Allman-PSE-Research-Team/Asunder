@@ -184,7 +184,7 @@ The load balancing application pieces live under ``asunder.load_balancing``:
    from asunder.load_balancing.utils.partition_generation import make_partitions
 
 Built-In NLBNP Case-Study Evaluation
------------------------------------
+------------------------------------
 
 If you want to use the packaged nonlinear branch-and-price benchmark evaluation
 flow, the top-level convenience wrapper remains available:

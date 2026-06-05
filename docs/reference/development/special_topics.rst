@@ -101,7 +101,7 @@ workflow-specific refinement in application packages such as
 ``asunder.load_balancing`` or ``asunder.nlbnp``.
 
 Generic NLBNP Workflow Contract
-------------------------------
+-------------------------------
 
 Use ``asunder.nlbnp.CorePeripheryPartition`` when removing a detected core
 leaves connected periphery components that can be used directly as final
