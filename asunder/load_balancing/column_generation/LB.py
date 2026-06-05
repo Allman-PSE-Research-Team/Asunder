@@ -1,4 +1,3 @@
-from collections import defaultdict
 import time
 import numpy as np
 import networkx as nx
@@ -136,10 +135,7 @@ def LoadBalancer(
         )
     }
 
-    additional_constraints=defaultdict(
-        lambda: None,
-        {"LB": True, "R": R, "K": K, "R_bounds": R_bounds}
-    )
+    additional_constraints={"LB": True, "R": R, "K": K, "R_bounds": R_bounds}
 
     start = time.perf_counter()
 

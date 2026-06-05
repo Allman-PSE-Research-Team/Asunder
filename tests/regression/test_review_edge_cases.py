@@ -1,5 +1,4 @@
 import functools
-from collections import defaultdict
 from types import SimpleNamespace
 
 import networkx as nx
@@ -151,7 +150,7 @@ def test_contract_final_master_infeasibility_expands_none():
         columns=[Z],
         f_stars=[0.0],
         must_link=[(0, 1)],
-        additional_constraints=defaultdict(lambda: None),
+        additional_constraints=dict(),
         contract_graph=True,
         extract_dual=True,
         final_master_solve=True,

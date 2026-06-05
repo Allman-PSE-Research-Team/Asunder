@@ -1,7 +1,7 @@
 """Column generation decomposition orchestration."""
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from collections import deque
 import copy
 import inspect
 
@@ -22,7 +22,7 @@ def CSD_decomposition(
     sp_function,
     columns=None, f_stars=None,
     must_link=[], cannot_link=[],
-    additional_constraints=defaultdict(lambda: None),
+    additional_constraints=None,
     contract_graph=False,
     stopping_window=5,
     check_flat_pricing=True,
@@ -135,6 +135,10 @@ def CSD_decomposition(
     # cold start
     if columns is None:
         columns = []
+
+    additional_constraints = (
+        {} if additional_constraints is None else dict(additional_constraints)
+    )
 
     # contract graph if necessary
     if contract_graph and (must_link or additional_constraints.get("worthy_edges")):

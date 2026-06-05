@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 
 import networkx as nx
 import numpy as np
@@ -153,7 +152,7 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
                 "refine_func": refine_partition_linear_group,
                 "kwargs": {"prob_method": "DBSCAN" if problem == "cpcong" else "gaussian_mixture", "verbose": False},
             }
-            additional_constraints = defaultdict(lambda: None, {"worthy_edges": worthy_edges})
+            additional_constraints = {"worthy_edges": worthy_edges}
             start = time.perf_counter()
             cg_results = CSD_decomposition(
                 A,

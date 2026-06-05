@@ -1,6 +1,5 @@
 import math
 import os
-from collections import defaultdict
 
 import numpy as np
 import pytest
@@ -294,7 +293,7 @@ def test_cd_refine_real_decomposition_quality_cpcong_small_instance():
     ]
 
     ifc_params = {"generator": make_simple_partition, "num": 1, "args": {"N": n}}
-    additional_constraints = defaultdict(lambda: None, {"worthy_edges": worthy_edges})
+    additional_constraints = {"worthy_edges": worthy_edges}
     a = A.sum(axis=1)
     m = a.sum()
     refine_counter = {"count": 0}
@@ -350,7 +349,7 @@ def test_cd_refine_real_decomposition_quality_circcut_small_instance():
     ]
 
     ifc_params = {"generator": make_simple_partition, "num": 1, "args": {"N": n}}
-    additional_constraints = defaultdict(lambda: None, {"worthy_edges": worthy_edges})
+    additional_constraints = {"worthy_edges": worthy_edges}
     a = A.sum(axis=1)
     m = a.sum()
     refine_counter = {"count": 0}
