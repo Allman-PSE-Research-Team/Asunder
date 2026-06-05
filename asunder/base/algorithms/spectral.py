@@ -354,14 +354,13 @@ def full_spectral_bisection(
     while diff > 0:
         for community in map(tuple, communities):
             if community in SEEN:
-                z_sol = []
-            else:
-                SEEN.add(community)
-                gp_spec, sub_obj_val, z_sol = spec_part_extra_bisect(
-                    A, a, m,
-                    dualW, z_curr=z_curr, group=list(community),
-                    refinement=refinement, verbose=verbose
-                )
+                continue
+            SEEN.add(community)
+            gp_spec, sub_obj_val, z_sol = spec_part_extra_bisect(
+                A, a, m,
+                dualW, z_curr=z_curr, group=list(community),
+                refinement=refinement, verbose=verbose
+            )
             try:
                 z[np.ix_(community, community)] = z_sol[np.ix_(community, community)]
             except IndexError: # No new community is found
