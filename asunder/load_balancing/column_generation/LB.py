@@ -26,8 +26,10 @@ def LoadBalancer(
     package="networkx", 
     ifc_generator="random", 
     seed=42, 
-    must_link=[], 
-    cannot_link=[], 
+    must_link=[],
+    cannot_link=[],
+    refine_post_loop=True,
+    max_iterations=None,
     disable_tqdm=False,
     verbose=-1
 ) -> DecompositionResult:
@@ -78,6 +80,10 @@ def LoadBalancer(
         List of node pairs that must be together.
     cannot_link : list[tuple[int, int]]
         List of node pairs that must not be together.
+    refine_post_loop : bool
+        Whether to run post-loop refinement after column generation terminates.
+    max_iterations : int or None
+        Maximum number of column-generation iterations. ``None`` runs until convergence.
     disable_tqdm : bool
         Whether to disable progress bar or not.
     verbose : int or bool
@@ -158,8 +164,9 @@ def LoadBalancer(
         # refinement
         refine_params=refine_params,
         use_refined_column=True,
+        refine_post_loop=refine_post_loop,
         final_master_solve=False,
-        max_iterations=None, tolerance=1e-8, verbose=verbose,
+        max_iterations=max_iterations, tolerance=1e-8, verbose=verbose,
     )
     result = run_csd_decomposition(
         A, a=a, m=m,

@@ -36,6 +36,7 @@ def CSD_decomposition(
     refine_in_subproblem=False,
     refine_params: dict={},
     use_refined_column=False,
+    refine_post_loop=True,
     final_master_solve=True,
     max_iterations=1000, disable_tqdm=False,
     tolerance=1e-10, verbose=False,
@@ -107,6 +108,8 @@ def CSD_decomposition(
         Refinement function and its corresponding arguments (excluding seed values).
     use_refined_column : bool
         Boolean that determines whether refined columns are used in the main column generation loop or not.
+    refine_post_loop : bool
+        Boolean that determines whether a post-loop refinement column is generated after column generation terminates.
     final_master_solve : bool
         Boolean that determines whether a final master solve is executed or not.
     max_iterations : int
@@ -309,7 +312,7 @@ def CSD_decomposition(
                 if iteration > max_iterations:
                     break
     # generate heuristic column using wz after CG terminates and add it to results
-    if use_refined_column:
+    if use_refined_column and refine_post_loop:
         wz = np.zeros_like(Z_star[0]).astype(np.float64)
         for lambda_, column in zip(lambda_sol, Z_star):
             wz += (lambda_ * column)

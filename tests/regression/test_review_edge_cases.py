@@ -58,11 +58,15 @@ def test_load_balancer_normalizes_external_node_labels(monkeypatch):
         R=1,
         must_link=[("z", "a")],
         cannot_link=[("m", "b")],
+        refine_post_loop=False,
+        max_iterations=7,
         disable_tqdm=True,
     )
 
     assert captured["must_link"] == [(0, 1)]
     assert captured["cannot_link"] == [(2, 3)]
+    assert captured["refine_post_loop"] is False
+    assert captured["max_iterations"] == 7
     assert set(result.metadata["community_map_labels"]) == {"z", "a", "m", "b"}
 
 
@@ -187,6 +191,38 @@ def test_decomposition_accepts_wrapped_heuristic_callables():
             verbose=-1,
         )
         assert out[-1]["z_sol"].shape == A.shape
+
+
+def test_refine_post_loop_false_keeps_in_loop_refinement_only():
+    """Regression coverage for decoupling in-loop and post-loop refinement."""
+    A, a, m, Z = _small_graph()
+    calls = []
+
+    def refine_once(A, partition, **kwargs):
+        calls.append(partition.copy())
+        return partition
+
+    out = CSD_decomposition(
+        A,
+        a,
+        m,
+        _master_ok,
+        _subproblem_eye,
+        columns=[Z],
+        f_stars=[0.0],
+        extract_dual=True,
+        refine_params={"refine_func": refine_once, "kwargs": {}},
+        use_refined_column=True,
+        refine_post_loop=False,
+        final_master_solve=False,
+        max_iterations=0,
+        disable_tqdm=True,
+        verbose=-1,
+    )
+
+    assert len(calls) == 1
+    assert len(out) == 1
+    assert out[-1]["heuristic_col"] is not None
 
 
 class _FakeSolver:

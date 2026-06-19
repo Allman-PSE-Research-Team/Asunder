@@ -65,6 +65,8 @@ class CSDDecompositionConfig:
         Refinement function and its corresponding arguments.
     use_refined_column : bool
         Boolean that determines whether refined columns are used in the main column generation loop or not.
+    refine_post_loop : bool
+        Boolean that determines whether post-loop refinement is run after column generation terminates.
     final_master_solve : bool
         Boolean that determines whether a final master solve is executed or not.
     max_iterations : int
@@ -96,6 +98,7 @@ class CSDDecompositionConfig:
     refine_in_subproblem: bool = False
     refine_params: Dict[str, Any] = field(default_factory=dict)
     use_refined_column: bool = False
+    refine_post_loop: bool = True
     final_master_solve: bool = True
     max_iterations: Optional[int] = 1000
     disable_tqdm: bool = False

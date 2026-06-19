@@ -142,6 +142,8 @@ def test_nonlinear_branch_and_price_accepts_core_periphery_refinement_hook(monke
     result = NonlinearBranchAndPrice(
         np.eye(3),
         refine_params=refine_params,
+        refine_post_loop=False,
+        max_iterations=5,
     )
 
     cfg = captured["config"]
@@ -149,6 +151,8 @@ def test_nonlinear_branch_and_price_accepts_core_periphery_refinement_hook(monke
     assert cfg.refine_params["kwargs"]["unworthy_edges"] == [(0, 1)]
     assert cfg.refine_params["kwargs"]["nonlinear_nodes"] == [0]
     assert cfg.refine_params["kwargs"]["cp_algorithm"] == "KL"
+    assert cfg.refine_post_loop is False
+    assert cfg.max_iterations == 5
     assert result.final_partition.shape == (3, 3)
 
 
