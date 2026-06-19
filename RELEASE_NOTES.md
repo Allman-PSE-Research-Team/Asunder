@@ -1,5 +1,12 @@
 # Release Notes
 
+## v0.2.2 - 2026-06-19
+
+### Added
+- Added Python 3.14 support for the core package and mainstream extras.
+- Added `refine_post_loop` controls to the decomposition, load-balancing, and NLBNP workflows.
+- Added `max_iterations` to the high-level load-balancing workflow.
+
 ## v0.2.1 - 2026-06-05
 
 ### Added
