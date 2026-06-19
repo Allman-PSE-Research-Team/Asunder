@@ -112,7 +112,7 @@ def heuristic_subproblem(
     modA_positive = modA.copy()
     modA_positive[modA_positive < 0] = 0
 
-    if package == "igraph" and algo != "lpa":
+    if package == "igraph" and algo not in {"lpa", "greedy", "leiden"}:
         zii, metric = run_igraph(modA, algo=algo, resolution=gamma)
     elif algo == "spinglass":
         zii = run_igraph_spinglass(modA)
