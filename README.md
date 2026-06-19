@@ -22,7 +22,7 @@ Optional extras:
 python3 -m pip install "put-asunder[graph,viz]"
 ```
 
-Legacy heuristics (best-effort on Python 3.13):
+Legacy heuristics (best-effort on Python 3.13 and 3.14):
 
 ```bash
 python3 -m pip install "put-asunder[legacy]"
@@ -30,9 +30,9 @@ python3 -m pip install "put-asunder[legacy]"
 
 ## Python Support
 
-- Guaranteed: Python 3.10, 3.11, 3.12, 3.13 for core package.
-- Guaranteed: mainstream extras (`graph`, `viz`) on Python 3.10 to 3.13.
-- Best-effort: `legacy` extra on Python 3.13.
+- Guaranteed: Python 3.10, 3.11, 3.12, 3.13, 3.14 for core package.
+- Guaranteed: mainstream extras (`graph`, `viz`) on Python 3.10 to 3.14.
+- Best-effort: `legacy` extra on Python 3.13 and 3.14.
 
 ## Package Layout
 

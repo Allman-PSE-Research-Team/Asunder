@@ -146,6 +146,7 @@ def run_nonlinear_branch_and_price(
     refine_params: dict[str, Any] | None = None,
     prob_method: str = "threshold",
     use_refined_column: bool = True,
+    refine_post_loop: bool = True,
     final_master_solve: bool = False,
     extract_dual: bool = True,
     max_iterations: int | None = None,
@@ -196,6 +197,8 @@ def run_nonlinear_branch_and_price(
         refinement function.
     use_refined_column : bool
         Whether refined columns should be added to the column pool.
+    refine_post_loop : bool
+        Whether to run post-loop refinement after column generation terminates.
     final_master_solve : bool
         Whether to run a final integer master solve.
     extract_dual : bool
@@ -285,6 +288,7 @@ def run_nonlinear_branch_and_price(
     cfg.refine_in_subproblem = False
     cfg.refine_params = refine_params
     cfg.use_refined_column = use_refined_column and refine
+    cfg.refine_post_loop = refine_post_loop and refine
     cfg.final_master_solve = final_master_solve
     cfg.max_iterations = max_iterations
     cfg.disable_tqdm = disable_tqdm

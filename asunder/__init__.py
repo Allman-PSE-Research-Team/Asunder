@@ -7,7 +7,7 @@ from asunder.orchestrator import CSDDecomposition, run_csd_decomposition
 from asunder.solvers import create_solver
 from asunder.types import DecompositionResult, IterationRecord
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 def run_evaluation(*args, **kwargs):
     """
