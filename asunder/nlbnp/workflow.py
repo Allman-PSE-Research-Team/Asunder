@@ -25,7 +25,7 @@ from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group
 from asunder.orchestrator import run_csd_decomposition
 from asunder.types import DecompositionResult, MasterProblemFn, SubproblemFn
 
-_CUSTOM_HEURISTIC_ALGOS = {"spectral", "full_louvain", "one_level_louvain", "RCCS"}
+_CUSTOM_HEURISTIC_ALGOS = {"spectral", "full_louvain", "RCCS"}
 
 
 def _items_or_empty(items: Sequence[Any] | None) -> list[Any]:
@@ -179,9 +179,30 @@ def run_nonlinear_branch_and_price(
     must_link, cannot_link : sequence of tuple, optional
         Pairwise constraints using graph node labels or adjacency indices.
     algorithm : str
-        Heuristic pricing algorithm name.
+        Name of heuristic subproblem used to replace the ILP subproblem. Third-party algorithms combine adjacency and dual information into a unified input while custom algorithms treat adjacency and duals as separate inputs. Supported third-party algorithms are listed under the ``package`` parameter.
+        Available custom algorithm options include:
+
+        ``"spectral"``:
+            Modified iterative bisection algorithm based on Mark Newman's eigenvector-based method.
+        ``"full_louvain"``:
+            Modified but Louvain-like algorithm.
+        ``"RCCS"``:
+            This means Reduced Cost Community Search and is a greedy and local search heuristic for finding communities that maximize the reduced cost.
     package : str or None
-        Third-party package namespace used by package-backed heuristic pricing.
+        Package from which non-custom heuristic subproblem is selected. Package and algorithm options include:
+
+        ``"networkx"``:
+            ``"louvain"``, ``"greedy"``, ``"girvan_newman"``
+        ``"sknetwork"``:
+            ``"louvain"``, ``"leiden"``, ``"lpa"``
+        ``"igraph"``:
+            ``"leiden"``, ``"greedy"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
+        ``"leidenalg"``:
+            ``"leiden"``,  ``"signed_leiden"``, ``"cpm_leiden"``, ``"surprise_leiden"``, ``"signed_surprise_leiden"``
+        ``None``:
+            ``"signed_louvain"``, ``"spinglass"``
+
+        Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
     seed : int or None
         Random seed.
     ifc_params : dict or None
@@ -285,7 +306,6 @@ def run_nonlinear_branch_and_price(
     cfg.seed = seed
     cfg.extract_dual = extract_dual
     cfg.ifc_params = ifc_params
-    cfg.refine_in_subproblem = False
     cfg.refine_params = refine_params
     cfg.use_refined_column = use_refined_column and refine
     cfg.refine_post_loop = refine_post_loop and refine

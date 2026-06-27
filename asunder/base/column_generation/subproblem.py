@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 
 from asunder.base.algorithms.community import (
-    probability_to_integer_labels,
     run_igraph,
     run_igraph_spinglass,
+    run_leidenalg,
     run_lpa,
     run_modularity,
     run_signed_louvain,
@@ -43,8 +43,6 @@ def heuristic_subproblem(
     duals,
     algo="louvain",
     package="networkx",
-    refine=False,
-    refine_params=None,
     verbose=False,
     gamma=1,
     exact_rc=True,
@@ -68,10 +66,6 @@ def heuristic_subproblem(
         Name of third-party heuristic subproblem used to replace the ILP subproblem.
     package : str
         Package from which third-party heuristic subproblem is selected. See ``CSD_decomposition`` for more detail.
-    refine : bool
-        Boolean value that determines whether a refinement operation is run in the subproblem.
-    refine_params : dict[str, callable or dict]
-        Refinement function and its corresponding arguments.
     verbose : int or bool
         Controls the level of detail in the printed output.
         ``-1``: No output
@@ -80,9 +74,9 @@ def heuristic_subproblem(
     gamma : int
         Resolution parameter which controls the scale and size of the detected clusters.
         Should be left as default (``1``) if:
-        ``algo`` is ``leiden`` and ``package`` is ``leidenalg"`` 
-        ``algo`` is ``greedy`` or ``multilevel`` and ``package`` is ``igraph``
-        ``algo`` is ``girvan_newman`` and ``package`` is ``networkx``
+        ``"algo"`` is ``"surprise_leiden"`` or ``"signed_surprise_leiden"`` and ``"package"`` is ``"leidenalg"``
+        ``"algo"`` is ``"greedy"`` or ``"multilevel"`` and ``"package"`` is ``"igraph"``
+        ``"algo"`` is ``"girvan_newman"`` and ``"package"`` is ``"networkx"``
     seed : int or None
         Random seed value
     Returns
@@ -109,30 +103,28 @@ def heuristic_subproblem(
     modA = A - (m * dualW)
     mod_a = modA.sum(axis=0)
     mod_m = np.sum(mod_a)
+    # negative weights will basically lead to a separation of nodes on that edge. The issue however
+    # is that when m or 2m becomes negative, modularity logic flips completely and tightly connected
+    # components are treated as bad splits.
     modA_positive = modA.copy()
     modA_positive[modA_positive < 0] = 0
 
-    if package == "igraph" and algo not in {"lpa", "greedy", "leiden"}:
-        zii, metric = run_igraph(modA, algo=algo, resolution=gamma)
+    if package == "igraph" and algo not in {"greedy", "leiden"}:
+        zii, metric = run_igraph(modA if algo == "cpm_leiden" else modA_positive, algo=algo, resolution=gamma)
+    elif package == "leidenalg":
+        zii, metric = run_leidenalg(modA if algo.startswith("signed") or algo == "cpm_leiden" else modA_positive, algo=algo, seed=seed, resolution=gamma, verbose=verbose)
     elif algo == "spinglass":
         zii = run_igraph_spinglass(modA)
         metric = compute_f_star(modA, mod_a, mod_m, zii)
     elif algo == "signed_louvain":
         zii, metric = run_signed_louvain(modA, seed=seed)
-    elif algo == "lpa":
-        if package == "sknetwork":
-            zii, metric = run_lpa(modA)
-        elif package == "igraph":
-            zii, metric = run_igraph(modA, algo=algo)
-        else:
-            raise NotImplementedError(f"Invalid package entered: {package}")
+    elif algo == "lpa" and package == "sknetwork":
+        zii, metric = run_lpa(modA_positive)
     else:
         zii, metric = run_modularity(
             modA_positive,
             algo=algo,
             package=package,
-            refine=refine,
-            refine_params=refine_params,
             resolution=gamma,
             verbose=verbose,
             seed=seed
@@ -261,8 +253,6 @@ def custom_heuristic_subproblem(
     duals,
     algo="full_louvain",
     verbose=False,
-    refine=False,
-    refine_params=None,
     max_iterations=50,
     tolerance=1e-8,
     seed=42
@@ -288,10 +278,6 @@ def custom_heuristic_subproblem(
         ``-1``: No output
         ``False`` | ``0``: Minimal output
         ``True`` | ``1``: Detailed output
-    refine : bool
-        Boolean value that determines whether a refinement operation is run in the subproblem.
-    refine_params : dict[str, callable or dict]
-        Refinement function and its corresponding arguments.
     max_iterations : int
         Maximum number of iterations.
     tolerance : float
@@ -328,13 +314,8 @@ def custom_heuristic_subproblem(
             louvain_model.fit(A, duals)
         else:
             louvain_model.fit_modified_one_level(A, duals, max_iter=max_iterations, tol=tolerance)
-        if refine:
-            ilabels = probability_to_integer_labels(louvain_model.predict_proba(), "gaussian_mixture")
-            z_sol = partition_vector_to_2d_matrix(ilabels)
-            metric = None
-        else:
-            z_sol = partition_vector_to_2d_matrix(louvain_model.labels_)
-            metric = louvain_model.obj_val_
+        z_sol = partition_vector_to_2d_matrix(louvain_model.labels_)
+        metric = louvain_model.obj_val_
     else:
         if algo == "RCCS":
             res = search_partition_by_reduced_cost(adjacency=A, duals=duals, random_seed=seed)
@@ -343,11 +324,7 @@ def custom_heuristic_subproblem(
             metric = res["best_reduced_cost"] + constant_terms # for normalization sake
         else:
             z_sol, metric = full_spectral_bisection(A, a, m, dualW, refinement=True, verbose=verbose)
-        if refine and refine_params is not None:
-            z_refine = refine_params["refine_func"](A=A, partition=z_sol, **refine_params["kwargs"])
-            if z_refine is not None:
-                z_sol = z_refine
-                metric = None
+
     if metric is None:
         modularity_contribution = compute_f_star(A, a, m, z_sol)
         dual_contribution = (dualW * z_sol).sum()

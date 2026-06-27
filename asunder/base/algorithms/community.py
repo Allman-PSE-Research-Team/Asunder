@@ -10,8 +10,6 @@ from scipy import sparse
 
 from asunder.base.algorithms.signed_louvain import community_detection as cd
 from asunder.base.algorithms.signed_louvain import util as slouvain_util
-from asunder.base.utils.graph import group_nodes_by_community
-
 
 def _import_sknetwork():
     """
@@ -179,7 +177,7 @@ def best_girvan_newman_partition(G, max_levels=10):
     return best_communities, best_mod
 
 
-def run_modularity(modified_A, algo="louvain", package="networkx", seed=42, resolution=1, verbose=False, refine=False, refine_params=None):
+def run_modularity(modified_A, algo="louvain", package="networkx", seed=42, resolution=1, verbose=False):
     """
     Run modularity-style community detection and return ``(partition, score)``.
     
@@ -198,24 +196,20 @@ def run_modularity(modified_A, algo="louvain", package="networkx", seed=42, reso
         Resolution parameter (gamma) used in modularity based methods.
     verbose : bool
         Controls the verbosity of the output. Default is False.
-    refine : bool
-        Enables/disables refinement procedure.
-    refine_params : dict[str, Any]
-        Refinement parameters, typically including the refinement function and any associated arguments.
-    
+
     Returns
     -------
     zii: ndarray of int, shape (N, N)
-        2D graph partititon.
+        2D graph partition.
     metric: float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
     """
-    assert modified_A.min() >= 0, "Adjacency / weight matrix includes negative values." # ToDo: may need to drop this.
+    assert modified_A.min() >= 0, "Adjacency / weight matrix includes negative values." # TODO: may need to drop this.
     assert algo in ["louvain", "leiden", "greedy", "girvan_newman"]
     modG = nx.from_numpy_array(modified_A.astype([("weight", "float")]))
     metric = None
 
-    if package in {"igraph", "leidenalg"}:
+    if package == "igraph":
         ig = _import_igraph()
         ig_graph = ig.Graph.Weighted_Adjacency(modified_A.tolist(), mode="UNDIRECTED", attr="weight")
     else:
@@ -234,28 +228,7 @@ def run_modularity(modified_A, algo="louvain", package="networkx", seed=42, reso
         else:
             raise NotImplementedError(f"Invalid package: {package}")
     elif algo == "leiden":
-        if package == "leidenalg":
-            la = _import_leidenalg()
-            partition = la.find_partition(
-                ig_graph, la.ModularityVertexPartition, seed=seed, weights="weight"
-            )
-            resolution = None
-            # TODO: Add CPMVertexPartition which handles positive and negative weights and has resolution parameter.
-            # TODO:Test negative weight handling
-            # g_pos = ig_graph.subgraph_edges(ig_graph.es.select(weight_gt=0), delete_vertices=False)
-            # g_neg = ig_graph.subgraph_edges(ig_graph.es.select(weight_lt=0), delete_vertices=False)
-            # g_neg.es['weight'] = [-w for w in g_neg.es['weight']]
-            # part_pos = la.ModularityVertexPartition(g_pos, weights='weight')
-            # part_neg = la.ModularityVertexPartition(g_neg, weights='weight')
-
-            # optimiser = la.Optimiser()
-            # diff = optimiser.optimise_partition_multiplex([part_pos, part_neg], layer_weights=[1, -1])
-            # partition = part_pos
-            membership = {}
-            for node, comm in zip(ig_graph.vs.indices, partition.membership):
-                membership.setdefault(comm, []).append(node)
-            communities = list(membership.values())
-        elif package == "sknetwork":
+        if package == "sknetwork":
             _, Leiden, _, _, _, _ = _import_sknetwork()
             partition = Leiden(resolution=resolution).fit_predict(modified_A)
             communities = {}
@@ -295,19 +268,12 @@ def run_modularity(modified_A, algo="louvain", package="networkx", seed=42, reso
         for node in community:
             oneD_z[node] = i
 
-    if refine:
-        if refine_params is None:
-            raise ValueError("refine_params is required when refine=True")
-        zii = refine_params["refine_func"](A=modified_A, partition=oneD_z, **refine_params["kwargs"])
-        _, communities = group_nodes_by_community(np.array(zii))
-        # TODO: Recompute metric or decide to leave as None.
-    else:
-        zii = np.equal.outer(oneD_z, oneD_z).astype(int)
-        metric = nx.community.modularity(modG, communities, resolution=resolution if resolution is not None else 1)
+    zii = np.equal.outer(oneD_z, oneD_z).astype(int)
+    metric = nx.community.modularity(modG, communities, resolution=resolution if resolution is not None else 1)
     return zii, metric
 
 
-def run_lpa(modified_A, refine=True):
+def run_lpa(modified_A):
     """
     Run label propagation clustering and return ``(partition, modularity)``.
     
@@ -316,25 +282,17 @@ def run_lpa(modified_A, refine=True):
     modified_A : ndarray of float, shape (N, N)
         Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
         The original adjacency / weight matrix can also be parsed.
-    refine : bool
-        Enables/disables refinement procedure.
     
     Returns
     -------
     zii: ndarray of int, shape (N, N)
-        2D graph partititon.
+        2D graph partition.
     float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
     """
     _, _, PropagationClustering, get_modularity, _, _ = _import_sknetwork()
     algorithm = PropagationClustering()
-    if refine:
-        result = algorithm.fit_predict_proba(modified_A)
-        partition = np.zeros(shape=(result.shape[0],))
-        for i in range(result.shape[0]):
-            partition[i] = -1 if np.max(result[i]) < 0.8 else np.argmax(result[i])
-    else:
-        partition = algorithm.fit_predict(modified_A)
+    partition = algorithm.fit_predict(modified_A)
 
     communities = {}
     for i, val in enumerate(partition):
@@ -360,7 +318,7 @@ def run_igraph_spinglass(modified_A):
     Returns
     -------
     ndarray of int, shape (N, N)
-        2D graph partititon.
+        2D graph partition.
     """
     ig = _import_igraph()
     ig_graph = ig.Graph.Weighted_Adjacency(modified_A.tolist(), mode="UNDIRECTED", attr="weight")
@@ -388,7 +346,7 @@ def run_igraph(modified_A, algo="infomap", resolution=1):
     Returns
     -------
     zii: ndarray of int, shape (N, N)
-        2D graph partititon.
+        2D graph partition.
     metric: float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
     """
@@ -404,11 +362,117 @@ def run_igraph(modified_A, algo="infomap", resolution=1):
         clustering = ig_graph.community_voronoi(weights="weight")
     elif algo == "walktrap":
         clustering = ig_graph.community_walktrap(weights="weight").as_clustering()
+    elif algo == "cpm_leiden":
+        #  Resolution-limit free and handles negative weights
+        clustering = ig_graph.community_leiden(objective_function="CPM", weights='weight', resolution=resolution)
     else:
         raise NotImplementedError("Invalid Igraph Algorithm")
     oneD_z = clustering.membership
     zii = np.equal.outer(oneD_z, oneD_z).astype(int)
     metric = ig_graph.modularity(clustering, weights="weight", resolution=resolution if  algo == "multilevel" else 1)
+    return zii, metric
+
+def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=False):
+    """
+    Run Leiden algorithm to optimize varying quality functions and return ``(partition, score)``.
+
+    Parameters
+    ----------
+    modified_A : ndarray of float, shape (N, N)
+        Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights.
+        The original adjacency / weight matrix can also be parsed.
+    algo : str
+        Algorithm to be used for community detection. It describes the quality being maximized and whether signed graphs are allowed or not.
+    seed : int | None
+        Random seed value.
+    resolution : int or float
+        Resolution parameter (gamma) used.
+    verbose : bool
+        Controls the verbosity of the output. Default is False.
+
+    Returns
+    -------
+    zii: ndarray of int, shape (N, N)
+        2D graph partition.
+    metric: float
+        Quality of ``zii`` computed using the provided adjacency / weight matrix. This could be modularity, CPM or surprise.
+    """
+    assert algo in ['leiden', 'signed_leiden', 'cpm_leiden', 'surprise_leiden', 'signed_surprise_leiden']
+    la = _import_leidenalg()
+    ig = _import_igraph()
+    # create modified graph
+    ig_graph = ig.Graph.Weighted_Adjacency(modified_A.tolist(), mode='UNDIRECTED', attr='weight')
+
+    metric = None
+    if algo == "leiden":
+        partition = la.find_partition(
+            ig_graph,
+            la.RBConfigurationVertexPartition,
+            resolution_parameter=resolution,
+            seed=seed,
+            weights='weight'
+        )
+    elif algo == "signed_leiden":
+        # uses multiplex community detection to handle negative weights
+        g_pos = ig_graph.subgraph_edges(ig_graph.es.select(weight_gt=0), delete_vertices=False)
+        g_neg = ig_graph.subgraph_edges(ig_graph.es.select(weight_lt=0), delete_vertices=False)
+        g_neg.es['weight'] = [-w for w in g_neg.es['weight']]
+
+        layer_partitions = la.find_partition_multiplex(
+            graphs=[g_pos, g_neg],
+            partition_type=la.RBConfigurationVertexPartition,
+            layer_weights=[1, -1],
+            weights='weight',
+            resolution_parameter=resolution,
+            seed=seed
+        )
+        part_pos = la.RBConfigurationVertexPartition(g_pos, weights='weight', initial_membership=layer_partitions[0], resolution_parameter=resolution)
+        part_neg = la.RBConfigurationVertexPartition(g_neg, weights='weight', initial_membership=layer_partitions[0], resolution_parameter=resolution)
+        partition = layer_partitions[0]
+    elif algo == "cpm_leiden":
+        #  Constant Potts Model (CPM). Resolution-limit free and handles negative weights.
+        partition = la.find_partition(
+            ig_graph,
+            la.CPMVertexPartition,
+            resolution_parameter=resolution,
+            seed=seed,
+            weights='weight'
+        )
+    elif algo == "surprise_leiden":
+        partition = la.find_partition(
+            ig_graph,
+            la.SurpriseVertexPartition,
+            seed=seed,
+            weights='weight'
+        )
+    elif algo == "signed_surprise_leiden":
+        # uses multiplex community detection to handle negative weights
+        g_pos = ig_graph.subgraph_edges(ig_graph.es.select(weight_gt=0), delete_vertices=False)
+        g_neg = ig_graph.subgraph_edges(ig_graph.es.select(weight_lt=0), delete_vertices=False)
+        g_neg.es['weight'] = [-w for w in g_neg.es['weight']]
+
+        layer_partitions = la.find_partition_multiplex(
+            graphs=[g_pos, g_neg],
+            partition_type=la.SurpriseVertexPartition,
+            layer_weights=[1, -1],
+            weights='weight',
+            seed=seed
+        )
+        part_pos = la.SurpriseVertexPartition(g_pos, weights='weight', initial_membership=layer_partitions[0])
+        part_neg = la.SurpriseVertexPartition(g_neg, weights='weight', initial_membership=layer_partitions[0])
+        partition = layer_partitions[0]
+    else:
+        raise(NotImplementedError("Invalid Leidenalg Algorithm."))
+
+    # process result to get partitions
+    oneD_z = np.array(
+        partition if algo.startswith("signed") else partition.membership
+    )
+    zii = np.equal.outer(oneD_z, oneD_z).astype(int)
+    if algo.startswith("signed"):
+        metric = (1 * part_pos.quality()) + (-1 * part_neg.quality())
+    else:
+        metric = partition.quality()
     return zii, metric
 
 
@@ -427,7 +491,7 @@ def run_signed_louvain(modified_A, seed=42):
     Returns
     -------
     zii: ndarray of int, shape (N, N)
-        2D graph partititon.
+        2D graph partition.
     float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
     """

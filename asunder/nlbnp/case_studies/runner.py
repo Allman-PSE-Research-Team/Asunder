@@ -30,8 +30,9 @@ from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group
 from asunder.nlbnp.case_studies.circle_cutting import build_circle_cutting_graph
 from asunder.nlbnp.case_studies.cpcong import build_cpcong_graph
 
-NX_ALGOS = ["louvain", "leiden", "greedy", "girvan_newman"]
-IGRAPH_ALGOS = ["infomap", "lpa", "multilevel", "voronoi", "walktrap"]
+NX_ALGOS = ["louvain", "greedy", "girvan_newman"]
+IGRAPH_ALGOS = ["infomap", "lpa", "multilevel", "voronoi", "walktrap", "cpm_leiden"]
+LEIDENALG_ALGOS = ['leiden', 'signed_leiden', 'cpm_leiden', 'surprise_leiden', 'signed_surprise_leiden']
 
 
 def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, repeat=3):
@@ -146,7 +147,15 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
             if attr.get("var_type") == "integer"
         ]
         for algo in algos:
-            package = "networkx" if algo in NX_ALGOS else ("igraph" if algo in IGRAPH_ALGOS else None)
+            # algorithms that occur in multiple packages are only selected once based on the block below.
+            if algo in NX_ALGOS:
+                package = "networkx" if algo in NX_ALGOS else ("igraph" if algo in IGRAPH_ALGOS else None)
+            elif algo in IGRAPH_ALGOS:
+                package = "igraph"
+            elif algo in LEIDENALG_ALGOS:
+                package = "leidenalg"
+            else:
+                package = None
             ifc_params = {"generator": make_simple_partition, "num": 1, "args": {"N": n}}
             refine_params = {
                 "refine_func": refine_partition_linear_group,
@@ -159,13 +168,12 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
                 a,
                 m,
                 solve_master_problem,
-                custom_heuristic_subproblem if algo in ["full_louvain", "spectral", "one_level_louvain"] else heuristic_subproblem,
+                custom_heuristic_subproblem if algo in ["full_louvain", "spectral", "RCCS"] else heuristic_subproblem,
                 additional_constraints=additional_constraints,
                 algo=algo,
                 package=package,
                 extract_dual=True,
                 ifc_params=ifc_params,
-                refine_in_subproblem=False,
                 refine_params=refine_params,
                 use_refined_column=True,
                 final_master_solve=False,
