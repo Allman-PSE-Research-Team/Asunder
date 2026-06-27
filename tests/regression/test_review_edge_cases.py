@@ -254,7 +254,7 @@ def test_zero_edge_graphs_raise_clear_value_error():
 
 
 def test_run_modularity_default_call_succeeds():
-    """Regression coverage for run_modularity(refine=True, refine_params=None)."""
+    """Regression coverage for run_modularity()."""
     A, _, _, _ = _small_graph()
 
     z, metric = run_modularity(A)

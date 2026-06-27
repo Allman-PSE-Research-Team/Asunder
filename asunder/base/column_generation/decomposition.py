@@ -33,7 +33,6 @@ def CSD_decomposition(
     # initial feasible column generator
     ifc_params: dict = {},
     # refinement
-    refine_in_subproblem=False,
     refine_params: dict={},
     use_refined_column=False,
     refine_post_loop=True,
@@ -70,11 +69,11 @@ def CSD_decomposition(
     contract_graph : bool
         Boolean that determines whether must links are handled via graph contraction or not.
     stopping_window : int
-        Maximum number of allowed stangnant CG iterations. After this, CG is terminated.
+        Maximum number of allowed stagnant CG iterations. After this, CG is terminated.
     check_flat_pricing : bool
         Boolean that determines whether to check for flat/stagnant pricing or not.
     algo : str
-        Name of heuristic subproblem used to replace the ILP subproblem. Third-party algorithms combine adjacency and dual information intro a unified input while custom algorithms treat adjacency and duals as separate inputs. Supported third-party algorithms are listed under the ``package`` parameter.
+        Name of heuristic subproblem used to replace the ILP subproblem. Third-party algorithms combine adjacency and dual information into a unified input while custom algorithms treat adjacency and duals as separate inputs. Supported third-party algorithms are listed under the ``package`` parameter.
         Available custom algorithm options include:
 
         ``"spectral"``:
@@ -82,7 +81,7 @@ def CSD_decomposition(
         ``"full_louvain"``:
             Modified but Louvain-like algorithm.
         ``"RCCS"``:
-            This means Reduced Cost Community Search and is a greedy and local search heuristic for finding commiunities that maximize the reduced cost.
+            This means Reduced Cost Community Search and is a greedy and local search heuristic for finding communities that maximize the reduced cost.
     package : str or None
         Package from which non-custom heuristic subproblem is selected. Package and algorithm options include:
 
@@ -91,19 +90,19 @@ def CSD_decomposition(
         ``"sknetwork"``:
             ``"louvain"``, ``"leiden"``, ``"lpa"``
         ``"igraph"``:
-            ``"leiden"``, ``"greedy"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``
-        ``leidenalg``:
-            ``"leiden"``
+            ``"leiden"``, ``"greedy"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
+        ``"leidenalg"``:
+            ``"leiden"``,  ``"signed_leiden"``, ``"cpm_leiden"``, ``"surprise_leiden"``, ``"signed_surprise_leiden"``
         ``None``:
             ``"signed_louvain"``, ``"spinglass"``
+
+        Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
     seed : int or None
         Random seed value.
     extract_dual : bool
         Boolean that determines whether we extract duals from the master problem or not.
     ifc_params : dict[str, callable or dict or int]
         Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments (excluding seed values).
-    refine_in_subproblem : bool
-        Boolean value that determines whether a refinement operation is run in the subproblem.
     refine_params : dict[str, callable or dict]
         Refinement function and its corresponding arguments (excluding seed values).
     use_refined_column : bool
@@ -225,12 +224,10 @@ def CSD_decomposition(
                     A, a, m, duals, verbose=verbose
                 )
             else:
-                if algo in {"spectral", "full_louvain", "one_level_louvain", "RCCS"}:
+                if algo in {"spectral", "full_louvain", "RCCS"}:
                     # uses custom heuristic subproblem
                     sub_obj_val, z_sol = sp_function(
                         A, a, m, duals, algo=algo,
-                        refine=refine_in_subproblem,
-                        refine_params=refine_params,
                         verbose=verbose,
                         seed=seed
                     )
@@ -239,8 +236,6 @@ def CSD_decomposition(
                     sub_obj_val, z_sol = sp_function(
                         A, a, m, duals,
                         algo=algo, package=package,
-                        refine=refine_in_subproblem,
-                        refine_params=refine_params,
                         verbose=verbose,
                         seed=seed
                     )                

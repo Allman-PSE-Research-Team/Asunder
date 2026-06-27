@@ -4,7 +4,10 @@ import networkx as nx
 import numpy as np
 
 from asunder.base.column_generation.master import compute_f_star
-from asunder.base.column_generation.subproblem import heuristic_subproblem
+from asunder.base.column_generation.subproblem import (
+    custom_heuristic_subproblem,
+    heuristic_subproblem,
+)
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
 from asunder.config import CSDDecompositionConfig
 from asunder.load_balancing.algorithms.VFD import refine_partition
@@ -16,6 +19,7 @@ from asunder.load_balancing.utils.partition_generation import (
 from asunder.orchestrator import run_csd_decomposition
 from asunder.types import DecompositionResult
 
+_CUSTOM_HEURISTIC_ALGOS = {"spectral", "full_louvain", "RCCS"}
 
 def LoadBalancer(
     G, 
@@ -49,7 +53,7 @@ def LoadBalancer(
     R_bounds : tuple[int, int] | None
         Minimum and maximum number of nodes per community (community size constraint).
     algo : str
-        Name of heuristic subproblem used to replace the ILP subproblem. Third-party algorithms combine adjacency and dual information intro a unified input while custom algorithms treat adjacency and duals as separate inputs. Supported third-party algorithms are listed under the ``package`` parameter.
+        Name of heuristic subproblem used to replace the ILP subproblem. Third-party algorithms combine adjacency and dual information into a unified input while custom algorithms treat adjacency and duals as separate inputs. Supported third-party algorithms are listed under the ``package`` parameter.
         Available custom algorithm options include:
 
         ``"spectral"``:
@@ -57,7 +61,7 @@ def LoadBalancer(
         ``"full_louvain"``:
             Modified but Louvain-like algorithm.
         ``"RCCS"``:
-            This means Reduced Cost Community Search and is a greedy and local search heuristic for finding commiunities that maximize the reduced cost.
+            This means Reduced Cost Community Search and is a greedy and local search heuristic for finding communities that maximize the reduced cost.
     package : str or None
         Package from which non-custom heuristic subproblem is selected. Package and algorithm options include:
 
@@ -66,11 +70,13 @@ def LoadBalancer(
         ``"sknetwork"``:
             ``"louvain"``, ``"leiden"``, ``"lpa"``
         ``"igraph"``:
-            ``"leiden"``, ``"greedy"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``
-        ``leidenalg``:
-            ``"leiden"``
+            ``"leiden"``, ``"greedy"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
+        ``"leidenalg"``:
+            ``"leiden"``,  ``"signed_leiden"``, ``"cpm_leiden"``, ``"surprise_leiden"``, ``"signed_surprise_leiden"``
         ``None``:
             ``"signed_louvain"``, ``"spinglass"``
+
+        Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
     ifc_generator : str
         ``"random"`` if the initial feasible column should be randomly generated (default).
         ``"ordered"`` if the initial feasible column should be generated with some structure-based ordering.
@@ -172,7 +178,7 @@ def LoadBalancer(
         A, a=a, m=m,
         config=config,
         master_fn=solve_master_problem,
-        subproblem_fn=heuristic_subproblem,
+        subproblem_fn=custom_heuristic_subproblem if algorithm in _CUSTOM_HEURISTIC_ALGOS else heuristic_subproblem,
     )
     elapsed = time.perf_counter() - start
     if result.final_partition is None:
