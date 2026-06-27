@@ -1,4 +1,4 @@
-"""Reduced Cost Community Search: A greedy and local search heuristic for finding commiunities that maximize the reduced cost."""
+"""Reduced Cost Community Search: A greedy and local search heuristic for finding communities that maximize the reduced cost."""
 
 from __future__ import annotations
 
