@@ -11,6 +11,7 @@ from scipy import sparse
 from asunder.base.algorithms.signed_louvain import community_detection as cd
 from asunder.base.algorithms.signed_louvain import util as slouvain_util
 
+
 def _import_sknetwork():
     """
     Internal helper for importing sknetwork modules.

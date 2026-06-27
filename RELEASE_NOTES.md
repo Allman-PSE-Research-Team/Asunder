@@ -1,5 +1,29 @@
 # Release Notes
 
+## v0.2.3 - 2026-06-26
+
+### Added
+- Added `leidenalg`-backed heuristic subproblem support for:
+  - `leiden`
+  - `signed_leiden`
+  - `cpm_leiden`
+  - `surprise_leiden`
+  - `signed_surprise_leiden`
+- Added `igraph` support for `cpm_leiden`.
+- Added `RCCS` routing as a custom heuristic subproblem in the NLBNP and load-balancing workflows.
+
+### Changed
+- Updated `heuristic_subproblem` routing so signed and CPM algorithms use the appropriate signed/negative-weight-aware backend path.
+- Removed in-subproblem refinement from modularity, LPA, and custom heuristic subproblem calls.
+- Standardized active custom heuristic routing to `spectral`, `full_louvain`, and `RCCS`.
+- Updated case-study evaluation routing so package-backed algorithms are selected from `networkx`, `igraph`, or `leidenalg` consistently.
+- Updated public docstrings for `CSD_decomposition`, `CSDDecompositionConfig`, `LoadBalancer`, and `run_nonlinear_branch_and_price` with the current algorithm/package matrix.
+
+### Fixed
+- Fixed load-balancing decomposition so custom heuristic algorithms use `custom_heuristic_subproblem` instead of being incorrectly routed through package-backed `heuristic_subproblem`.
+- Removed stale `refine_in_subproblem` configuration and call-site usage.
+- Corrected several docstring typos and algorithm descriptions, including RCCS community wording and partition spelling.
+
 ## v0.2.2 - 2026-06-19
 
 ### Added

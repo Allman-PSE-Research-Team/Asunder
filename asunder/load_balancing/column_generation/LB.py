@@ -4,7 +4,10 @@ import networkx as nx
 import numpy as np
 
 from asunder.base.column_generation.master import compute_f_star
-from asunder.base.column_generation.subproblem import custom_heuristic_subproblem, heuristic_subproblem
+from asunder.base.column_generation.subproblem import (
+    custom_heuristic_subproblem,
+    heuristic_subproblem,
+)
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
 from asunder.config import CSDDecompositionConfig
 from asunder.load_balancing.algorithms.VFD import refine_partition
