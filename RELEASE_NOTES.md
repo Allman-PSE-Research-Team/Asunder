@@ -1,5 +1,17 @@
 # Release Notes
 
+## v0.2.4 - 2026-06-28
+
+### Changed
+- Expanded README and installation documentation for optional extras, including
+  `graph`, `viz`, `legacy`, `docs`, and `dev`, with clearer installation
+  procedures, usage guidance, Python support notes, and solver setup notes.
+
+### Fixed
+- Fixed `leidenalg` metric extraction so each supported Leiden backend reports
+  an algorithm-appropriate quality value, including signed and CPM/surprise
+  variants.
+
 ## v0.2.3 - 2026-06-26
 
 ### Added
