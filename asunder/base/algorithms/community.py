@@ -413,6 +413,7 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
             seed=seed,
             weights='weight'
         )
+        metric = partition.quality() / modified_A.sum()
     elif algo == "signed_leiden":
         # uses multiplex community detection to handle negative weights
         g_pos = ig_graph.subgraph_edges(ig_graph.es.select(weight_gt=0), delete_vertices=False)
@@ -427,9 +428,13 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
             resolution_parameter=resolution,
             seed=seed
         )
+        partition = layer_partitions[0]
+
         part_pos = la.RBConfigurationVertexPartition(g_pos, weights='weight', initial_membership=layer_partitions[0], resolution_parameter=resolution)
         part_neg = la.RBConfigurationVertexPartition(g_neg, weights='weight', initial_membership=layer_partitions[0], resolution_parameter=resolution)
-        partition = layer_partitions[0]
+        m_pos = sum(g_pos.es['weight'])
+        m_neg = sum(g_neg.es['weight'])
+        metric = (1 * part_pos.quality() / m_pos) + (-1 * part_neg.quality() / m_neg)
     elif algo == "cpm_leiden":
         #  Constant Potts Model (CPM). Resolution-limit free and handles negative weights.
         partition = la.find_partition(
@@ -439,6 +444,7 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
             seed=seed,
             weights='weight'
         )
+        metric = partition.quality()
     elif algo == "surprise_leiden":
         partition = la.find_partition(
             ig_graph,
@@ -446,6 +452,7 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
             seed=seed,
             weights='weight'
         )
+        metric = partition.quality()
     elif algo == "signed_surprise_leiden":
         # uses multiplex community detection to handle negative weights
         g_pos = ig_graph.subgraph_edges(ig_graph.es.select(weight_gt=0), delete_vertices=False)
@@ -462,6 +469,7 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
         part_pos = la.SurpriseVertexPartition(g_pos, weights='weight', initial_membership=layer_partitions[0])
         part_neg = la.SurpriseVertexPartition(g_neg, weights='weight', initial_membership=layer_partitions[0])
         partition = layer_partitions[0]
+        metric = (1 * part_pos.quality()) + (-1 * part_neg.quality())
     else:
         raise(NotImplementedError("Invalid Leidenalg Algorithm."))
 
@@ -470,10 +478,6 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
         partition if algo.startswith("signed") else partition.membership
     )
     zii = np.equal.outer(oneD_z, oneD_z).astype(int)
-    if algo.startswith("signed"):
-        metric = (1 * part_pos.quality()) + (-1 * part_neg.quality())
-    else:
-        metric = partition.quality()
     return zii, metric
 
 
