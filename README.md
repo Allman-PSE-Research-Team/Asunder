@@ -16,13 +16,20 @@ Base install:
 python3 -m pip install put-asunder
 ```
 
-Optional extras:
+Graph extras (supports ``leidenalg`` and ``igraph`` algorithms):
+
+```bash
+python3 -m pip install "put-asunder[graph]"
+```
+
+
+Graph and visualization (``matplotlib`` and ``seaborn``) extras:
 
 ```bash
 python3 -m pip install "put-asunder[graph,viz]"
 ```
 
-Legacy heuristics (best-effort on Python 3.13 and 3.14):
+Legacy core periphery heuristics (best-effort on Python 3.13 and 3.14):
 
 ```bash
 python3 -m pip install "put-asunder[legacy]"
