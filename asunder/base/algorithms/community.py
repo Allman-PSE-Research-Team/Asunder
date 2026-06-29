@@ -432,9 +432,11 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
 
         part_pos = la.RBConfigurationVertexPartition(g_pos, weights='weight', initial_membership=layer_partitions[0], resolution_parameter=resolution)
         part_neg = la.RBConfigurationVertexPartition(g_neg, weights='weight', initial_membership=layer_partitions[0], resolution_parameter=resolution)
-        m_pos = sum(g_pos.es['weight'])
-        m_neg = sum(g_neg.es['weight'])
-        metric = (1 * part_pos.quality() / m_pos) + (-1 * part_neg.quality() / m_neg)
+        m_pos = 2 * sum(g_pos.es['weight'])
+        m_neg = 2 * sum(g_neg.es['weight'])
+        Q_pos = (1 * part_pos.quality() / m_pos) if m_pos > 0 else 0
+        Q_neg = (1 * part_neg.quality() / m_neg) if m_neg > 0 else 0
+        metric = Q_pos - Q_neg
     elif algo == "cpm_leiden":
         #  Constant Potts Model (CPM). Resolution-limit free and handles negative weights.
         partition = la.find_partition(
