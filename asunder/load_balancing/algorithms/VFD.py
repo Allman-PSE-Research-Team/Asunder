@@ -16,6 +16,7 @@ from asunder.base.algorithms.modular_VFD import (
     _feasible_K_range,
     _fingerprint_blocks_from_rounded_rows,
     _normalize_pair,
+    _node_partition_B_sum,
     _range_bounds_from_KR,
     _symmetrize_unitdiag,
     _target_sizes_from_bounds,
@@ -709,6 +710,7 @@ def very_fortunate_descent(
         else:
             C_node = sym.copy()
     C_node = _symmetrize_unitdiag(C_node)
+    reference_Q = _node_partition_B_sum(A, a, m, sym)
 
     C_comp = _component_matrices_from_node_matrix(C_node, comp) # average co-association between components
     W_B = _component_sum_matrix_B(A, a, m, comp) # sum modularity matrix between components
@@ -734,7 +736,8 @@ def very_fortunate_descent(
         idx = np.asarray(b, dtype=int)
         return float(M[np.ix_(idx, idx)].sum())
 
-    best = None
+    best_improving = None
+    best_feasible = None
 
     K0 = min(max(K, k_lo), k_hi)
     K_end = min(k_hi, K0 + int(max_K_increase))
@@ -1516,8 +1519,23 @@ def very_fortunate_descent(
                 "seed": int(seed),
             }
 
-            if best is None or meta["objective_B_sum"] > best[1]["objective_B_sum"]:
-                best = (Z, meta)
+            candidate = (Z, meta)
+            candidate_Q = float(meta["objective_B_sum"])
+
+            if (
+                best_feasible is None
+                or candidate_Q > float(best_feasible[1]["objective_B_sum"])
+            ):
+                best_feasible = candidate
+
+            if candidate_Q > reference_Q + 1e-12:
+                if (
+                    best_improving is None
+                    or candidate_Q > float(best_improving[1]["objective_B_sum"])
+                ):
+                    best_improving = candidate
+
+    best = best_improving if best_improving is not None else best_feasible
     if best is None:
         # rerun with more adventurous Ks
         if clustering_Ks == range(K, K + 8, 2):
