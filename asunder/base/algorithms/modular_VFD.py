@@ -472,6 +472,25 @@ def _component_sum_matrix_B(A: np.ndarray, a: np.ndarray, m: float, comp: Dict[s
     return P.T @ B @ P  # sum between components
 
 
+def _node_partition_B_sum(A: np.ndarray, a: np.ndarray, m: float, z: np.ndarray) -> float:
+    """
+    Score a node-level partition-like matrix on the unnormalized B scale.
+
+    This matches ``objective_B_sum`` from component assignments, where
+    ``B = A - aa^T / m``.
+    """
+    A = np.asarray(A, dtype=float)
+    a = np.asarray(a, dtype=float).reshape(-1)
+    z = np.asarray(z, dtype=float)
+    N = A.shape[0]
+    if A.shape != (N, N) or z.shape != (N, N) or a.shape[0] != N:
+        raise ValueError("A, z must be (N,N) and a must be (N,).")
+    if m == 0:
+        raise ValueError("m must be nonzero.")
+    B = A - np.outer(a, a) / float(m)
+    return float(np.sum(B * z))
+
+
 def _fingerprint_blocks_from_rounded_rows(
     C_comp: np.ndarray,
     comp: Dict[str, Any],
@@ -1062,6 +1081,7 @@ def modular_very_fortunate_descent(
         }
 
     sym = _symmetrize_unitdiag(wz)
+    reference_Q = _node_partition_B_sum(A, a, m, sym)
 
     must_link = [_normalize_pair(i, j) for (i, j) in (must_link or [])]
     cannot_link = [_normalize_pair(i, j) for (i, j) in (cannot_link or [])]
@@ -1149,7 +1169,8 @@ def modular_very_fortunate_descent(
         idx = np.asarray(b, dtype=int)
         return float(M[np.ix_(idx, idx)].sum())
 
-    best = None
+    best_improving = None
+    best_feasible = None
 
     for K_used in K_candidates:
         K_used = int(K_used)
@@ -1823,9 +1844,23 @@ def modular_very_fortunate_descent(
                 "seed": int(seed),
             }
 
-            if best is None or meta["objective_B_sum"] > best[1]["objective_B_sum"]:
-                best = (Z, meta)
+            candidate = (Z, meta)
+            candidate_Q = float(meta["objective_B_sum"])
 
+            if (
+                best_feasible is None
+                or candidate_Q > float(best_feasible[1]["objective_B_sum"])
+            ):
+                best_feasible = candidate
+
+            if candidate_Q > reference_Q + 1e-12:
+                if (
+                    best_improving is None
+                    or candidate_Q > float(best_improving[1]["objective_B_sum"])
+                ):
+                    best_improving = candidate
+
+    best = best_improving if best_improving is not None else best_feasible
     if best is None:
         if use_K_constraint:
             alt_Ks = tuple(sorted({k for k in range(max(2, int(K or 2)), max(3, int(K or 2) + 8), 2)}))

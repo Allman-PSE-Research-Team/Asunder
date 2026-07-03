@@ -14,10 +14,12 @@ from asunder.base.algorithms.core_periphery import (
     detect_continuous_KL,
     find_core_advanced,
 )
+from asunder.base.algorithms.modular_VFD import modular_very_fortunate_descent
 from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import compute_f_star
 from asunder.base.column_generation.subproblem import solve_subproblem
 from asunder.base.utils.graph import expand_z_matrix
+from asunder.load_balancing.algorithms.VFD import very_fortunate_descent
 from asunder.load_balancing.utils.partition_generation import (
     assign_from_order_with_links_range,
     make_partitions_random,
@@ -261,6 +263,44 @@ def test_run_modularity_default_call_succeeds():
 
     assert z.shape == A.shape
     assert np.isfinite(metric)
+
+
+def test_vfd_returns_feasible_fallback_when_reference_score_is_unattainable():
+    """VFD keeps the best feasible repair even if it cannot beat the reference."""
+    n = 4
+    A = np.ones((n, n), dtype=float) - np.eye(n, dtype=float)
+    a = A.sum(axis=1)
+    m = float(a.sum())
+    reference = np.ones((n, n), dtype=float)
+    reference_Q = compute_f_star(A, a, m, reference) * m
+
+    common_kwargs = dict(
+        wz=reference,
+        A=A,
+        a=a,
+        m=m,
+        K=2,
+        R=0,
+        must_link=[],
+        cannot_link=[],
+        seed=7,
+        restarts=1,
+        local_iters=0,
+        clustering_Ks=(2,),
+        clustering_methods=(),
+        wz_is_C_node=True,
+        tabu_max_steps=1,
+        shake_rounds=1,
+    )
+
+    for out in (
+        modular_very_fortunate_descent(**common_kwargs),
+        very_fortunate_descent(**common_kwargs),
+    ):
+        assert out is not None
+        z, meta = out
+        assert np.all(z.sum(axis=1) == 2)
+        assert meta["objective_B_sum"] < reference_Q
 
 
 def test_core_periphery_seed_none_uses_local_rng():
