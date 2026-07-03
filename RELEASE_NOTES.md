@@ -1,5 +1,15 @@
 # Release Notes
 
+## v0.2.5 - 2026-07-03
+
+### Changed:
+- Implemented a two-tier incumbent policy for the VFD algorithm
+  - `modular_VFD.py`: added shared unnormalized reference scoring helper.
+  - `modular_VFD.py` and `VFD.py`: track `best_improving` and `best_feasible` separately, returning the improving incumbent first and the feasible fallback otherwise.
+  - `test_review_edge_cases.py`: added regression coverage for an unattainably good reference partition.
+### Fixed
+- Fixed `leidenalg` `signed_leiden`'s metric computation bug.
+
 ## v0.2.4 - 2026-06-28
 
 ### Changed
