@@ -1,5 +1,24 @@
 # Release Notes
 
+## v0.2.6 - 2026-07-03
+
+### Added
+- Added `project_partition_ilp`, a load-balancing feasibility projection that
+  maps a fractional or starting partition to the nearest feasible exact-`K`
+  load-balanced partition under must-link, cannot-link, and size constraints.
+- Added `projection_repair` and `projection_time_limit` to `LoadBalancer`.
+  Projection repair runs only after the final post-loop VFD refinement fails,
+  with a default 15-second best-effort solver time limit.
+- Added regression coverage for projection feasibility, fixed-`K` rejection,
+  and solver-parameter usage in solver-backed tests.
+
+### Changed
+- Documented feasibility projection as a general custom-refinement pattern for
+  constrained partitioning, with load balancing as the current concrete
+  implementation.
+- Kept VFD as the normal load-balancing refinement path while using projection
+  only as a final feasible repair option.
+
 ## v0.2.5 - 2026-07-03
 
 ### Changed:

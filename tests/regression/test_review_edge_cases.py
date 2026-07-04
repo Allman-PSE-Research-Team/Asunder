@@ -19,13 +19,13 @@ from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import compute_f_star
 from asunder.base.column_generation.subproblem import solve_subproblem
 from asunder.base.utils.graph import expand_z_matrix
-from asunder.load_balancing.algorithms.VFD import very_fortunate_descent
 from asunder.load_balancing.algorithms.projection import project_partition_ilp
+from asunder.load_balancing.algorithms.VFD import very_fortunate_descent
 from asunder.load_balancing.utils.partition_generation import (
     assign_from_order_with_links_range,
     make_partitions_random,
 )
-from asunder.types import DecompositionResult, IterationRecord
+from asunder.types import DecompositionResult
 
 
 def _small_graph():

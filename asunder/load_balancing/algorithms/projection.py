@@ -64,7 +64,17 @@ def project_partition_ilp(
     must-link, cannot-link, and load-balance constraints.
     """
     try:
-        from pyomo.environ import Binary, ConcreteModel, ConstraintList, Objective, RangeSet, Set, Var, maximize, value
+        from pyomo.environ import (
+            Binary,
+            ConcreteModel,
+            ConstraintList,
+            Objective,
+            RangeSet,
+            Set,
+            Var,
+            maximize,
+            value,
+        )
     except Exception:
         return None
 

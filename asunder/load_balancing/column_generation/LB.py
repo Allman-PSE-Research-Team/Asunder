@@ -10,8 +10,8 @@ from asunder.base.column_generation.subproblem import (
 )
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
 from asunder.config import CSDDecompositionConfig
-from asunder.load_balancing.algorithms.VFD import refine_partition
 from asunder.load_balancing.algorithms.projection import project_partition_ilp
+from asunder.load_balancing.algorithms.VFD import refine_partition
 from asunder.load_balancing.column_generation.master import solve_master_problem
 from asunder.load_balancing.utils.partition_generation import (
     make_partitions,
