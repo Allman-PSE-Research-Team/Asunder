@@ -11,35 +11,147 @@ from asunder.base.column_generation.subproblem import (
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
 from asunder.config import CSDDecompositionConfig
 from asunder.load_balancing.algorithms.VFD import refine_partition
+from asunder.load_balancing.algorithms.projection import project_partition_ilp
 from asunder.load_balancing.column_generation.master import solve_master_problem
 from asunder.load_balancing.utils.partition_generation import (
     make_partitions,
     make_partitions_random,
 )
 from asunder.orchestrator import run_csd_decomposition
+from asunder.solvers import get_default_solver
 from asunder.types import DecompositionResult
 
 _CUSTOM_HEURISTIC_ALGOS = {"spectral", "full_louvain", "RCCS"}
 
+
+def _is_gurobi_solver(solver) -> bool:
+    names = [
+        getattr(solver, "type", ""),
+        getattr(solver, "name", ""),
+        solver.__class__.__name__,
+    ]
+    return any("gurobi" in str(name).lower() for name in names)
+
+
+def _temporarily_apply_projection_time_limit(solver, projection_time_limit):
+    if projection_time_limit is None or not _is_gurobi_solver(solver):
+        return lambda: None, False
+
+    options = getattr(solver, "options", None)
+    if options is None:
+        return lambda: None, False
+
+    had_option = "TimeLimit" in options
+    old_value = options.get("TimeLimit")
+    options["TimeLimit"] = float(projection_time_limit)
+
+    def restore():
+        if had_option:
+            options["TimeLimit"] = old_value
+        else:
+            try:
+                del options["TimeLimit"]
+            except KeyError:
+                pass
+
+    return restore, True
+
+
+def _post_loop_refinement_succeeded(result: DecompositionResult) -> bool:
+    if not result.records:
+        return False
+    final_record = result.records[-1]
+    return final_record.sub_obj_val is None and final_record.heuristic_col is not None
+
+
+def _last_master_fractional_partition(result: DecompositionResult):
+    for record in reversed(result.records):
+        if record.lambda_sol is None or not record.columns:
+            continue
+        wz = np.zeros_like(record.columns[0], dtype=float)
+        for lambda_, column in zip(record.lambda_sol, record.columns):
+            wz += float(lambda_) * np.asarray(column, dtype=float)
+        return wz, record
+    return None, None
+
+
+def _project_after_failed_post_loop_refinement(
+    *,
+    result: DecompositionResult,
+    A,
+    a,
+    m,
+    K,
+    R,
+    R_bounds,
+    must_link,
+    cannot_link,
+    seed,
+    projection_time_limit,
+):
+    if _post_loop_refinement_succeeded(result):
+        return None
+
+    wz, _ = _last_master_fractional_partition(result)
+    if wz is None:
+        return None
+
+    try:
+        solver = get_default_solver()
+    except Exception:
+        return None
+
+    restore_time_limit, time_limit_applied = _temporarily_apply_projection_time_limit(
+        solver,
+        projection_time_limit,
+    )
+    try:
+        projected = project_partition_ilp(
+            wz=wz,
+            A=A,
+            a=a,
+            m=m,
+            K=K,
+            R=R,
+            R_bounds=R_bounds,
+            must_link=must_link,
+            cannot_link=cannot_link,
+            seed=seed,
+            solver=solver,
+        )
+    finally:
+        restore_time_limit()
+
+    if projected is None:
+        return None
+
+    repaired_z, meta = projected
+    meta["projection_time_limit"] = None if projection_time_limit is None else float(projection_time_limit)
+    meta["projection_time_limit_applied"] = bool(time_limit_applied)
+    return repaired_z, meta
+
+
 def LoadBalancer(
-    G, 
-    R=1, 
-    K=2, 
-    R_bounds=None, 
-    algorithm="greedy", 
-    package="networkx", 
-    ifc_generator="random", 
-    seed=42, 
+    G,
+    R=1,
+    K=2,
+    R_bounds=None,
+    algorithm="greedy",
+    package="networkx",
+    ifc_generator="random",
+    seed=42,
     must_link=[],
     cannot_link=[],
     refine_post_loop=True,
+    projection_repair=False,
+    projection_time_limit=15.0,
     max_iterations=None,
     disable_tqdm=False,
     verbose=-1
 ) -> DecompositionResult:
     """
     Solve the load-balanced structure detection problem using Asunder's column generation workflow.
-    
+
     Parameters
     ----------
     G : nx.Graph
@@ -88,6 +200,12 @@ def LoadBalancer(
         List of node pairs that must not be together.
     refine_post_loop : bool
         Whether to run post-loop refinement after column generation terminates.
+    projection_repair : bool
+        If True, project the refinement input to the nearest feasible
+        load-balanced partition when VFD refinement returns ``None``.
+    projection_time_limit : float or None
+        Best-effort solver time limit in seconds for ``projection_repair``.
+        Applied only to supported solver backends.
     max_iterations : int or None
         Maximum number of column-generation iterations. ``None`` runs until convergence.
     disable_tqdm : bool
@@ -97,7 +215,7 @@ def LoadBalancer(
         ``-1``: No output
         ``False`` | ``0``: Minimal output
         ``True`` | ``1``: Detailed output
-    
+
     Returns
     -------
     DecompositionResult
@@ -113,6 +231,9 @@ def LoadBalancer(
     # normalize constraint labels
     must_link = [(label_node_map[i], label_node_map[j]) for i, j in must_link]
     cannot_link = [(label_node_map[i], label_node_map[j]) for i, j in cannot_link]
+
+    if projection_time_limit is not None and float(projection_time_limit) < 0:
+        raise ValueError("projection_time_limit must be nonnegative or None.")
 
     # preprocess R_bounds if available for load balancing usecases to handle different cases
     if R_bounds is not None:
@@ -130,7 +251,7 @@ def LoadBalancer(
             R_bounds = (R_min, R_max)
 
     ifc_params = {
-        "num": 1, 
+        "num": 1,
         "args": {"must_link": must_link, "cannot_link": cannot_link, "R_bounds": R_bounds}
     }
     if ifc_generator == "ordered":
@@ -180,10 +301,33 @@ def LoadBalancer(
         master_fn=solve_master_problem,
         subproblem_fn=custom_heuristic_subproblem if algorithm in _CUSTOM_HEURISTIC_ALGOS else heuristic_subproblem,
     )
-    elapsed = time.perf_counter() - start
     if result.final_partition is None:
         raise RuntimeError("Column generation failed due to infeasbility (No feasible initial columns could be generated or RMP is infeasible).")
 
+    projection_repair_meta = []
+    if projection_repair and refine_post_loop:
+        if not disable_tqdm:
+            print("Trying a projection into the feasible space...")
+        projected = _project_after_failed_post_loop_refinement(
+            result=result,
+            A=A,
+            a=a,
+            m=m,
+            K=K,
+            R=R,
+            R_bounds=R_bounds,
+            must_link=must_link,
+            cannot_link=cannot_link,
+            seed=seed,
+            projection_time_limit=projection_time_limit,
+        )
+        if projected is not None:
+            repaired_z, meta = projected
+            result.final_partition = repaired_z
+            result.final_master_obj = None
+            projection_repair_meta.append(meta)
+
+    elapsed = time.perf_counter() - start
     z = result.final_partition
     community_map, _ = group_nodes_by_community(np.array(z))
     community_map_labels = map_community_labels(community_map, node_label_map)
@@ -192,5 +336,7 @@ def LoadBalancer(
         "modularity": compute_f_star(A, a, m, z),
         "execution_time": elapsed
     })
+    if projection_repair_meta:
+        result.metadata["projection_repairs"] = projection_repair_meta
 
     return result

@@ -20,11 +20,12 @@ from asunder.base.column_generation.master import compute_f_star
 from asunder.base.column_generation.subproblem import solve_subproblem
 from asunder.base.utils.graph import expand_z_matrix
 from asunder.load_balancing.algorithms.VFD import very_fortunate_descent
+from asunder.load_balancing.algorithms.projection import project_partition_ilp
 from asunder.load_balancing.utils.partition_generation import (
     assign_from_order_with_links_range,
     make_partitions_random,
 )
-from asunder.types import DecompositionResult
+from asunder.types import DecompositionResult, IterationRecord
 
 
 def _small_graph():
@@ -236,6 +237,22 @@ class _FakeSolver:
         return SimpleNamespace(solver=SimpleNamespace(termination_condition=None))
 
 
+class _FakeProjectionSolver:
+    """Pyomo solver stub that returns a caller-provided component assignment."""
+
+    def __init__(self, assignment):
+        self.assignment = list(assignment)
+
+    def solve(self, model, tee=False):
+        for c in model.C:
+            for g in model.G:
+                model.x[c, g].set_value(1 if self.assignment[int(c)] == int(g) else 0)
+        for p in model.P:
+            for g in model.G:
+                model.y[p, g].set_value(0)
+        return SimpleNamespace(solver=SimpleNamespace(termination_condition="optimal"))
+
+
 def test_exact_pricing_subproblem_builds_without_diagonal_z_variables():
     """Regression coverage for z[i, i] lookups in the exact pricing model."""
     A, a, m, _ = _small_graph()
@@ -246,6 +263,52 @@ def test_exact_pricing_subproblem_builds_without_diagonal_z_variables():
     assert np.all(np.diag(z) == 1)
     assert np.all(z == z.T)
 
+
+def test_projection_ilp_returns_strict_k_load_balanced_partition():
+    """Projection returns the solver-provided feasible exact-K repair."""
+    n = 4
+    A = np.ones((n, n), dtype=float) - np.eye(n, dtype=float)
+    a = A.sum(axis=1)
+    m = float(a.sum())
+    wz = np.ones((n, n), dtype=float)
+
+    out = project_partition_ilp(
+        wz=wz,
+        A=A,
+        a=a,
+        m=m,
+        K=2,
+        R=0,
+        solver=_FakeProjectionSolver([0, 0, 1, 1]),
+    )
+
+    assert out is not None
+    z, meta = out
+    assert np.all(z.sum(axis=1) == 2)
+    assert meta["K_used"] == 2
+    assert meta["requested_K"] == 2
+    assert meta["feasibility_fallback"] == "projection_ilp"
+    assert meta["projection_wz_score"] == pytest.approx(4.0)
+
+
+def test_projection_ilp_rejects_infeasible_strict_k_before_solving():
+    """Projection does not relax K when fixed K/R bounds cannot cover N."""
+    n = 4
+    A = np.ones((n, n), dtype=float) - np.eye(n, dtype=float)
+    a = A.sum(axis=1)
+    m = float(a.sum())
+
+    out = project_partition_ilp(
+        wz=np.ones((n, n), dtype=float),
+        A=A,
+        a=a,
+        m=m,
+        K=3,
+        R=0,
+        solver=_FakeProjectionSolver([0, 1, 2, 2]),
+    )
+
+    assert out is None
 
 def test_zero_edge_graphs_raise_clear_value_error():
     """Regression coverage for NaN-producing zero-edge objective evaluation."""
