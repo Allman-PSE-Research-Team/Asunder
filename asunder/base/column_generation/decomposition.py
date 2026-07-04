@@ -308,6 +308,8 @@ def CSD_decomposition(
                     break
     # generate heuristic column using wz after CG terminates and add it to results
     if use_refined_column and refine_post_loop:
+        if not disable_tqdm:
+            print("Running post-loop refinement...")
         wz = np.zeros_like(Z_star[0]).astype(np.float64)
         for lambda_, column in zip(lambda_sol, Z_star):
             wz += (lambda_ * column)
