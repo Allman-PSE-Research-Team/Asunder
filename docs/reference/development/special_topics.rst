@@ -100,6 +100,14 @@ Use refinement in ``asunder.base`` only when the logic is reusable. Keep
 workflow-specific refinement in application packages such as
 ``asunder.load_balancing`` or ``asunder.nlbnp``.
 
+For constrained partitioning extensions, a custom refinement function can also
+call a feasibility projection directly instead of a local-search refinement such
+as VFD. This is useful when the move logic is too specialized for a new
+constraint combination: project the incoming partition onto the nearest feasible
+partition under the desired constraints first, and only modify or extend
+``modular_VFD`` if that projection is not expressive enough. The load-balancing
+projection is one concrete instance of this pattern.
+
 Generic NLBNP Workflow Contract
 -------------------------------
 
@@ -110,7 +118,7 @@ label-aware metadata.
 
 Use ``asunder.nlbnp.NonlinearBranchAndPrice`` when you already have a graph or
 adjacency matrix and want the NLBNP column-generation workflow without a packaged
-case-study builder, especially when the community structure is beyond the direct 
+case-study builder, especially when the community structure is beyond the direct
 core-periphery logic. The workflow accepts:
 
 - ``networkx.Graph`` inputs with labeled ``worthy_edges``, ``must_link``, and
