@@ -1,8 +1,9 @@
 """Graph and partition utility exports used across Asunder."""
 
 from asunder.base.utils.graph import (
-    contract_adj_matrix_cp,
     contract_adj_matrix_new,
+    contract_node_pairs,
+    contract_partition_matrix,
     expand_z_matrix,
     group_nodes_by_community,
     partition_matrix_to_vector,
@@ -15,8 +16,9 @@ from asunder.base.utils.partition_generation import (
 )
 
 __all__ = [
-    "contract_adj_matrix_cp",
     "contract_adj_matrix_new",
+    "contract_node_pairs",
+    "contract_partition_matrix",
     "expand_z_matrix",
     "group_nodes_by_community",
     "make_partitions_links_only",

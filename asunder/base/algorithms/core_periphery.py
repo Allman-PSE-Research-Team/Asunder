@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import networkx as nx
@@ -1060,6 +1061,7 @@ def partition_periphery_components(
     core_periphery: np.ndarray | list[int],
     *,
     core_is: int | None = 0,
+    must_link: Sequence[tuple[int, int]] | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
     Build community labels and assignment matrix after collapsing all core nodes
@@ -1077,6 +1079,10 @@ def partition_periphery_components(
     core_is : {0,1} or None, default=0
         If a (N,2) matrix is provided, index of the core column.
         Ignored for 1D vector input.
+    must_link : sequence of tuple[int, int], optional
+        Original-node index pairs that must remain in the same final
+        community. Periphery pairs are added to the component graph; core
+        pairs already share community ``0``.
 
     Returns
     -------
@@ -1099,9 +1105,29 @@ def partition_periphery_components(
     if core_mask.shape[0] != n_nodes:
         raise ValueError(f"core_periphery length {core_mask.shape[0]} != number of nodes {n_nodes}.")
 
+    normalized_links = set()
+    for source, target in must_link or []:
+        source, target = int(source), int(target)
+        if not (0 <= source < n_nodes and 0 <= target < n_nodes):
+            raise ValueError(
+                f"must_link pair {(source, target)} contains an invalid node index."
+            )
+        if core_mask[source] != core_mask[target]:
+            raise ValueError(
+                f"must_link pair {(source, target)} crosses the detected "
+                "core-periphery boundary."
+            )
+        if source != target:
+            normalized_links.add(tuple(sorted((source, target))))
+
     core_nodes = np.flatnonzero(core_mask).tolist()
     periph_nodes = np.flatnonzero(~core_mask).tolist()
     periph_subgraph = graph.subgraph(periph_nodes).copy()
+    periph_subgraph.add_edges_from(
+        pair
+        for pair in normalized_links
+        if not core_mask[pair[0]]
+    )
     components = list(nx.connected_components(periph_subgraph))
 
     labels = np.full(n_nodes, -1, dtype=int)

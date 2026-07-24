@@ -19,6 +19,7 @@ from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import compute_f_star
 from asunder.base.column_generation.subproblem import solve_subproblem
 from asunder.base.utils.graph import expand_z_matrix
+from asunder.base.utils.partition_generation import make_simple_partition
 from asunder.load_balancing.algorithms.projection import project_partition_ilp
 from asunder.load_balancing.algorithms.VFD import very_fortunate_descent
 from asunder.load_balancing.utils.partition_generation import (
@@ -141,7 +142,10 @@ def test_final_master_infeasibility_records_no_partition():
 
 def test_contract_final_master_infeasibility_expands_none():
     """Regression coverage for contracted final infeasibility with z_sol=None."""
-    A, a, m, Z = _small_graph()
+    A = nx.to_numpy_array(nx.path_graph(3), dtype=float)
+    a = A.sum(axis=1)
+    m = float(A.sum())
+    Z = np.ones((3, 3), dtype=int)
 
     def master_final_infeasible(A, a, m, Z_star, f_stars, extract_dual=False, **kwargs):
         if extract_dual:
@@ -168,6 +172,137 @@ def test_contract_final_master_infeasibility_expands_none():
 
     assert out[-1]["z_sol"] is None
     assert expand_z_matrix(None, np.array([0, 0])) is None
+
+
+def test_contracted_decomposition_maps_cannot_links_for_initial_columns():
+    """Contracted master and initial columns receive component-level pairs."""
+    A = nx.to_numpy_array(nx.path_graph(4), dtype=float)
+    captured = {}
+
+    def master(A, a, m, Z_star, f_stars, cannot_link=None, extract_dual=False, **kwargs):
+        captured["shape"] = A.shape
+        captured["cannot_link"] = cannot_link
+        captured["initial_column"] = np.asarray(Z_star[0]).copy()
+        return [1.0], {"mu_dual": 0.0}, float(f_stars[0])
+
+    out = CSD_decomposition(
+        A,
+        A.sum(axis=1),
+        float(A.sum()),
+        master,
+        _subproblem_eye,
+        must_link=[(0, 1)],
+        cannot_link=[(0, 3)],
+        contract_graph=True,
+        extract_dual=True,
+        ifc_params={
+            "generator": make_simple_partition,
+            "num": 1,
+            "args": {"N": 4, "cannot_link": [(0, 3)]},
+        },
+        final_master_solve=False,
+        max_iterations=0,
+        disable_tqdm=True,
+        verbose=-1,
+    )
+
+    assert captured["shape"] == (3, 3)
+    assert captured["cannot_link"] == [(0, 2)]
+    assert captured["initial_column"].shape == (3, 3)
+    assert captured["initial_column"][0, 2] == 0
+    assert out[-1]["z_sol"].shape == (4, 4)
+    assert out[-1]["z_sol"][0, 1] == 1
+
+
+def test_contracted_decomposition_transforms_and_rescores_warm_start():
+    """Original-dimension warm starts enter the master in coarse dimensions."""
+    A = nx.to_numpy_array(nx.path_graph(4), dtype=float)
+    warm_start = np.equal.outer(
+        np.array([0, 0, 1, 1]),
+        np.array([0, 0, 1, 1]),
+    ).astype(int)
+    captured = {}
+
+    def master(A, a, m, Z_star, f_stars, extract_dual=False, **kwargs):
+        captured["A"] = np.asarray(A).copy()
+        captured["a"] = np.asarray(a).copy()
+        captured["m"] = float(m)
+        captured["column"] = np.asarray(Z_star[0]).copy()
+        captured["score"] = float(f_stars[0])
+        return [1.0], {"mu_dual": 0.0}, float(f_stars[0])
+
+    out = CSD_decomposition(
+        A,
+        A.sum(axis=1),
+        float(A.sum()),
+        master,
+        _subproblem_eye,
+        columns=[warm_start],
+        f_stars=[12345.0],
+        must_link=[(0, 1)],
+        contract_graph=True,
+        extract_dual=True,
+        final_master_solve=False,
+        max_iterations=0,
+        disable_tqdm=True,
+        verbose=-1,
+    )
+
+    assert captured["column"].shape == (3, 3)
+    assert captured["score"] == pytest.approx(
+        compute_f_star(
+            captured["A"],
+            captured["a"],
+            captured["m"],
+            captured["column"],
+        )
+    )
+    assert captured["score"] != 12345.0
+    assert np.array_equal(out[-1]["z_sol"], expand_z_matrix(np.eye(3), np.array([0, 0, 1, 2])))
+
+
+def test_contracted_single_component_short_circuits_pricing():
+    """A one-component coarse graph has exactly one feasible partition."""
+    A, a, m, _ = _small_graph()
+
+    def unexpected_call(*args, **kwargs):
+        raise AssertionError("The master and pricing problems should be skipped.")
+
+    out = CSD_decomposition(
+        A,
+        a,
+        m,
+        unexpected_call,
+        unexpected_call,
+        must_link=[(0, 1)],
+        contract_graph=True,
+        disable_tqdm=True,
+        verbose=-1,
+    )
+
+    assert len(out) == 1
+    assert np.array_equal(out[0]["z_sol"], np.ones((2, 2), dtype=int))
+    assert np.array_equal(out[0]["columns"][0], np.ones((1, 1), dtype=int))
+    assert out[0]["lambda_sol"] == [1.0]
+
+
+def test_load_balancing_contraction_is_explicitly_unsupported():
+    """Component cardinalities require vertex weights before LB contraction."""
+    A, a, m, _ = _small_graph()
+
+    with pytest.raises(ValueError, match="component-size vertex weights"):
+        CSD_decomposition(
+            A,
+            a,
+            m,
+            _master_ok,
+            _subproblem_eye,
+            must_link=[(0, 1)],
+            additional_constraints={"LB": True, "K": 1, "R": 0},
+            contract_graph=True,
+            disable_tqdm=True,
+            verbose=-1,
+        )
 
 
 def test_decomposition_accepts_wrapped_heuristic_callables():

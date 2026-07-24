@@ -25,7 +25,11 @@ class CSDDecompositionConfig:
     additional_constraints : dict[str, Any]
         Constraints beyond must- and cannot-links. For example, worthy edges (edges that can connect communities), community size, and balance constraints.
     contract_graph : bool
-        Boolean that determines whether must links are handled via graph contraction or not.
+        Whether must-links are handled through graph contraction. Compatible
+        cannot-links, initial-column constraints, and warm starts are mapped
+        to contracted components automatically. Contraction is currently
+        unsupported for load-balancing decompositions because component-size
+        vertex weights are not yet propagated.
     stopping_window : int
         Maximum number of allowed stagnant CG iterations. After this, CG is terminated.
     check_flat_pricing : bool
