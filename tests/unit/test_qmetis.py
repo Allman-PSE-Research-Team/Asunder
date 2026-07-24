@@ -29,12 +29,21 @@ def test_quantize_metis_weights_preserves_symmetry_and_relative_order():
 
 
 def test_quantize_metis_weights_honors_accumulated_weight_budget():
-    weights = np.array([[0.0, 10.0], [10.0, 0.0]])
+    weights = np.array([[0.0, 1_000.0], [1_000.0, 0.0]])
 
     quantized, _ = quantize_metis_weights(weights, safe_total=1_000)
 
     assert int(quantized.sum()) <= 1_000
     assert quantized[0, 1] == quantized[1, 0] == 500
+
+
+def test_quantize_metis_weights_preserves_safe_integer_valued_floats():
+    weights = np.array([[0.0, 2.0, 5.0], [2.0, 0.0, 3.0], [5.0, 3.0, 0.0]])
+
+    quantized, scale = quantize_metis_weights(weights)
+
+    assert np.array_equal(quantized, weights.astype(np.int64))
+    assert scale == 1.0
 
 
 @pytest.mark.parametrize(

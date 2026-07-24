@@ -166,10 +166,11 @@ def quantize_metis_weights(
 ) -> tuple[np.ndarray, float]:
     """Quantize loop-free QMETIS edge weights within an ``idx_t`` budget.
 
-    The scale preserves approximately ``relative_resolution`` of the largest
-    edge while keeping the sum of the directed METIS adjacency weights below
-    ``safe_total``. The released ``idx64-real32`` ABI motivates keeping the
-    total well inside signed 64-bit range and double's exact-integer range.
+    Already integer-valued weights are preserved when their directed total is
+    within ``safe_total``. Otherwise, the scale preserves approximately
+    ``relative_resolution`` of the largest edge while respecting that budget.
+    The released ``idx64-real32`` ABI motivates keeping the total well inside
+    signed 64-bit range and double's exact-integer range.
 
     Parameters
     ----------
@@ -239,6 +240,15 @@ def quantize_metis_weights(
     positive_weights = edge_weights[positive]
     max_weight = float(positive_weights.max())
     directed_total = 2.0 * float(positive_weights.sum(dtype=np.float64))
+    if max_weight < 2**63 and np.all(edge_weights == np.rint(edge_weights)):
+        integer_edges = edge_weights.astype(np.int64)
+        integer_total = 2 * sum(map(int, integer_edges[positive]))
+        if integer_total <= safe_total:
+            quantized = np.zeros(matrix.shape, dtype=np.int64)
+            quantized[rows, columns] = integer_edges
+            quantized[columns, rows] = integer_edges
+            return quantized, 1.0
+
     precision_scale = 1.0 / (relative_resolution * max_weight)
     capacity_scale = float(safe_total) / directed_total
     scale = min(precision_scale, capacity_scale)
