@@ -5,3 +5,4 @@ Load Balancing Algorithms
    :maxdepth: 1
 
    VFD
+   qmetis

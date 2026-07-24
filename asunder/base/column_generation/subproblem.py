@@ -16,6 +16,10 @@ from asunder.base.algorithms.louvain_modified import ModifiedLouvain
 from asunder.base.algorithms.RCCS import search_partition_by_reduced_cost
 from asunder.base.algorithms.spectral import full_spectral_bisection
 from asunder.base.column_generation.master import compute_f_star
+from asunder.base.column_generation.pricing import (
+    build_dual_weight_matrix,
+    compute_reduced_cost,
+)
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
 from asunder.solvers import get_default_solver
 
@@ -84,21 +88,7 @@ def heuristic_subproblem(
     Any
         Computed result.
     """
-    I = A.shape[0]
-    dualW = np.zeros_like(A)
-    constant_terms = 0
-    for _, dual in duals.items():
-        if isinstance(dual, np.ndarray):
-            if dual.ndim == 1:
-                temp_dual = np.zeros_like(A)
-                for i in range(I):
-                    for j in range(I):
-                        temp_dual[i, j] = 0.5 * (dual[i] + dual[j])
-                dualW += temp_dual
-            elif dual.ndim == 2:
-                dualW += dual if np.array_equal(dual, dual.T) else (dual + dual.T) / 2
-        elif isinstance(dual, float):
-            constant_terms += dual
+    dualW, constant_terms = build_dual_weight_matrix(A, duals)
 
     modA = A - (m * dualW)
     mod_a = modA.sum(axis=0)
@@ -135,8 +125,17 @@ def heuristic_subproblem(
             modB_p = (modA_positive / mod_m_p) - gamma * np.outer(mod_a_p, mod_a_p) / (mod_m_p**2)
             metric = np.sum(modB_p * zii)
     # TODO: algo param may be necessary if igraph algorithms require a different quality function.
-    metric = compute_f_star(A, a, m, zii, gamma=gamma) - np.sum(dualW * zii) if exact_rc else metric
-    sub_obj_val = metric - constant_terms
+    if exact_rc:
+        sub_obj_val = compute_reduced_cost(
+            A,
+            a,
+            m,
+            zii,
+            duals,
+            gamma=gamma,
+        )
+    else:
+        sub_obj_val = metric - constant_terms
     return sub_obj_val, zii
 
 
@@ -292,21 +291,7 @@ def custom_heuristic_subproblem(
     """
     # TODO: Add gamma parameter to algorithms and this top level function.
     assert algo in {"spectral", "full_louvain", "one_level_louvain", "RCCS"}
-    I = A.shape[0]
-    constant_terms = 0
-    dualW = np.zeros_like(A)
-    for _, dual in duals.items():
-        if isinstance(dual, np.ndarray):
-            if dual.ndim == 1:
-                temp_dual = np.zeros_like(A)
-                for i in range(I):
-                    for j in range(I):
-                        temp_dual[i, j] = 0.5 * (dual[i] + dual[j])
-                dualW += temp_dual
-            elif dual.ndim == 2:
-                dualW += dual if np.array_equal(dual, dual.T) else (dual + dual.T) / 2
-        elif isinstance(dual, float):
-            constant_terms += dual
+    dualW, constant_terms = build_dual_weight_matrix(A, duals)
 
     if "louvain" in algo:
         louvain_model = ModifiedLouvain(random_state=seed)

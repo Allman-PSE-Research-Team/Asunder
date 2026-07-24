@@ -6,3 +6,4 @@ Load Balancing Column Generation
 
    LB
    master
+   subproblem

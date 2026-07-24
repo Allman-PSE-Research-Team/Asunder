@@ -63,6 +63,9 @@ class CSDDecompositionConfig:
         Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments.
     refine_params : dict[str, callable or dict]
         Refinement function and its corresponding arguments.
+    subproblem_params : dict[str, Any]
+        Keyword arguments supplied only to the selected pricing/subproblem
+        callable.
     use_refined_column : bool
         Boolean that determines whether refined columns are used in the main column generation loop or not.
     refine_post_loop : bool
@@ -96,6 +99,7 @@ class CSDDecompositionConfig:
     extract_dual: bool = False
     ifc_params: Dict[str, Any] = field(default_factory=dict)
     refine_params: Dict[str, Any] = field(default_factory=dict)
+    subproblem_params: Dict[str, Any] = field(default_factory=dict)
     use_refined_column: bool = False
     refine_post_loop: bool = True
     final_master_solve: bool = True

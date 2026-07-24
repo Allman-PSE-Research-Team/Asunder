@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 
 from asunder.base.column_generation.master import _require_pyomo
+from asunder.load_balancing.utils.balance import resolve_balance_bounds
 from asunder.solvers import get_default_solver
 
 try:
@@ -102,25 +101,13 @@ def solve_master_problem(
     model.C = Set(initialize=list(range(len(Z_star))))
 
     if LB:
-        # get community bound parameters R_min and R_max from input if possible
-        if R_bounds is None and K is not None:
-            # The number of communities K is used to define R_min and R_max.
-
-            # Below, we respect the range parameter: R_max = R_min + R
-            # Python rounds using "ties-to-even" (e.g., 1.5->2, 2.5->2) leading to X.5 being rounded to X if X is even.
-            # R_min below uses the floor function to simulate the more familiar "half-round-up." half_round_up(x) = ⌊x + 1/2⌋
-            # For very large integers, e.g. I >= 2**53+1, float operations can lose precision. In that case, use the integer-only formula:
-            # ⌊(I/K - R/2) + 1/2⌋ = ((2*I) - K*(R - 1)) // (2*K)
-            # We, however, do not anticipate such issues as a graph that big should only be looked at from afar.
-            if R==0:
-                if I % K != 0:
-                    raise ValueError("Infeasible R and K combination, given the number of nodes.")
-            R_min = max(1, math.floor((I/K - R/2) + 1/2))
-            R_max = R_min + R
-        elif R_bounds is not None:
-            R_min, R_max = R_bounds
-        else:
-            raise NotImplementedError()
+        if K is None:
+            raise ValueError("K is required when load-balancing constraints are active.")
+        if R == 0 and R_bounds is None and I % K != 0:
+            raise ValueError(
+                "Infeasible R and K combination, given the number of nodes."
+            )
+        R_min, R_max = resolve_balance_bounds(I, K, R, R_bounds)
 
     if extract_dual:
         model.lmbd = Var(model.C, domain=NonNegativeReals, bounds=(0, None), initialize=0)

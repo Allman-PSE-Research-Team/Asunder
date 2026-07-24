@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=70.1", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "put-asunder"
-version = "0.2.6"
+version = "0.3.0"
 description = "Asunder: Constrained Network Structure Detection on Undirected Graphs."
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -19,6 +19,7 @@ dependencies = [
   "tqdm>=4.66",
   "pyomo>=6.8",
   "gurobipy>=11.0",
+  "metis>=0.2a5",
 ]
 keywords = ["graph", "constrained-clustering", "graph-clustering", "community-detection", "core-periphery", "column-generation", "constrained-network-structure-detection", "branch-and-price"]
 classifiers = [
@@ -42,6 +43,7 @@ docs = [
   "sphinx-autodoc-typehints>=2.3",
 ]
 dev = [
+  "build>=1.2",
   "pytest>=8.3",
   "pytest-cov>=5.0",
   "ruff>=0.7",
@@ -61,11 +63,30 @@ include-package-data = true
 where = ["."]
 include = ["asunder*"]
 
+[tool.setuptools.package-data]
+"asunder.load_balancing.algorithms" = ["_qmetis_assets.json"]
+"asunder.load_balancing.algorithms._native" = [
+  "qmetis.dll",
+  "libqmetis.dylib",
+  "libqmetis.so",
+  "QMETIS-LICENSE",
+  "QMETIS-BUILD-INFO.txt",
+  "_qmetis_bundle.json",
+]
+
+[tool.setuptools.exclude-package-data]
+"asunder.load_balancing.algorithms._native" = [
+  "metis.dll",
+  "libmetis.dylib",
+  "libmetis.so",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
 markers = [
   "legacy: tests that require best-effort legacy dependencies",
+  "native: tests that require a bundled QMETIS native library",
   "solver: tests that require an available Pyomo solver backend",
 ]
 

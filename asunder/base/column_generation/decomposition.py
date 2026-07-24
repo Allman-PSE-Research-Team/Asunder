@@ -39,6 +39,7 @@ def CSD_decomposition(
     final_master_solve=True,
     max_iterations=1000, disable_tqdm=False,
     tolerance=1e-10, verbose=False,
+    subproblem_params: dict | None = None,
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
@@ -105,6 +106,8 @@ def CSD_decomposition(
         Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments (excluding seed values).
     refine_params : dict[str, callable or dict]
         Refinement function and its corresponding arguments (excluding seed values).
+    subproblem_params : dict[str, Any] or None
+        Additional keyword arguments passed to the pricing/subproblem callable.
     use_refined_column : bool
         Boolean that determines whether refined columns are used in the main column generation loop or not.
     refine_post_loop : bool
@@ -133,6 +136,9 @@ def CSD_decomposition(
     # drop seed values from parameters if included
     ifc_params.get("args", {}).pop('seed', None)
     refine_params.get("kwargs", {}).pop('seed', None)
+    subproblem_params = (
+        {} if subproblem_params is None else dict(subproblem_params)
+    )
 
     # cold start
     if columns is None:
@@ -218,27 +224,31 @@ def CSD_decomposition(
                 print("Master Obj:", master_obj_val)
                 print("lambda: ", lambda_sol)
 
-            if getattr(sp_function, "__name__", None) == "solve_subproblem":
-                # uses ILP subproblem
-                sub_obj_val, z_sol = sp_function(
-                    A, a, m, duals, verbose=verbose
-                )
-            else:
-                if algo in {"spectral", "full_louvain", "RCCS"}:
-                    # uses custom heuristic subproblem
-                    sub_obj_val, z_sol = sp_function(
-                        A, a, m, duals, algo=algo,
-                        verbose=verbose,
-                        seed=seed
-                    )
-                else:
-                    # uses package based heuristic subproblem
-                    sub_obj_val, z_sol = sp_function(
-                        A, a, m, duals,
-                        algo=algo, package=package,
-                        verbose=verbose,
-                        seed=seed
-                    )                
+            pricing_kwargs = {
+                "algo": algo,
+                "package": package,
+                "verbose": verbose,
+                "seed": seed,
+                **subproblem_params,
+            }
+            signature = inspect.signature(sp_function)
+            accepts_extra = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
+            )
+            if not accepts_extra:
+                pricing_kwargs = {
+                    name: value
+                    for name, value in pricing_kwargs.items()
+                    if name in signature.parameters
+                }
+            sub_obj_val, z_sol = sp_function(
+                A,
+                a,
+                m,
+                duals,
+                **pricing_kwargs,
+            )
 
             if verbose != -1:
                 print(f"Subproblem obj: {sub_obj_val}")

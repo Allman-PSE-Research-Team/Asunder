@@ -11,8 +11,13 @@ from asunder.base.column_generation.subproblem import (
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
 from asunder.config import CSDDecompositionConfig
 from asunder.load_balancing.algorithms.projection import project_partition_ilp
+from asunder.load_balancing.algorithms.qmetis import bundled_qmetis_release
 from asunder.load_balancing.algorithms.VFD import refine_partition
 from asunder.load_balancing.column_generation.master import solve_master_problem
+from asunder.load_balancing.column_generation.subproblem import (
+    qmetis_pricing_subproblem,
+)
+from asunder.load_balancing.utils.balance import resolve_balance_bounds
 from asunder.load_balancing.utils.partition_generation import (
     make_partitions,
     make_partitions_random,
@@ -174,6 +179,11 @@ def LoadBalancer(
             Modified but Louvain-like algorithm.
         ``"RCCS"``:
             This means Reduced Cost Community Search and is a greedy and local search heuristic for finding communities that maximize the reduced cost.
+        ``"qmetis"``:
+            Uses the bundled modularity QMETIS library as a load-balancing
+            pricing heuristic. Fractional dual-adjusted weights are safely
+            quantized for QMETIS and every candidate is rescored using
+            Asunder's original floating-point reduced-cost objective.
     package : str or None
         Package from which non-custom heuristic subproblem is selected. Package and algorithm options include:
 
@@ -235,20 +245,8 @@ def LoadBalancer(
     if projection_time_limit is not None and float(projection_time_limit) < 0:
         raise ValueError("projection_time_limit must be nonnegative or None.")
 
-    # preprocess R_bounds if available for load balancing usecases to handle different cases
     if R_bounds is not None:
-        R_min, R_max = R_bounds
-        if R_min is None and R_max is None:
-            # no bounds
-            R_bounds = None
-        else:
-            if R_min is None:
-                R_min = 1
-            if R_max is None:
-                R_max = np.shape(A)[0]
-            if R_min > R_max:
-                raise ValueError("Cardinality bounds are improperly defined.")
-            R_bounds = (R_min, R_max)
+        R_bounds = resolve_balance_bounds(A.shape[0], K, R, R_bounds)
 
     ifc_params = {
         "num": 1,
@@ -290,16 +288,28 @@ def LoadBalancer(
         ifc_params = ifc_params,
         # refinement
         refine_params=refine_params,
+        subproblem_params=(
+            {"K": K, "R": R, "R_bounds": R_bounds}
+            if algorithm == "qmetis"
+            else {}
+        ),
         use_refined_column=True,
         refine_post_loop=refine_post_loop,
         final_master_solve=False,
         max_iterations=max_iterations, tolerance=1e-8, verbose=verbose,
     )
+    if algorithm == "qmetis":
+        pricing_function = qmetis_pricing_subproblem
+    elif algorithm in _CUSTOM_HEURISTIC_ALGOS:
+        pricing_function = custom_heuristic_subproblem
+    else:
+        pricing_function = heuristic_subproblem
+
     result = run_csd_decomposition(
         A, a=a, m=m,
         config=config,
         master_fn=solve_master_problem,
-        subproblem_fn=custom_heuristic_subproblem if algorithm in _CUSTOM_HEURISTIC_ALGOS else heuristic_subproblem,
+        subproblem_fn=pricing_function,
     )
     if result.final_partition is None:
         raise RuntimeError("Column generation failed due to infeasbility (No feasible initial columns could be generated or RMP is infeasible).")
@@ -336,6 +346,8 @@ def LoadBalancer(
         "modularity": compute_f_star(A, a, m, z),
         "execution_time": elapsed
     })
+    if algorithm == "qmetis":
+        result.metadata["qmetis_release"] = bundled_qmetis_release()
     if projection_repair_meta:
         result.metadata["projection_repairs"] = projection_repair_meta
 
