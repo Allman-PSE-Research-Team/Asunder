@@ -11,6 +11,8 @@ from tqdm.auto import tqdm
 from asunder.base.column_generation.master import compute_f_star
 from asunder.base.utils.graph import (
     contract_adj_matrix_new,
+    contract_node_pairs,
+    contract_partition_matrix,
     expand_z_matrix,
     sufficiently_different,
 )
@@ -39,6 +41,7 @@ def CSD_decomposition(
     final_master_solve=True,
     max_iterations=1000, disable_tqdm=False,
     tolerance=1e-10, verbose=False,
+    subproblem_params: dict | None = None,
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
@@ -56,10 +59,13 @@ def CSD_decomposition(
     sp_function : callable
         Pricing subproblem which can be implemented as a ILP or a heuristic (custom / third-party) subproblem.
     columns : list[ndarray of int] or None
-        Existing columns. This parameter is typically active during Branch and Price.
+        Existing columns. This parameter is typically active during Branch and
+        Price. With ``contract_graph=True``, original-dimension columns must
+        respect every contracted component and are converted automatically.
     f_stars : list[float] or None
-        Objective values of the existing columns. 
-        This parameter is typically active during Branch and Price.
+        Objective values of the existing columns. This parameter is typically
+        active during Branch and Price. Scores are recomputed on the contracted
+        graph when contraction is active.
     must_link : list[tuple[int, int]]
         List of node pairs that must be together.
     cannot_link : list[tuple[int, int]]
@@ -67,7 +73,9 @@ def CSD_decomposition(
     additional_constraints : dict[str, Any]
         Constraints beyond must- and cannot-links. For example, worthy edges (edges that can connect communities), community size, and balance constraints.
     contract_graph : bool
-        Boolean that determines whether must links are handled via graph contraction or not.
+        Whether must-links are handled by graph contraction. Cannot-links and
+        initial-column constraints are mapped to component indices; a
+        cannot-link internal to one component is rejected as infeasible.
     stopping_window : int
         Maximum number of allowed stagnant CG iterations. After this, CG is terminated.
     check_flat_pricing : bool
@@ -105,6 +113,8 @@ def CSD_decomposition(
         Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments (excluding seed values).
     refine_params : dict[str, callable or dict]
         Refinement function and its corresponding arguments (excluding seed values).
+    subproblem_params : dict[str, Any] or None
+        Additional keyword arguments passed to the pricing/subproblem callable.
     use_refined_column : bool
         Boolean that determines whether refined columns are used in the main column generation loop or not.
     refine_post_loop : bool
@@ -129,10 +139,24 @@ def CSD_decomposition(
         Column-generation iteration records. Each dictionary may include
         ``lambda_sol``, dual terms, ``master_obj_val``, ``z_sol``,
         ``sub_obj_val``, ``columns``, ``f_stars``, and ``heuristic_col``.
+
+        When graph contraction is active, public ``z_sol`` values are expanded
+        to original-node dimensions. ``columns`` and ``heuristic_col`` remain
+        in contracted component dimensions, and ``f_stars`` score those
+        contracted columns. Each record also contains ``node2comp``, mapping
+        original node indices to contracted component indices.
     """
+    ifc_params = copy.deepcopy(ifc_params)
+    refine_params = copy.deepcopy(refine_params)
+    must_link = list(must_link or [])
+    cannot_link = list(cannot_link or [])
+
     # drop seed values from parameters if included
     ifc_params.get("args", {}).pop('seed', None)
     refine_params.get("kwargs", {}).pop('seed', None)
+    subproblem_params = (
+        {} if subproblem_params is None else dict(subproblem_params)
+    )
 
     # cold start
     if columns is None:
@@ -142,14 +166,77 @@ def CSD_decomposition(
         {} if additional_constraints is None else dict(additional_constraints)
     )
 
+    if contract_graph and additional_constraints.get("LB"):
+        # TODO: Support load-balancing contraction by carrying original
+        # component sizes as vertex weights through pricing and refinement.
+        raise ValueError(
+            "Graph contraction is not supported for load-balancing "
+            "decomposition until component-size vertex weights are implemented."
+        )
+
     # contract graph if necessary
     if contract_graph and (must_link or additional_constraints.get("worthy_edges")):
         A, node2comp = contract_adj_matrix_new(A, additional_constraints.get("worthy_edges"), must_link)
         a = A.sum(axis=0)
         m = np.sum(a)
         additional_constraints["worthy_edges"] = None
+        cannot_link = contract_node_pairs(
+            cannot_link,
+            node2comp,
+            relation_name="cannot-link",
+            reject_internal=True,
+        )
+
+        generator_args = ifc_params.get("args", {})
         if "N" in ifc_params.get("args", {}):
-            ifc_params["args"]["N"] = np.shape(A)[0]
+            generator_args["N"] = np.shape(A)[0]
+        if "cannot_link" in generator_args:
+            generator_args["cannot_link"] = contract_node_pairs(
+                generator_args["cannot_link"],
+                node2comp,
+                relation_name="initial-column cannot-link",
+                reject_internal=True,
+            )
+        if "must_link" in generator_args:
+            generator_args["must_link"] = []
+
+        if columns is not None and len(columns) > 0:
+            if f_stars is None:
+                raise ValueError(
+                    "Warm-start f_stars are required when columns are supplied."
+                )
+            if len(columns) != len(f_stars):
+                raise ValueError(
+                    "Warm-start columns and f_stars must have the same length."
+                )
+            columns = [
+                contract_partition_matrix(column, node2comp)
+                for column in columns
+            ]
+            # Recompute scores so the column pool and contracted objective
+            # cannot retain mismatched original-graph bookkeeping.
+            f_stars = [
+                compute_f_star(A, a, m, column)
+                for column in columns
+            ]
+
+        if A.shape == (1, 1):
+            coarse_partition = np.ones((1, 1), dtype=int)
+            score = (
+                compute_f_star(A, a, m, coarse_partition)
+                if m > 0
+                else 0.0
+            )
+            return [{
+                "lambda_sol": [1.0],
+                "master_obj_val": score,
+                "z_sol": expand_z_matrix(coarse_partition, node2comp),
+                "heuristic_col": None,
+                "sub_obj_val": None,
+                "columns": [coarse_partition],
+                "f_stars": [score],
+                "node2comp": node2comp.copy(),
+            }]
     else:
         node2comp = None
 
@@ -218,27 +305,31 @@ def CSD_decomposition(
                 print("Master Obj:", master_obj_val)
                 print("lambda: ", lambda_sol)
 
-            if getattr(sp_function, "__name__", None) == "solve_subproblem":
-                # uses ILP subproblem
-                sub_obj_val, z_sol = sp_function(
-                    A, a, m, duals, verbose=verbose
-                )
-            else:
-                if algo in {"spectral", "full_louvain", "RCCS"}:
-                    # uses custom heuristic subproblem
-                    sub_obj_val, z_sol = sp_function(
-                        A, a, m, duals, algo=algo,
-                        verbose=verbose,
-                        seed=seed
-                    )
-                else:
-                    # uses package based heuristic subproblem
-                    sub_obj_val, z_sol = sp_function(
-                        A, a, m, duals,
-                        algo=algo, package=package,
-                        verbose=verbose,
-                        seed=seed
-                    )                
+            pricing_kwargs = {
+                "algo": algo,
+                "package": package,
+                "verbose": verbose,
+                "seed": seed,
+                **subproblem_params,
+            }
+            signature = inspect.signature(sp_function)
+            accepts_extra = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
+            )
+            if not accepts_extra:
+                pricing_kwargs = {
+                    name: value
+                    for name, value in pricing_kwargs.items()
+                    if name in signature.parameters
+                }
+            sub_obj_val, z_sol = sp_function(
+                A,
+                a,
+                m,
+                duals,
+                **pricing_kwargs,
+            )
 
             if verbose != -1:
                 print(f"Subproblem obj: {sub_obj_val}")
@@ -373,4 +464,7 @@ def CSD_decomposition(
             "sub_obj_val": None, "columns": Z_star.copy(),
             "f_stars": f_stars
         })
+    if node2comp is not None:
+        for record in results:
+            record["node2comp"] = node2comp.copy()
     return results

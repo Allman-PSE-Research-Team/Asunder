@@ -431,7 +431,19 @@ def CorePeripheryPartition(
         verbose=verbose,
         seed=seed,
     )
-    community_labels, component_info = partition_periphery_components(A, core_labels)
+    grouping_pairs = list(unworthy_edge_idx)
+    if len(nonlinear_node_idx) > 1:
+        representative = nonlinear_node_idx[0]
+        grouping_pairs.extend(
+            (representative, node)
+            for node in nonlinear_node_idx[1:]
+        )
+    grouping_pairs = _unique_pairs(grouping_pairs)
+    community_labels, component_info = partition_periphery_components(
+        A,
+        core_labels,
+        must_link=grouping_pairs,
+    )
     community_map = {idx: int(label) for idx, label in enumerate(community_labels)}
     communities = component_info["community_node_indices"]
 

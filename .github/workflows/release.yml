@@ -1,0 +1,255 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish-testpypi:
+        description: Publish the validated artifacts to TestPyPI
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-version:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Match tag and project version
+        if: github.event_name == 'push'
+        run: python tools/check_release_version.py "${GITHUB_REF_NAME}"
+
+  linux-wheel:
+    needs: validate-version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build wheel auditwheel
+      - name: Stage pinned QMETIS asset
+        run: python tools/fetch_qmetis.py --platform linux-x86_64
+      - name: Build and validate Linux compatibility
+        run: |
+          python -m build --wheel --outdir dist
+          auditwheel show dist/*.whl
+          mkdir repaired
+          auditwheel repair --wheel-dir repaired dist/*.whl
+          python tools/verify_wheel.py repaired/*.whl --platform linux-x86_64
+      - name: Test installed wheel
+        run: |
+          python -m pip install repaired/*.whl highspy
+          cd "${RUNNER_TEMP}"
+          python "${GITHUB_WORKSPACE}/tools/qmetis_smoke.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-wheel
+          path: repaired/*.whl
+          if-no-files-found: error
+
+  windows-wheel:
+    needs: validate-version
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build wheel delvewheel
+      - name: Stage pinned QMETIS asset
+        run: python tools/fetch_qmetis.py --platform windows-x86_64
+      - name: Build and inspect Windows wheel
+        shell: pwsh
+        run: |
+          python -m build --wheel --outdir dist
+          $wheel = (Get-ChildItem dist\*.whl).FullName
+          python tools\verify_wheel.py $wheel --platform windows-x86_64
+          delvewheel show $wheel
+      - name: Test installed wheel
+        shell: pwsh
+        run: |
+          $wheel = (Get-ChildItem dist\*.whl).FullName
+          python -m pip install $wheel highspy
+          Set-Location $env:RUNNER_TEMP
+          python "$env:GITHUB_WORKSPACE\tools\qmetis_smoke.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
+  macos-wheel:
+    needs: validate-version
+    runs-on: macos-15
+    env:
+      ASUNDER_WHEEL_PLATFORM_TAG: macosx_11_0_universal2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build wheel delocate
+      - name: Stage pinned universal QMETIS asset
+        run: python tools/fetch_qmetis.py --platform macos-universal2
+      - name: Build and repair universal wheel
+        run: |
+          python -m build --wheel --outdir dist
+          mkdir repaired
+          delocate-wheel --require-archs x86_64,arm64 -w repaired -v dist/*.whl
+          python tools/verify_wheel.py repaired/*.whl --platform macos-universal2
+      - name: Test installed ARM64 slice
+        run: |
+          python -m pip install repaired/*.whl highspy
+          cd "${RUNNER_TEMP}"
+          python "${GITHUB_WORKSPACE}/tools/qmetis_smoke.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-wheel
+          path: repaired/*.whl
+          if-no-files-found: error
+
+  macos-intel-smoke:
+    needs: macos-wheel
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-wheel
+          path: wheelhouse
+      - name: Test installed Intel slice
+        run: |
+          python -m pip install wheelhouse/*.whl highspy
+          cd "${RUNNER_TEMP}"
+          python "${GITHUB_WORKSPACE}/tools/qmetis_smoke.py"
+
+  source-distribution:
+    needs: validate-version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build source distribution without native binaries
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist --outdir dist
+          python tools/verify_sdist.py dist/*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-distribution
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  validate-distributions:
+    needs:
+      - linux-wheel
+      - windows-wheel
+      - macos-wheel
+      - macos-intel-smoke
+      - source-distribution
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-wheel"
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-distribution
+          path: dist
+      - name: Check complete distribution set
+        run: |
+          python -m pip install --upgrade twine
+          test "$(find dist -maxdepth 1 -name '*.whl' | wc -l)" -eq 3
+          test "$(find dist -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 1
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  publish-pypi:
+    if: github.event_name == 'push'
+    needs: validate-distributions
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-testpypi:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish-testpypi
+    needs: validate-distributions
+    runs-on: ubuntu-22.04
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  github-release:
+    if: github.event_name == 'push'
+    needs: publish-pypi
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-distributions
+          path: dist
+      - name: Create distribution checksums
+        working-directory: dist
+        run: sha256sum ./* > SHA256SUMS
+      - name: Attest release distributions
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/* \
+              --verify-tag \
+              --generate-notes \
+              --title "Asunder ${GITHUB_REF_NAME}"
+          fi

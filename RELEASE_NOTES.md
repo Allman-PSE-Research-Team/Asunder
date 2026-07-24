@@ -1,5 +1,40 @@
 # Release Notes
 
+## v0.3.0 - 2026-07-24
+
+### Added
+- Added QMETIS as a load-balancing-specific pricing heuristic,
+  selectable with `LoadBalancer(..., algorithm="qmetis")`.
+- Added overflow-aware integer quantization for fractional dual-adjusted edge
+  weights and exact float64 reduced-cost rescoring of QMETIS candidates.
+- Added an explicit `QMETISApproximationWarning` when unsupported diagonal
+  weights, including contraction-generated internal-edge mass, are omitted
+  from QMETIS candidate generation; exact rescoring retains those values.
+- Added pinned, checksum-verified QMETIS release assets for Windows x86-64,
+  Linux x86-64, and macOS Intel, ARM64, and universal2 builds.
+- Added platform-wheel validation, native smoke tests, TestPyPI release
+  candidates, and PyPI Trusted Publishing automation.
+- Added shared pricing-dual and load-balance-bound utilities plus generic
+  `subproblem_params` wiring for application-specific pricing adapters.
+- Added `node2comp` result metadata for contracted decompositions so
+  component-level iteration columns remain interpretable.
+
+### Changed
+- Platform wheels now bundle QMETIS `qmetis-v5.2.1-modularity.1` with the
+  `idx64-real32` ABI, while source distributions contain no native libraries.
+- Wheels include only the QMETIS-named runtime (`qmetis.dll`,
+  `libqmetis.so`, or `libqmetis.dylib`), avoiding a conflicting generic
+  METIS library.
+- Pricing call dispatch now filters arguments from the callable signature
+  instead of relying on function names.
+- Removed the unused duplicate `contract_adj_matrix_cp` helper; active
+  core-periphery workflows enforce grouping blocks directly.
+
+### Fixed
+
+- Improved must-link graph contraction by remapping cannot-links and initial-column constraints to contracted components, validating and rescoring warm starts, and rejecting contradictory constraints.
+- Preserved unworthy-edge and nonlinear-node grouping through final core-periphery component splitting across SPEC, GA, and KL workflows.
+
 ## v0.2.6 - 2026-07-03
 
 ### Added

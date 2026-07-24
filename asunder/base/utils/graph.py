@@ -147,12 +147,150 @@ def partition_matrix_to_vector(Z):
             current_label += 1
     return labels
 
+
+def contract_node_pairs(
+    pairs,
+    node2comp,
+    *,
+    relation_name="node-pair",
+    reject_internal=False,
+):
+    """Map original-node pairs to unique contracted-component pairs.
+
+    Parameters
+    ----------
+    pairs : iterable[tuple[int, int]] or None
+        Original-node pairs to map.
+    node2comp : ndarray of int, shape (N,)
+        Mapping from original node index to component index.
+    relation_name : str
+        Human-readable relation name used in validation errors.
+    reject_internal : bool
+        If ``True``, reject a pair whose endpoints contract into the same
+        component. This is required for cannot-link constraints.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        Sorted, deduplicated component-level pairs.
+
+    Raises
+    ------
+    ValueError
+        If a pair contains an invalid node index or becomes an internal pair
+        while ``reject_internal`` is enabled.
+    """
+    mapping = np.asarray(node2comp, dtype=int)
+    if mapping.ndim != 1:
+        raise ValueError("node2comp must be a one-dimensional array.")
+
+    contracted = set()
+    for pair in pairs or []:
+        if len(pair) != 2:
+            raise ValueError(f"Each {relation_name} entry must contain two nodes.")
+        source, target = (int(pair[0]), int(pair[1]))
+        if not (0 <= source < mapping.size and 0 <= target < mapping.size):
+            raise ValueError(
+                f"{relation_name} pair {(source, target)} contains a node "
+                f"outside 0..{mapping.size - 1}."
+            )
+        component_pair = tuple(
+            sorted((int(mapping[source]), int(mapping[target])))
+        )
+        if component_pair[0] == component_pair[1]:
+            if reject_internal:
+                raise ValueError(
+                    f"{relation_name} pair {(source, target)} lies inside "
+                    f"contracted component {component_pair[0]}."
+                )
+            continue
+        contracted.add(component_pair)
+    return sorted(contracted)
+
+
+def contract_partition_matrix(partition, node2comp, *, atol=1e-8):
+    """Convert a component-consistent partition to contracted dimensions.
+
+    A warm-start partition is representable after contraction only when every
+    original node in a component has the same relationship to every other
+    component. In particular, all nodes within a component must be together.
+
+    Parameters
+    ----------
+    partition : ndarray
+        Original ``(N, N)`` or already-contracted ``(C, C)`` co-association
+        matrix.
+    node2comp : ndarray of int, shape (N,)
+        Mapping from original nodes to ``C`` contracted components.
+    atol : float
+        Absolute tolerance used for component-consistency checks.
+
+    Returns
+    -------
+    ndarray
+        A copy of the partition with shape ``(C, C)``.
+
+    Raises
+    ------
+    ValueError
+        If the matrix has an incompatible shape, is asymmetric, lacks a unit
+        diagonal, or separates nodes belonging to one contracted component.
+    """
+    mapping = np.asarray(node2comp, dtype=int)
+    if mapping.ndim != 1 or (mapping.size and np.any(mapping < 0)):
+        raise ValueError("node2comp must contain nonnegative component indices.")
+
+    n_nodes = mapping.size
+    n_components = int(mapping.max()) + 1 if n_nodes else 0
+    matrix = np.asarray(partition)
+    if matrix.shape == (n_components, n_components):
+        contracted = matrix.copy()
+    elif matrix.shape == (n_nodes, n_nodes):
+        contracted = np.empty(
+            (n_components, n_components),
+            dtype=matrix.dtype,
+        )
+        component_nodes = [
+            np.flatnonzero(mapping == component)
+            for component in range(n_components)
+        ]
+        for source, source_nodes in enumerate(component_nodes):
+            for target, target_nodes in enumerate(component_nodes):
+                block = matrix[np.ix_(source_nodes, target_nodes)]
+                representative = block.flat[0]
+                if not np.allclose(block, representative, atol=atol, rtol=0):
+                    raise ValueError(
+                        "Warm-start partition is not constant across "
+                        f"contracted components {source} and {target}."
+                    )
+                contracted[source, target] = representative
+    else:
+        raise ValueError(
+            "Warm-start partition must have shape "
+            f"{(n_nodes, n_nodes)} or {(n_components, n_components)}, "
+            f"not {matrix.shape}."
+        )
+
+    if not np.allclose(contracted, contracted.T, atol=atol, rtol=0):
+        raise ValueError("Warm-start partition must be symmetric.")
+    if not np.allclose(
+        np.diag(contracted),
+        np.ones(n_components),
+        atol=atol,
+        rtol=0,
+    ):
+        raise ValueError(
+            "Warm-start partition must keep every contracted component "
+            "together and have a unit diagonal."
+        )
+    return contracted
+
+
 def contract_adj_matrix_new(
     A,
     worthy_edges=None,
     must_link=None,
     keep_self_loops=True,
-    return_stats=False,
     degree_preserving=True,   # if True -> diag = 2 * intra_sum, else diag = intra_sum
 ):
     """
@@ -169,8 +307,6 @@ def contract_adj_matrix_new(
         Extra links to force-merge nodes into the same component.
     keep_self_loops : bool
         If True, store intra-community weight on the diagonal of the coarse matrix.
-    return_stats : bool
-        If True, return a dict of per-supernode stats.
     degree_preserving : bool
         If True, we set diag(C,C) = 2 * intra_sum_C so that
         vol(supernode C) = sum_{i in C} deg(i). If False, diag = intra_sum_C.
@@ -181,10 +317,6 @@ def contract_adj_matrix_new(
         Contracted adjacency.
     node2comp : np.ndarray[int]
         Mapping from original node to supernode id.
-    comp2nodes : list[np.ndarray]
-        Reverse mapping: nodes in each supernode.
-    stats : dict or None
-        Per-supernode stats (only if return_stats=True).
     """
     A = np.asarray(A)
     n = A.shape[0]
@@ -207,8 +339,12 @@ def contract_adj_matrix_new(
     else:
         pass
 
-    if must_link is not None:
-        G_ml.add_edges_from(must_link or [])
+    validated_must_links = contract_node_pairs(
+        must_link,
+        np.arange(n),
+        relation_name="must-link",
+    )
+    G_ml.add_edges_from(validated_must_links)
 
     components = list(nx.connected_components(G_ml))
     num_super = len(components)
@@ -314,107 +450,8 @@ def sufficiently_different(Z_new: np.ndarray, Z_pool: list, dist_min: float) -> 
         return True
     dmin = min(z_hamming_upper(Z_new, Z) for Z in Z_pool)
     return dmin >= dist_min
-def contract_adj_matrix_cp(
-    A,
-    unworthy_edges=None,
-    nonlinear_nodes=None,
-    keep_self_loops=True,
-    return_stats=False,
-    degree_preserving=True,   # if True -> diag = 2 * intra_sum, else diag = intra_sum
-):
-    """
-    Contract A according to connected components induced by your rule-graph (G_ml),
-    and optionally keep self-loops to encode intra-block connectivity strength.
 
-    Parameters
-    ----------
-    A : np.ndarray of int, shape (n, n)
-        Graph adjacency (assumed symmetric, no self-loops).
-    unworthy_edges : set[tuple[int,int]] or None
-        The edges that cannot connect different communities.
-    nonlinear_nodes : set[int]
-        Nonlinear nodes.
-    keep_self_loops : bool
-        If True, store intra-community weight on the diagonal of the coarse matrix.
-    return_stats : bool
-        If True, return a dict of per-supernode stats.
-    degree_preserving : bool
-        If True, we set diag(C,C) = 2 * intra_sum_C so that
-        vol(supernode C) = sum_{i in C} deg(i). If False, diag = intra_sum_C.
 
-    Returns
-    -------
-    A_sup : np.ndarray of int, shape (k, k)
-        Contracted adjacency.
-    node2comp : np.ndarray[int]
-        Mapping from original node to supernode id.
-    comp2nodes : list[np.ndarray]
-        Reverse mapping: nodes in each supernode.
-    stats : dict or None
-        Per-supernode stats (only if return_stats=True).
-    """
-    A = np.asarray(A)
-    n = A.shape[0]
-
-    # build the merge graph G_ml that defines which nodes are contracted
-    edges = np.argwhere(np.triu(A) != 0).tolist()
-    G_ml = nx.Graph()
-    G_ml.add_nodes_from(range(n))
-
-    if unworthy_edges is not None:
-        G_ml.add_edges_from(unworthy_edges or [])
-
-    # if you have nonlinear_nodes links too, add those:
-    if nonlinear_nodes is not None:
-        nonlinear_nodes = list(nonlinear_nodes)
-        if nonlinear_nodes:
-            rep = nonlinear_nodes[0]
-            for v in nonlinear_nodes[1:]:
-                G_ml.add_edge(v, rep)
-
-    components = list(nx.connected_components(G_ml))
-    num_super = len(components)
-
-    # maps
-    comp2nodes = [np.fromiter(sorted(c), dtype=int) for c in components]
-    node2comp = np.empty(n, dtype=int)
-    for cid, nodes in enumerate(comp2nodes):
-        node2comp[nodes] = cid
-
-    # build contracted adjacency while tracking intra weights
-    A_sup = np.zeros((num_super, num_super), dtype=A.dtype)
-    intra_sum = np.zeros(num_super, dtype=float)
-
-    for i, j in edges:
-        wij = A[i, j]
-        ci, cj = node2comp[i], node2comp[j]
-        if ci == cj:
-            intra_sum[ci] += wij
-        else:
-            A_sup[ci, cj] += wij
-            A_sup[cj, ci] += wij
-
-    if keep_self_loops:
-        diag_vals = 2 * intra_sum if degree_preserving else intra_sum
-        A_sup[np.arange(num_super), np.arange(num_super)] = diag_vals
-
-    # stats
-    stats = None
-    if return_stats:
-        sizes = np.array([len(nodes) for nodes in comp2nodes])
-        # density computed on undirected simple graph assumption
-        density = np.zeros(num_super)
-        for c in range(num_super):
-            s = sizes[c]
-            density[c] = 0.0 if s <= 1 else (2 * intra_sum[c]) / (s * (s - 1) + 1e-12)
-        stats = dict(
-            size=sizes,
-            intra_weight=intra_sum,
-            volume=A_sup.sum(axis=1),  # degree/strength of supernodes (with self-loops)
-            density=density,
-        )
-
-    return (A_sup, node2comp, comp2nodes, stats) if return_stats else (A_sup, node2comp)
 def proportions_to_partition(r: np.ndarray, threshold: float = 0.5) -> np.ndarray:
     """
     Convert per-node probabilities into a binary co-association matrix.

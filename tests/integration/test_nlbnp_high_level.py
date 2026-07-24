@@ -1,5 +1,6 @@
 import networkx as nx
 import numpy as np
+import pytest
 
 import asunder.nlbnp.algorithms.refinement as refinement_module
 import asunder.nlbnp.workflow as workflow_module
@@ -192,16 +193,64 @@ def test_core_periphery_partition_splits_connected_periphery_components(monkeypa
     labels, metadata = CorePeripheryPartition(
         G,
         unworthy_edge_attr="kind",
-        unworthy_edge_value="continuous",
+        unworthy_edge_value="integer",
         nonlinear_node_attr="role",
         nonlinear_node_value="nonlinear",
     )
 
     assert np.array_equal(labels, np.array([0, 1, 1, 2, 2]))
-    assert captured["unworthy_edges"] == [(0, 1), (0, 3)]
+    assert captured["unworthy_edges"] == [(1, 2), (3, 4)]
     assert captured["nonlinear_nodes"] == [0]
     assert metadata["community_map_labels"] == {"core": 0, "a": 1, "b": 1, "c": 2, "d": 2}
     assert metadata["communities_labels"] == [["core"], ["a", "b"], ["c", "d"]]
+
+
+def test_core_periphery_keeps_disconnected_nonlinear_nodes_together(monkeypatch):
+    """Final component splitting preserves nonlinear-node grouping."""
+
+    def fake_detect(A, **kwargs):
+        labels = np.zeros(A.shape[0], dtype=int)
+        return labels, {
+            "algorithm": "SPEC",
+            "continuous_labels": labels.astype(float),
+            "continuous_score": 0.0,
+            "integer_labels": labels.copy(),
+            "core_score": 0.0,
+        }
+
+    monkeypatch.setattr(workflow_module, "_detect_core_periphery", fake_detect)
+    G = nx.Graph()
+    G.add_nodes_from(["a", "b", "c"])
+    G.add_edge("a", "b")
+
+    labels, _ = CorePeripheryPartition(
+        G,
+        nonlinear_nodes=["a", "c"],
+    )
+
+    assert labels[0] == labels[2]
+
+
+@pytest.mark.parametrize("algorithm", ["SPEC", "GA", "KL"])
+def test_core_periphery_algorithms_preserve_grouping_blocks(algorithm):
+    """Every CP backend returns one binary assignment per grouping block."""
+    A = nx.to_numpy_array(nx.path_graph(4), dtype=float)
+
+    labels, _ = workflow_module._detect_core_periphery(
+        A,
+        unworthy_edges=[(0, 3)],
+        nonlinear_nodes=[1, 2],
+        algorithm=algorithm,
+        prob_method="threshold",
+        threshold=0.5,
+        seed=7,
+        kl_max_iter=2,
+        ga_population_size=8,
+        ga_generations=2,
+    )
+
+    assert labels[0] == labels[3]
+    assert labels[1] == labels[2]
 
 
 def test_nonlinear_branch_and_price_refine_false_disables_refined_columns():

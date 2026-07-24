@@ -15,6 +15,37 @@ Install the released package with:
 
    python -m pip install put-asunder
 
+QMETIS Platform Support
+-----------------------
+
+The released Windows x86-64, Linux x86-64, and macOS universal2 wheels bundle
+the pinned ``qmetis-v5.2.1-modularity.1`` native library with an
+``idx64-real32`` ABI. Pip selects the compatible platform wheel automatically.
+Each wheel includes only ``qmetis.dll``, ``libqmetis.so``, or
+``libqmetis.dylib`` as appropriate; generic ``metis``-named native libraries
+are deliberately excluded.
+
+Use the bundled load-balancing pricing heuristic with:
+
+.. code-block:: python
+
+   result = LoadBalancer(G, K=4, R=2, algorithm="qmetis")
+
+The high-level interface intentionally has no QMETIS-specific parameters.
+Asunder derives QMETIS's search envelope from the load-balancing bounds and
+recalculates reduced cost with the original floating-point graph and duals.
+Because QMETIS does not reliably support adjacency self-loops, its candidate
+generator drops nonzero diagonal values, including internal-edge mass created
+by graph contraction, and emits
+:class:`~asunder.load_balancing.algorithms.qmetis.QMETISApproximationWarning`.
+This is an explicit search approximation only; exact reduced-cost rescoring
+continues to use the original diagonal values.
+
+The source distribution does not contain native libraries. A source install
+can use the rest of Asunder normally, but selecting ``algorithm="qmetis"``
+requires a compatible QMETIS library to be staged during a platform-wheel
+build.
+
 Optional Extras
 ---------------
 
@@ -71,8 +102,8 @@ comma-separated list.
       python -m pip install -e ".[docs]"
 
 ``dev``
-   Installs development tools: ``pytest``, ``pytest-cov``, ``ruff``, ``mypy``,
-   and ``pre-commit``.
+   Installs development tools: ``build``, ``pytest``, ``pytest-cov``,
+   ``ruff``, ``mypy``, and ``pre-commit``.
 
    Use this extra from a local clone when you want to run tests, linting, type
    checks, or contribution hooks.

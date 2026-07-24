@@ -70,12 +70,24 @@ class CSDDecomposition:
         if raw is None:
             return DecompositionResult(records=[], final_partition=None, final_master_obj=None, metadata={"status": "infeasible"})
         records = []
+        node2comp = None
         for item in raw:
+            if item.get("node2comp") is not None:
+                node2comp = np.asarray(item["node2comp"], dtype=int).copy()
             duals = {
                 k: v
                 for k, v in item.items()
                 if k
-                not in {"lambda_sol", "master_obj_val", "z_sol", "heuristic_col", "sub_obj_val", "columns", "f_stars"}
+                not in {
+                    "lambda_sol",
+                    "master_obj_val",
+                    "z_sol",
+                    "heuristic_col",
+                    "sub_obj_val",
+                    "columns",
+                    "f_stars",
+                    "node2comp",
+                }
             }
             records.append(
                 IterationRecord(
@@ -90,11 +102,14 @@ class CSDDecomposition:
                 )
             )
         final = records[-1] if records else None
+        metadata = {"n_iterations": len(records)}
+        if node2comp is not None:
+            metadata["node2comp"] = node2comp
         return DecompositionResult(
             records=records,
             final_partition=(final.z_sol if final else None),
             final_master_obj=(final.master_obj_val if final else None),
-            metadata={"n_iterations": len(records)},
+            metadata=metadata,
         )
 
 

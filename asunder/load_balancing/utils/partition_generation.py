@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
@@ -16,6 +15,7 @@ from asunder.base.algorithms.modular_VFD import (
 )
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
 from asunder.base.utils.partition_generation import _component_order_from_node_order
+from asunder.load_balancing.utils.balance import resolve_balance_bounds
 
 # ---------------------------------------------
 # Ordered assignment with hard links + (r_min,r_max)
@@ -955,11 +955,7 @@ def check_balance(Z, K, R, R_bounds=None):
     """
     N = Z.shape[0]
 
-    if R_bounds is None:
-        R_min = max(1, math.floor((N/K - R/2) + 1/2))
-        R_max = R_min + R
-    else:
-        R_min, R_max = R_bounds
+    R_min, R_max = resolve_balance_bounds(N, K, R, R_bounds)
 
     rs = Z.sum(axis=1)
     return rs.min(), rs.max(), (rs.min() >= R_min and rs.max() <= R_max)

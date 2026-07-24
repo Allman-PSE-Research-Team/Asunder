@@ -73,10 +73,18 @@ class IterationRecord:
     sub_obj_val : float
         The reduced cost of the current column.
     columns : list[ndarray]
-        All columns under consideration for the next iteration. The most recently 
-        generated column is at index ``-1``.
+        All columns under consideration for the next iteration. The most recently
+        generated column is at index ``-1``. When graph contraction is active,
+        these remain in contracted component dimensions even though ``z_sol``
+        is expanded to original-node dimensions.
     f_stars : list[float]
         List of objective values computed using each column in ``columns``.
+
+    Notes
+    -----
+    Under graph contraction, ``z_sol`` is expanded for public consumption,
+    while ``columns`` and ``heuristic_col`` retain the component-level
+    representation used internally by column generation.
     """
 
     lambda_sol: Optional[List[float]]
@@ -103,7 +111,9 @@ class DecompositionResult:
     final_master_obj : Optional[float]
         Final master problem objective.
     metadata : Dict[str, Any]
-        Decomposition metadata.
+        Decomposition metadata. When graph contraction is active, this
+        includes ``node2comp``, mapping original node indices to contracted
+        component indices.
     """
 
     records: List[IterationRecord]
