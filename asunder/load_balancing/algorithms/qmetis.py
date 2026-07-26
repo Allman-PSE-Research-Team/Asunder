@@ -540,6 +540,7 @@ def qmetis_load_balanced_partition(
     qmetis = _import_qmetis()
     ubvec = _epsilon_to_ubvec(balance_epsilon, node_weight_attr)
     options = dict(metis_options)
+    options.setdefault("niter", 20)
     if contig:
         options["contig"] = True
     if seed is not None:
