@@ -948,6 +948,7 @@ class ModifiedLouvain:
                         continue  # exclude A_ii from k_i,in(·)
                     cj = labels[j] if labels[j] != -1 else c0  # only i can be -1; map that back to c0 if it appears
                     k_in[cj] = k_in.get(cj, 0.0) + wij
+                # TODO: with duals, a non-neighboring community could improve Q'. Consider this to improve the heuristic.
 
                 # Baseline modularity term for c0 (k_i,in(c0) might be 0 if no neighbors in c0 after removal).
                 k_in_c0 = k_in.get(c0, 0.0)
@@ -969,7 +970,7 @@ class ModifiedLouvain:
                         s_c = 0.0
                     dual_delta = -2.0 * (s_c - s0)
 
-                    delta = mod_delta + dual_delta
+                    delta = (2.0 / mprime) * mod_delta + dual_delta
                     if delta > best_delta + self.tol_optimization:
                         best_delta = delta
                         best_c = c
