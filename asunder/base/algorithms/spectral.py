@@ -276,7 +276,7 @@ def refine_two_way_split(B_g, s_init, tol=1e-10):
             temp_value += best_delta
             moved[best_vertex] = True
 
-            if temp_value > best_value + tol:
+            if temp_value > best_value:
                 best_s = temp_s.copy()
                 best_value = temp_value
 
@@ -467,7 +467,7 @@ def spec_part_extra_bisect(
     # zii = (np.outer(gp, gp) + 1) / 2.0
 
     gp = np.where(evmax >= 0, 1, -1).astype(int)
-    if np.all(gp == gp[0]) or leading_value <= tol:
+    if np.all(gp == gp[0]) or leading_value <= 0:
         if verbose == 1:
             print(f"Rejected group {group}: no positive spectral split.")
         return gp, current_obj, z_curr
@@ -540,7 +540,7 @@ def best_single_node_move(B, labels, current_obj, allow_singletons=True, tol=1e-
             candidate_z = partition_vector_to_2d_matrix(candidate_labels)
             candidate_obj = partition_objective(B, candidate_z)
 
-            if candidate_obj > best_obj + tol:
+            if candidate_obj > best_obj:
                 best_obj = candidate_obj
                 best_labels = candidate_labels
 
