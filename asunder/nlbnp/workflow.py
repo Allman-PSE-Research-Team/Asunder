@@ -18,7 +18,7 @@ from asunder.base.column_generation.subproblem import (
     heuristic_subproblem,
 )
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
-from asunder.base.utils.partition_generation import make_simple_partition
+from asunder.base.utils.partition_generation import make_partitions_random_links_only
 from asunder.config import CSDDecompositionConfig
 from asunder.nlbnp.algorithms.core_periphery import _detect_core_periphery
 from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group
@@ -207,7 +207,7 @@ def run_nonlinear_branch_and_price(
         Random seed.
     ifc_params : dict or None
         Initial feasible column generator configuration. Defaults to
-        ``make_simple_partition``.
+        one deterministic DSATUR-colored pairwise-feasible partition.
     refine : bool
         Whether to configure the default linear-group refinement hook.
     refine_params : dict or None
@@ -275,9 +275,14 @@ def run_nonlinear_branch_and_price(
 
     if ifc_params is None:
         ifc_params = {
-            "generator": make_simple_partition,
+            "generator": make_partitions_random_links_only,
             "num": 1,
-            "args": {"N": A.shape[0], "cannot_link": cannot_link_idx},
+            "args": {
+                "N": A.shape[0],
+                "must_link": must_link_idx,
+                "cannot_link": cannot_link_idx,
+                "n_parts": 1,
+            },
         }
     else:
         ifc_params = copy.deepcopy(ifc_params)
