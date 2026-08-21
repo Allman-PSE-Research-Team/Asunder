@@ -48,7 +48,14 @@ def test_nonlinear_branch_and_price_accepts_labeled_graph_constraints():
     assert result.metadata["worthy_edges"] == [(0, 1)]
     assert result.metadata["must_link"] == [(0, 1)]
     assert result.metadata["cannot_link"] == [(0, 3)]
-    assert result.records[0].columns[0][0, 3] == 0
+    initial_column = result.records[0].columns[0]
+    assert initial_column[0, 1] == 1
+    assert initial_column[0, 3] == 0
+    for i in range(initial_column.shape[0]):
+        for j in range(initial_column.shape[0]):
+            for k in range(initial_column.shape[0]):
+                if initial_column[i, j] and initial_column[j, k]:
+                    assert initial_column[i, k]
     assert "community_map_labels" in result.metadata
 
 
