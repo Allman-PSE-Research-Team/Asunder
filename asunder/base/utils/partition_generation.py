@@ -208,6 +208,44 @@ def _greedy_color_unbounded_K(
 
     return comp2g
 
+
+def _dsatur_color(forb: List[set]) -> np.ndarray:
+    """Color a component conflict graph using deterministic DSATUR."""
+
+    conflict_graph = nx.Graph()
+    conflict_graph.add_nodes_from(range(len(forb)))
+    conflict_graph.add_edges_from(
+        (component, neighbor)
+        for component, neighbors in enumerate(forb)
+        for neighbor in neighbors
+        if component < neighbor
+    )
+    colors = nx.coloring.greedy_color(
+        conflict_graph,
+        strategy="saturation_largest_first",
+    )
+    return np.array([colors[component] for component in range(len(forb))], dtype=int)
+
+
+def _expand_coloring_to_K(comp2g: np.ndarray, K_used: int) -> Optional[np.ndarray]:
+    """Split color classes until an otherwise feasible coloring uses ``K_used`` colors."""
+
+    comp2g = np.asarray(comp2g, dtype=int).copy()
+    if K_used < 1 or K_used > comp2g.size:
+        return None
+
+    while np.unique(comp2g).size < K_used:
+        colors, counts = np.unique(comp2g, return_counts=True)
+        splittable = colors[counts > 1]
+        if splittable.size == 0:
+            return None
+        color = int(splittable[np.argmax(counts[counts > 1])])
+        component = int(np.flatnonzero(comp2g == color)[-1])
+        comp2g[component] = int(comp2g.max()) + 1
+
+    return comp2g
+
+
 def assign_from_order_with_links_links_only(
     order_idx: List[int],
     N: int,
@@ -499,6 +537,9 @@ def make_partitions_random_links_only(
 ):
     """
     Generate random feasible partitions subject only to pairwise link constraints.
+
+    The first partition uses deterministic DSATUR coloring. Additional
+    partitions use randomized greedy coloring for diversity.
     
     Parameters
     ----------
@@ -519,7 +560,7 @@ def make_partitions_random_links_only(
         partitions are needed to satisfy the cannot-link structure. If
         ``0``, the routine enforces the requested ``K`` exactly.
     n_parts : int, optional
-        Number of feasible random partitions to generate.
+        Maximum number of feasible partitions to generate.
     
     Returns
     -------
@@ -561,7 +602,14 @@ def make_partitions_random_links_only(
     seen = set()
 
     if K is None:
+        comp2g = _dsatur_color(forb)
+        g = build_gvec(comp2g)
+        seen.add(g.tobytes())
+        parts_g.append(("dsatur", g, int(comp2g.max() + 1)))
+
         for _ in range(n_parts * 3):
+            if len(parts_g) >= n_parts:
+                break
             comp_order = list(range(C))
             rng.shuffle(comp_order)
             comp2g = _greedy_color_unbounded_K(comp_order, forb)
@@ -575,7 +623,19 @@ def make_partitions_random_links_only(
     else:
         K = int(K)
         K_hi = min(C, K + int(max_K_increase))
+        dsatur = _dsatur_color(forb)
+        dsatur_K = int(dsatur.max() + 1)
+        if dsatur_K <= K <= K_hi:
+            K_used = K
+            dsatur = _expand_coloring_to_K(dsatur, K_used)
+            if dsatur is not None:
+                g = build_gvec(dsatur)
+                seen.add(g.tobytes())
+                parts_g.append(("dsatur_fixedK", g, K_used))
+
         for K_used in range(max(1, K), max(1, K_hi) + 1):
+            if len(parts_g) >= n_parts:
+                break
             for _ in range(n_parts * 5):
                 comp_order = list(range(C))
                 rng.shuffle(comp_order)
@@ -612,9 +672,12 @@ def make_partitions_random_links_only(
                     break
 
     if return_Z:
-        return [partition_vector_to_2d_matrix(g) for _, g, _ in parts_g]
+        return [partition_vector_to_2d_matrix(g) for _, g, _ in parts_g[:n_parts]]
 
-    return [{"name": name, "g": g, "K_used": K_used} for name, g, K_used in parts_g]
+    return [
+        {"name": name, "g": g, "K_used": K_used}
+        for name, g, K_used in parts_g[:n_parts]
+    ]
 def make_simple_partition(
     N: int,
     cannot_link: Sequence[tuple[int, int]] | None = None, seed=42
