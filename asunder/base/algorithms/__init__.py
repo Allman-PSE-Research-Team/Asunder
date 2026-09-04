@@ -10,6 +10,7 @@ from asunder.base.algorithms.core_periphery import (
 )
 from asunder.base.algorithms.louvain_modified import ModifiedLouvain
 from asunder.base.algorithms.modular_VFD import modular_very_fortunate_descent
+from asunder.base.algorithms.projection import project_partition_pairwise_ilp
 from asunder.base.algorithms.RCCS import search_partition_by_reduced_cost
 from asunder.base.algorithms.spectral import full_spectral_bisection
 
@@ -25,4 +26,5 @@ __all__ = [
     "run_modularity",
     "run_signed_louvain",
     "modular_very_fortunate_descent",
+    "project_partition_pairwise_ilp",
 ]
