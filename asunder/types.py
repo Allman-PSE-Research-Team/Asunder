@@ -73,8 +73,7 @@ class IterationRecord:
     sub_obj_val : float
         The reduced cost of the current column.
     columns : list[ndarray]
-        All columns under consideration for the next iteration. The most recently
-        generated column is at index ``-1``. When graph contraction is active,
+        All columns used in the most recent RMP solve. When graph contraction is active,
         these remain in contracted component dimensions even though ``z_sol``
         is expanded to original-node dimensions.
     f_stars : list[float]
