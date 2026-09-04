@@ -78,7 +78,6 @@ Minimal Decomposition Run
            "num": 1,
            "args": {"N": A.shape[0]},
        },
-       extract_dual=False,
        final_master_solve=False,
        max_iterations=2,
        verbose=0,

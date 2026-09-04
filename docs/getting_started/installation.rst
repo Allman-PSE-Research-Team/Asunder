@@ -19,19 +19,24 @@ QMETIS Platform Support
 -----------------------
 
 The released Windows x86-64, Linux x86-64, and macOS universal2 wheels bundle
-the pinned ``qmetis-v5.2.1-modularity.1`` native library with an
+the pinned ``qmetis-v5.2.1-modularity.2`` native library with an
 ``idx64-real32`` ABI. Pip selects the compatible platform wheel automatically.
 Each wheel includes only ``qmetis.dll``, ``libqmetis.so``, or
 ``libqmetis.dylib`` as appropriate; generic ``metis``-named native libraries
-are deliberately excluded.
+are deliberately excluded. Asunder also ships its QMETIS-specific Python
+binding, so the unrelated ``metis`` Python package is not required.
 
 Use the bundled load-balancing pricing heuristic with:
 
 .. code-block:: python
 
-   result = LoadBalancer(G, K=4, R=2, algorithm="qmetis")
+   result = LoadBalancer(
+       G, K=4, R=2, resolution=1.25, algorithm="qmetis"
+   )
 
-The high-level interface intentionally has no QMETIS-specific parameters.
+``resolution`` is a general Asunder modularity parameter rather than a
+QMETIS-specific backend option. Other QMETIS internals remain absent from the
+high-level interface.
 Asunder derives QMETIS's search envelope from the load-balancing bounds and
 recalculates reduced cost with the original floating-point graph and duals.
 Because QMETIS does not reliably support adjacency self-loops, its candidate

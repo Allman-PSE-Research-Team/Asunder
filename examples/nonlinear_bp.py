@@ -19,7 +19,6 @@ def main():
             "num": 1,
             "args": {"N": A.shape[0]},
         },
-        extract_dual=False,
         final_master_solve=False,
         max_iterations=3,
         verbose=0,
