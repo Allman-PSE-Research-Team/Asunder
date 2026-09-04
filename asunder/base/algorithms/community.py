@@ -483,7 +483,7 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
     return zii, metric
 
 
-def run_signed_louvain(modified_A, seed=42):
+def run_signed_louvain(modified_A, seed=42, resolution=1.0):
     """
     Run signed Louvain on positive/negative layers and return ``(partition, score)``.
     
@@ -494,7 +494,8 @@ def run_signed_louvain(modified_A, seed=42):
         The original adjacency / weight matrix can also be parsed.
     seed : int or None
         Random seed value
-    
+    resolution : float, default=1.0
+        Resolution applied to both signed Louvain layers.
     Returns
     -------
     zii: ndarray of int, shape (N, N)
@@ -509,7 +510,7 @@ def run_signed_louvain(modified_A, seed=42):
     communities, status = cd.best_partition(
         layers=[posgraph, neggraph],
         layer_weights=[1.0, -1.0],
-        resolutions=[1.0, 1.0],
+        resolutions=[resolution, resolution],
         masks=[False, True],
         k=2,
         initial_membership=None,
