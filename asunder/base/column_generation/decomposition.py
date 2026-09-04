@@ -31,7 +31,6 @@ def CSD_decomposition(
     algo="louvain",
     package="sknetwork",
     seed=42,
-    extract_dual=False,
     # initial feasible column generator
     ifc_params: dict = {},
     # refinement
@@ -42,6 +41,7 @@ def CSD_decomposition(
     max_iterations=1000, disable_tqdm=False,
     tolerance=1e-10, verbose=False,
     subproblem_params: dict | None = None,
+    resolution=1.0,
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
@@ -105,10 +105,11 @@ def CSD_decomposition(
             ``"signed_louvain"``, ``"spinglass"``
 
         Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
+    resolution : float, default=1.0
+        Modularity resolution parameter. It is applied consistently when
+        pricing and scoring columns.
     seed : int or None
         Random seed value.
-    extract_dual : bool
-        Boolean that determines whether we extract duals from the master problem or not.
     ifc_params : dict[str, callable or dict or int]
         Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments (excluding seed values).
     refine_params : dict[str, callable or dict]
@@ -146,21 +147,63 @@ def CSD_decomposition(
         contracted columns. Each record also contains ``node2comp``, mapping
         original node indices to contracted component indices.
     """
+    if max_iterations is not None and max_iterations < 1:
+        raise ValueError("max_iterations must be at least 1 or None")
     ifc_params = copy.deepcopy(ifc_params)
     refine_params = copy.deepcopy(refine_params)
+    resolution = float(resolution)
+    if not np.isfinite(resolution) or resolution < 0:
+        raise ValueError("resolution must be a finite nonnegative value.")
     must_link = list(must_link or [])
     cannot_link = list(cannot_link or [])
+    if stopping_window < 1:
+        raise ValueError("stopping_window must be at least 1")
+
+    # normalize refinement configurations
+    refine_func = refine_params.get("refine_func")
+    refine_kwargs = dict(refine_params.get("kwargs") or {})
+
+    if use_refined_column and not callable(refine_func):
+        raise ValueError(
+            "use_refined_column=True requires refine_params['refine_func']."
+        )
+
+    # Make generator arguments optional.
+    ifc_params["args"] = dict(ifc_params.get("args") or {})
 
     # drop seed values from parameters if included
-    ifc_params.get("args", {}).pop('seed', None)
-    refine_params.get("kwargs", {}).pop('seed', None)
+    ifc_params["args"].pop("seed", None)
+    refine_kwargs.pop("seed", None)
     subproblem_params = (
         {} if subproblem_params is None else dict(subproblem_params)
     )
 
-    # cold start
-    if columns is None:
-        columns = []
+    # validate warm start when necessary
+    columns = [] if columns is None else list(columns)
+    f_stars = None if f_stars is None else list(f_stars)
+
+    if columns and f_stars is None:
+        raise ValueError(
+            "Warm-start f_stars are required when columns are supplied."
+        )
+
+    if f_stars is not None and len(columns) != len(f_stars):
+        raise ValueError(
+            "Warm-start columns and f_stars must have the same length."
+        )
+
+    if not columns:
+        missing = {"generator", "num"} - ifc_params.keys()
+        if missing:
+            raise ValueError(
+                f"ifc_params is missing required keys: {sorted(missing)}"
+            )
+
+        if not callable(ifc_params["generator"]):
+            raise ValueError("ifc_params['generator'] must be callable.")
+
+        if ifc_params["num"] < 1:
+            raise ValueError("ifc_params['num'] must be at least 1.")
 
     additional_constraints = (
         {} if additional_constraints is None else dict(additional_constraints)
@@ -201,14 +244,6 @@ def CSD_decomposition(
             generator_args["must_link"] = []
 
         if columns is not None and len(columns) > 0:
-            if f_stars is None:
-                raise ValueError(
-                    "Warm-start f_stars are required when columns are supplied."
-                )
-            if len(columns) != len(f_stars):
-                raise ValueError(
-                    "Warm-start columns and f_stars must have the same length."
-                )
             columns = [
                 contract_partition_matrix(column, node2comp)
                 for column in columns
@@ -216,14 +251,14 @@ def CSD_decomposition(
             # Recompute scores so the column pool and contracted objective
             # cannot retain mismatched original-graph bookkeeping.
             f_stars = [
-                compute_f_star(A, a, m, column)
+                compute_f_star(A, a, m, column, gamma=resolution)
                 for column in columns
             ]
 
         if A.shape == (1, 1):
             coarse_partition = np.ones((1, 1), dtype=int)
             score = (
-                compute_f_star(A, a, m, coarse_partition)
+                compute_f_star(A, a, m, coarse_partition, gamma=resolution)
                 if m > 0
                 else 0.0
             )
@@ -245,8 +280,14 @@ def CSD_decomposition(
 
     if (columns is not None and f_stars is not None) and len(columns) > 0:
         # initialize from parameters
-        Z_star = columns
-        f_stars = f_stars
+        Z_star = list(columns)
+        if resolution != 1.0:
+            # Caller-supplied scores do not record the resolution at which
+            # they were computed, so non-default runs rescore their columns.
+            f_stars = [
+                compute_f_star(A, a, m, column, gamma=resolution)
+                for column in Z_star
+            ]
     else:
         # generate initial feasible columns
         ifc_generator = ifc_params["generator"]
@@ -261,13 +302,16 @@ def CSD_decomposition(
         # initialize columns and their scores
         if ifc_params["num"] == 1:
             initial_z = feasible_columns[0]
-            f_star_initial = compute_f_star(A, a, m, initial_z)
+            f_star_initial = compute_f_star(
+                A, a, m, initial_z, gamma=resolution
+            )
             Z_star = [initial_z]
             f_stars = [f_star_initial]
         else:
             Z_star = feasible_columns[:ifc_params["num"]]
             f_stars = [
-                compute_f_star(A, a, m, col) for col in Z_star
+                compute_f_star(A, a, m, col, gamma=resolution)
+                for col in Z_star
             ]
 
     results = []
@@ -279,7 +323,7 @@ def CSD_decomposition(
 
         while True:
             if verbose != -1:
-                print("\nIteration:", iteration + 1)
+                print("\nIteration:", iteration)
 
             # run relaxed master problem (RMP)
             (lambda_sol,
@@ -292,7 +336,7 @@ def CSD_decomposition(
                 must_link=[] if contract_graph else must_link,
                 **additional_constraints,
                 verbose=verbose,
-                extract_dual=extract_dual,
+                extract_dual=True,
             )
 
             # call it a day if RMP is infeasible
@@ -306,17 +350,23 @@ def CSD_decomposition(
                 print("lambda: ", lambda_sol)
 
             pricing_kwargs = {
+                **subproblem_params,
                 "algo": algo,
                 "package": package,
+                "gamma": resolution,
                 "verbose": verbose,
                 "seed": seed,
-                **subproblem_params,
             }
             signature = inspect.signature(sp_function)
             accepts_extra = any(
                 parameter.kind == inspect.Parameter.VAR_KEYWORD
                 for parameter in signature.parameters.values()
             )
+            if resolution != 1.0 and not accepts_extra and "gamma" not in signature.parameters:
+                raise ValueError(
+                    f"{getattr(sp_function, '__name__', 'The selected subproblem')} "
+                    "does not support a non-default resolution."
+                )
             if not accepts_extra:
                 pricing_kwargs = {
                     name: value
@@ -331,88 +381,99 @@ def CSD_decomposition(
                 **pricing_kwargs,
             )
 
-            if verbose != -1:
-                print(f"Subproblem obj: {sub_obj_val}")
-                print(z_sol)
-
             results.append({
                 "lambda_sol": lambda_sol,
                 **duals,
                 "master_obj_val": master_obj_val,
                 "z_sol": expand_z_matrix(z_sol, node2comp) if contract_graph else z_sol,
                 "sub_obj_val": sub_obj_val, "columns": Z_star.copy(),
-                "f_stars": f_stars
+                "f_stars": f_stars.copy()
             })
-
-            # add priced out column and its score to the column set
-            Z_star.append(z_sol)
-            f_stars.append(compute_f_star(A, a, m, z_sol))
-            SUB_OBJS.append(sub_obj_val)
-
-            # refine z_sol and potentially add to column list
-            try:
-                if use_refined_column or final_master_solve:
-                    # refine z_sol if needed in column generation or final master solve
-                    in_loop_kwargs = copy.deepcopy(refine_params["kwargs"])
-                    if "shake_rounds" in inspect.signature(refine_params["refine_func"]).parameters:
-                        in_loop_kwargs["shake_rounds"] = 0
-                    heuristic_col = refine_params["refine_func"](
-                        A=A,
-                        partition=z_sol,
-                        **in_loop_kwargs,
-                        seed=seed
-                    )
-                    if heuristic_col is not None:
-                        results[-1]["heuristic_col"] = heuristic_col
-                        # add heuristic column to list if it is needed in column generation and is sufficiently different
-                        if use_refined_column and sufficiently_different(heuristic_col, Z_star, dist_min=0.01):
-                            Z_star.append(heuristic_col)
-                            f_stars.append(compute_f_star(A, a, m, heuristic_col))
-            except KeyError as e:
-                if verbose != -1:
-                    print(f"Exception: {e}")
-
-            # check if the pricing problem generates a column with positive reduced cost.
+                        
+            # check if the pricing problem generated a column with positive reduced cost.
             if sub_obj_val > tolerance: # and iteration == 0:
                 if verbose != -1:
                     print("New column generated with f* =", sub_obj_val)
+                    print(z_sol)
             else:
                 if verbose != -1:
                     print(f"No improving column found (reduced cost: {sub_obj_val:.2g}); stopping column generation.")
                 break
 
+            # add priced out column and its score to the column set
+            Z_star.append(z_sol)
+            f_stars.append(
+                compute_f_star(A, a, m, z_sol, gamma=resolution)
+            )
+            SUB_OBJS.append(sub_obj_val)
+
+            # refine z_sol and potentially add to column list
+            if callable(refine_func) and (use_refined_column or final_master_solve):
+                # refine z_sol if needed in column generation or final master solve
+                in_loop_kwargs = copy.deepcopy(refine_kwargs)
+                if "shake_rounds" in inspect.signature(refine_func).parameters:
+                    in_loop_kwargs["shake_rounds"] = 0
+                heuristic_col = refine_func(
+                    A=A,
+                    partition=z_sol,
+                    **in_loop_kwargs,
+                    seed=seed
+                )
+                if heuristic_col is not None:
+                    results[-1]["heuristic_col"] = heuristic_col
+                    # add heuristic column to list if it is needed in column generation and is sufficiently different
+                    if use_refined_column and sufficiently_different(heuristic_col, Z_star, dist_min=0.01):
+                        Z_star.append(heuristic_col)
+                        f_stars.append(
+                            compute_f_star(
+                                A,
+                                a,
+                                m,
+                                heuristic_col,
+                                gamma=resolution,
+                            )
+                        )
+            
             # if pricing is flat for `stopping_window` iterations, stop.
-            if check_flat_pricing:
-                try:
-                    if (max(SUB_OBJS) - min(SUB_OBJS)) <= tolerance and iteration > stopping_window:
-                        if verbose != -1:
-                            print(f"Pricing seems flat after {stopping_window} iterations; Stopping column generation...")
-                        break
-                    else:
-                        ...
-                except Exception:
-                    ...
+            if (
+                check_flat_pricing
+                and len(SUB_OBJS) == stopping_window
+                and (max(SUB_OBJS) - min(SUB_OBJS)) <= tolerance
+            ):
+                if verbose != -1:
+                    print(f"Pricing seems flat after {stopping_window} iterations; Stopping column generation...")
+                break
+
             iteration += 1
             pbar.update(1)
             if max_iterations is not None:
                 if iteration > max_iterations:
                     break
     # generate heuristic column using wz after CG terminates and add it to results
-    if use_refined_column and refine_post_loop:
+    if refine_post_loop and callable(refine_func):
         if not disable_tqdm:
             print("Running post-loop refinement...")
         wz = np.zeros_like(Z_star[0]).astype(np.float64)
         for lambda_, column in zip(lambda_sol, Z_star):
             wz += (lambda_ * column)
-        heuristic_col = refine_params["refine_func"](
+        
+        heuristic_col = refine_func(
                 A=A,
                 partition=wz,
-                **refine_params["kwargs"],
+                **refine_kwargs,
                 seed=seed
             )
         if heuristic_col is not None:
             Z_star.append(heuristic_col)
-            f_stars.append(compute_f_star(A, a, m, heuristic_col))
+            f_stars.append(
+                compute_f_star(
+                    A,
+                    a,
+                    m,
+                    heuristic_col,
+                    gamma=resolution,
+                )
+            )
             empty_duals = {k:None for k,v in duals.items()}
 
             results.append({
@@ -421,22 +482,30 @@ def CSD_decomposition(
                 "master_obj_val": None,
                 "z_sol": expand_z_matrix(heuristic_col, node2comp) if contract_graph else heuristic_col,
                 "heuristic_col": heuristic_col,
-                "sub_obj_val": None, "columns": Z_star.copy(),
-                "f_stars": f_stars
+                "sub_obj_val": None,
+                "columns": Z_star.copy(),
+                "f_stars": f_stars.copy()
             })
 
     if final_master_solve:
         if verbose != -1:
             print("Final Integer Master Solve...")
         if not use_refined_column:
-            for iter in results:
-                if iter["sub_obj_val"] is None:
+            for record in results:
+                if record["sub_obj_val"] is None:
                     continue
-                try:
-                    Z_star.append(iter["heuristic_col"])
-                    f_stars.append(compute_f_star(A, a, m, iter["heuristic_col"]))
-                except Exception:
-                    pass
+                heuristic_col = record.get("heuristic_col")
+                if heuristic_col is not None:
+                    Z_star.append(heuristic_col)
+                    f_stars.append(
+                        compute_f_star(
+                            A,
+                            a,
+                            m,
+                            heuristic_col,
+                            gamma=resolution,
+                        )
+                    )
 
         (lambda_sol, master_obj_val) = mp_function(
             A, a, m,
@@ -444,7 +513,8 @@ def CSD_decomposition(
             cannot_link=cannot_link,
             must_link=[] if contract_graph else must_link,
             **additional_constraints,
-            verbose=verbose
+            verbose=verbose,
+            extract_dual=False,
         )
         if lambda_sol is not None:
             z_sol = Z_star[np.argmax(lambda_sol)]
@@ -461,8 +531,9 @@ def CSD_decomposition(
             "master_obj_val": master_obj_val,
             "z_sol": expand_z_matrix(z_sol, node2comp) if contract_graph else z_sol,
             "heuristic_col": None,
-            "sub_obj_val": None, "columns": Z_star.copy(),
-            "f_stars": f_stars
+            "sub_obj_val": None,
+            "columns": Z_star.copy(),
+            "f_stars": f_stars.copy()
         })
     if node2comp is not None:
         for record in results:
