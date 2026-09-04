@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import networkx as nx
 import numpy as np
 import pytest
@@ -11,6 +13,14 @@ from asunder.nlbnp import (
 )
 from asunder.nlbnp.algorithms.refinement import refine_partition_with_cp
 from asunder.types import DecompositionResult
+
+
+def _fake_cp_result(labels, **metadata):
+    labels = np.asarray(labels, dtype=int)
+    return SimpleNamespace(
+        node_labels=labels,
+        to_metadata=lambda: {"core_labels": labels.copy(), **metadata},
+    )
 
 
 def _master(A, a, m, Z_star, f_stars, extract_dual=False, **_):
@@ -112,7 +122,7 @@ def test_refine_partition_with_cp_merges_core_and_preserves_periphery(monkeypatc
     monkeypatch.setattr(
         refinement_module,
         "_detect_core_periphery",
-        lambda A, **kwargs: (core_labels, {"core_score": 1.0}),
+        lambda A, **kwargs: _fake_cp_result(core_labels, primary_fit=1.0),
     )
 
     refined = refine_partition_with_cp(np.eye(4), partition)
@@ -141,8 +151,8 @@ def test_nonlinear_branch_and_price_accepts_core_periphery_refinement_hook(monke
     refine_params = {
         "refine_func": refine_partition_with_cp,
         "kwargs": {
-            "unworthy_edges": [(0, 1)],
-            "nonlinear_nodes": [0],
+            "must_link": [(0, 1)],
+            "must_group": [0],
             "cp_algorithm": "KL",
         },
     }
@@ -156,8 +166,8 @@ def test_nonlinear_branch_and_price_accepts_core_periphery_refinement_hook(monke
 
     cfg = captured["config"]
     assert cfg.refine_params["refine_func"] is refine_partition_with_cp
-    assert cfg.refine_params["kwargs"]["unworthy_edges"] == [(0, 1)]
-    assert cfg.refine_params["kwargs"]["nonlinear_nodes"] == [0]
+    assert cfg.refine_params["kwargs"]["must_link"] == [(0, 1)]
+    assert cfg.refine_params["kwargs"]["must_group"] == [0]
     assert cfg.refine_params["kwargs"]["cp_algorithm"] == "KL"
     assert cfg.refine_post_loop is False
     assert cfg.max_iterations == 5
@@ -169,13 +179,12 @@ def test_core_periphery_partition_splits_connected_periphery_components(monkeypa
 
     def fake_detect(A, **kwargs):
         captured.update(kwargs)
-        return np.array([1, 0, 0, 0, 0]), {
-            "algorithm": "SPEC",
-            "continuous_labels": np.zeros(5),
-            "continuous_score": 0.0,
-            "integer_labels": np.zeros(5, dtype=int),
-            "core_score": 1.0,
-        }
+        return _fake_cp_result(
+            [1, 0, 0, 0, 0],
+            algorithm="SPEC",
+            target_space="contracted",
+            primary_fit=1.0,
+        )
 
     monkeypatch.setattr(workflow_module, "_detect_core_periphery", fake_detect)
     G = nx.Graph()
@@ -199,31 +208,25 @@ def test_core_periphery_partition_splits_connected_periphery_components(monkeypa
 
     labels, metadata = CorePeripheryPartition(
         G,
-        unworthy_edge_attr="kind",
-        unworthy_edge_value="integer",
-        nonlinear_node_attr="role",
-        nonlinear_node_value="nonlinear",
+        must_link_edge_attr="kind",
+        must_link_edge_value="integer",
+        must_group_node_attr="role",
+        must_group_node_value="nonlinear",
     )
 
     assert np.array_equal(labels, np.array([0, 1, 1, 2, 2]))
-    assert captured["unworthy_edges"] == [(1, 2), (3, 4)]
-    assert captured["nonlinear_nodes"] == [0]
+    assert captured["must_link"] == [(1, 2), (3, 4)]
+    assert captured["must_group"] == [0]
     assert metadata["community_map_labels"] == {"core": 0, "a": 1, "b": 1, "c": 2, "d": 2}
     assert metadata["communities_labels"] == [["core"], ["a", "b"], ["c", "d"]]
 
 
-def test_core_periphery_keeps_disconnected_nonlinear_nodes_together(monkeypatch):
-    """Final component splitting preserves nonlinear-node grouping."""
+def test_core_periphery_allows_disconnected_must_group_nodes_to_split(monkeypatch):
+    """must_group constrains CP side, not final periphery connectivity."""
 
     def fake_detect(A, **kwargs):
         labels = np.zeros(A.shape[0], dtype=int)
-        return labels, {
-            "algorithm": "SPEC",
-            "continuous_labels": labels.astype(float),
-            "continuous_score": 0.0,
-            "integer_labels": labels.copy(),
-            "core_score": 0.0,
-        }
+        return _fake_cp_result(labels, algorithm="SPEC", primary_fit=0.0)
 
     monkeypatch.setattr(workflow_module, "_detect_core_periphery", fake_detect)
     G = nx.Graph()
@@ -232,10 +235,10 @@ def test_core_periphery_keeps_disconnected_nonlinear_nodes_together(monkeypatch)
 
     labels, _ = CorePeripheryPartition(
         G,
-        nonlinear_nodes=["a", "c"],
+        must_group=["a", "c"],
     )
 
-    assert labels[0] == labels[2]
+    assert labels[0] != labels[2]
 
 
 @pytest.mark.parametrize("algorithm", ["SPEC", "GA", "KL"])
@@ -243,10 +246,10 @@ def test_core_periphery_algorithms_preserve_grouping_blocks(algorithm):
     """Every CP backend returns one binary assignment per grouping block."""
     A = nx.to_numpy_array(nx.path_graph(4), dtype=float)
 
-    labels, _ = workflow_module._detect_core_periphery(
+    result = workflow_module._detect_core_periphery(
         A,
-        unworthy_edges=[(0, 3)],
-        nonlinear_nodes=[1, 2],
+        must_link=[(0, 3)],
+        must_group=[1, 2],
         algorithm=algorithm,
         prob_method="threshold",
         threshold=0.5,
@@ -256,8 +259,8 @@ def test_core_periphery_algorithms_preserve_grouping_blocks(algorithm):
         ga_generations=2,
     )
 
-    assert labels[0] == labels[3]
-    assert labels[1] == labels[2]
+    assert result.node_labels[0] == result.node_labels[3]
+    assert result.node_labels[1] == result.node_labels[2]
 
 
 def test_nonlinear_branch_and_price_refine_false_disables_refined_columns():

@@ -2,8 +2,12 @@
 
 from asunder.base.algorithms.community import run_modularity, run_signed_louvain
 from asunder.base.algorithms.core_periphery import (
+    CorePeripheryContraction,
+    CorePeripheryResult,
+    CorePeripheryTarget,
     EnhancedGeneticBE,
     FullContinuousGeneticBE,
+    contract_core_periphery_adjacency,
     detect_continuous_KL,
     find_core,
     spectral_continuous_cp_detection,
@@ -15,12 +19,16 @@ from asunder.base.algorithms.RCCS import search_partition_by_reduced_cost
 from asunder.base.algorithms.spectral import full_spectral_bisection
 
 __all__ = [
+    "CorePeripheryContraction",
+    "CorePeripheryResult",
+    "CorePeripheryTarget",
     "EnhancedGeneticBE",
     "FullContinuousGeneticBE",
     "ModifiedLouvain",
     "full_spectral_bisection",
     "search_partition_by_reduced_cost",
     "detect_continuous_KL",
+    "contract_core_periphery_adjacency",
     "spectral_continuous_cp_detection",
     "find_core",
     "run_modularity",

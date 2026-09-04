@@ -150,9 +150,10 @@ periphery components that are already suitable final communities:
 
    community_labels, metadata = CorePeripheryPartition(
        G,
-       unworthy_edge_attr="edge_kind",
-       unworthy_edge_value="continuous",
+       must_link_edge_attr="edge_kind",
+       must_link_edge_value="continuous",
        cp_algorithm="SPEC",
+       target="contracted",
    )
 
    print(metadata["community_map_labels"])
@@ -167,8 +168,8 @@ Use ``NonlinearBranchAndPrice`` when the community structure is beyond the direc
        refine_params={
            "refine_func": refine_partition_with_cp,
            "kwargs": {
-               "unworthy_edges": [(1, 2)],
-               "nonlinear_nodes": [],
+               "must_link": [(1, 2)],
+               "must_group": [],
                "cp_algorithm": "SPEC",
            },
        },

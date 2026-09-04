@@ -106,11 +106,23 @@ inputs, those pairs use graph node labels. Worthy edges can also be derived from
 an edge attribute with ``worthy_edge_attr`` and ``worthy_edge_value``.
 
 ``asunder.nlbnp.CorePeripheryPartition`` accepts the same graph or adjacency
-input styles, plus ``unworthy_edges`` and ``nonlinear_nodes`` constraints. It
-detects a core and returns one community for that core plus one community for
-each connected periphery component. This is the preferred path when those
-components do not require further subdivision. Use ``NonlinearBranchAndPrice``
-when finer-grained periphery communities are expected.
+input styles, plus ``must_link`` pair constraints and a ``must_group`` node
+set. It detects a core and returns one community for that core plus one
+community for each connected periphery component. ``must_group`` constrains
+only the binary core-periphery side, so disconnected grouped nodes may remain
+separate final periphery communities; ``must_link`` also applies to that final
+component split.
+
+The default ``target="contracted"`` interpretation detects and evaluates
+core-periphery structure after forming the aggregate contraction
+``B = S.T @ A @ S``. Its row sums preserve aggregate block strength, not each
+original node's degree. Contracted diagonal entries retain internal block-edge
+weight, and the implementation does not density-normalize block pairs. Select
+``target="original"`` when the original adjacency already contains the
+structure of interest and coreness is merely constrained to be equal within
+blocks. This is the preferred path when the resulting components do not
+require further subdivision. Use ``NonlinearBranchAndPrice`` when finer-grained
+periphery communities are expected.
 
 For the built-in case-study evaluation flows in ``run_evaluation``, Asunder
 expects a constraint-graph schema similar to the packaged case studies in

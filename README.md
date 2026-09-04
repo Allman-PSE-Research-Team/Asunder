@@ -179,9 +179,10 @@ community:
 ```python
 community_labels, metadata = CorePeripheryPartition(
     G,
-    unworthy_edge_attr="edge_kind",
-    unworthy_edge_value="continuous",
+    must_link_edge_attr="edge_kind",
+    must_link_edge_value="continuous",
     cp_algorithm="SPEC",
+    target="contracted",
 )
 ```
 
@@ -190,6 +191,21 @@ removal is already an appropriate final community. Use `NonlinearBranchAndPrice`
 when the community structure is beyond the direct core-periphery logic. The
 column-generation workflow can also use `refine_partition_with_cp` through its
 generic `refine_params` hook.
+
+Core-periphery detection defaults to `target="contracted"`: constraint blocks
+are merged with the aggregate adjacency `B = S.T @ A @ S`, and CP structure is
+detected and evaluated on `B`. Contracted row sums preserve each block's total
+strength, not the individual degrees of its members. Internal block edges are
+retained on the contracted diagonal, and no density normalization is applied.
+Use `target="original"` when the original adjacency is expected to contain the
+CP structure and blockwise-equal coreness is only a constraint. With `SPEC`,
+`spectral_rank=2` uses the two largest-magnitude eigenpairs and a two-component
+Gaussian mixture. `must_group` affects only the CP grouping; unlike `must_link`,
+it does not join disconnected nodes during final periphery component splitting.
+Metadata reports continuous reconstruction quality as `contracted_fit`,
+`original_fit`, and the target-selected `primary_fit`; the discrete orientation
+scores are separately named `contracted_be_score`, `original_be_score`, and
+`primary_be_score`.
 
 Use `run_evaluation` only when you want the packaged benchmark/case-study evaluation flow.
 

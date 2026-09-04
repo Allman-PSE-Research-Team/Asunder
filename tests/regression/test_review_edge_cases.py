@@ -538,7 +538,7 @@ def test_core_periphery_seed_none_uses_local_rng():
 
     EnhancedGeneticBE(A, pop_size=4, generations=1, tournament_size=2, seed=None).run()
     FullContinuousGeneticBE(A, pop_size=4, generations=1, tournament_size=2, seed=None).run()
-    detect_continuous_KL(csr_matrix(A), must_links=[], nonlinear_nodes=[], max_iter=1, seed=None)
+    detect_continuous_KL(csr_matrix(A), must_link=[], must_group=[], max_iter=1, seed=None)
 
 
 def test_find_core_advanced_validates_labels():

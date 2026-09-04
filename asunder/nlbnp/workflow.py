@@ -11,7 +11,10 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
-from asunder.base.algorithms.core_periphery import partition_periphery_components
+from asunder.base.algorithms.core_periphery import (
+    CorePeripheryTarget,
+    partition_periphery_components,
+)
 from asunder.base.column_generation.master import solve_master_problem
 from asunder.base.column_generation.subproblem import (
     custom_heuristic_subproblem,
@@ -85,11 +88,13 @@ def _nodes_from_attribute(
     graph: nx.Graph | None,
     node_attr: str | None,
     node_value: Any,
+    *,
+    name: str,
 ) -> list[Hashable]:
     if node_attr is None:
         return []
     if graph is None:
-        raise ValueError("nonlinear_node_attr can only be used when graph is a networkx.Graph.")
+        raise ValueError(f"{name} can only be used when graph is a networkx.Graph.")
 
     nodes = []
     for node, attrs in graph.nodes(data=True):
@@ -352,13 +357,15 @@ def run_nonlinear_branch_and_price(
 def CorePeripheryPartition(
     graph: nx.Graph | np.ndarray,
     *,
-    unworthy_edges: Sequence[tuple[Hashable, Hashable]] | None = None,
-    unworthy_edge_attr: str | None = None,
-    unworthy_edge_value: Any = None,
-    nonlinear_nodes: Sequence[Hashable] | None = None,
-    nonlinear_node_attr: str | None = None,
-    nonlinear_node_value: Any = None,
+    must_link: Sequence[tuple[Hashable, Hashable]] | None = None,
+    must_link_edge_attr: str | None = None,
+    must_link_edge_value: Any = None,
+    must_group: Sequence[Hashable] | None = None,
+    must_group_node_attr: str | None = None,
+    must_group_node_value: Any = None,
     cp_algorithm: str = "SPEC",
+    target: CorePeripheryTarget = "contracted",
+    spectral_rank: int = 1,
     prob_method: str = "gaussian_mixture",
     threshold: float = 0.8,
     seed: int | None = 42,
@@ -376,20 +383,27 @@ def CorePeripheryPartition(
     ----------
     graph : networkx.Graph or ndarray
         Input graph or square adjacency matrix.
-    unworthy_edges : sequence of tuple, optional
-        Edge pairs that cannot connect separate communities.
-    unworthy_edge_attr : str, optional
-        Edge attribute used to derive unworthy edges from a ``networkx.Graph``.
-    unworthy_edge_value : Any, optional
-        Attribute value selected by ``unworthy_edge_attr``.
-    nonlinear_nodes : sequence, optional
-        Nodes that represent nonlinear constraints and should remain together.
-    nonlinear_node_attr : str, optional
-        Node attribute used to derive nonlinear nodes from a ``networkx.Graph``.
-    nonlinear_node_value : Any, optional
-        Attribute value selected by ``nonlinear_node_attr``.
+    must_link : sequence of tuple, optional
+        Node pairs that must share a core-periphery block and final community.
+    must_link_edge_attr : str, optional
+        Edge attribute used to derive ``must_link`` pairs.
+    must_link_edge_value : Any, optional
+        Attribute value selected by ``must_link_edge_attr``.
+    must_group : sequence, optional
+        Nodes constrained to the same binary core-periphery side. This does
+        not force disconnected periphery nodes into one final community.
+    must_group_node_attr : str, optional
+        Node attribute used to derive ``must_group`` nodes.
+    must_group_node_value : Any, optional
+        Attribute value selected by ``must_group_node_attr``.
     cp_algorithm : {"SPEC", "GA", "KL"}
         Core-periphery detection algorithm.
+    target : {"contracted", "original"}
+        Space whose core-periphery structure is optimized and reported as the
+        primary fit. Contracted space is the default.
+    spectral_rank : {1, 2}
+        Spectral approximation rank. Rank two uses a scaled adjacency spectral
+        embedding and requires Gaussian-mixture conversion.
     prob_method : {"threshold", "gaussian_mixture", "DBSCAN"}
         Method used to convert continuous coreness values to discrete labels.
     threshold : float
@@ -414,54 +428,56 @@ def CorePeripheryPartition(
 
     attr_edges = _edge_pairs_from_attribute(
         nx_graph,
-        unworthy_edge_attr,
-        unworthy_edge_value,
-        name="unworthy_edge_attr",
+        must_link_edge_attr,
+        must_link_edge_value,
+        name="must_link_edge_attr",
     )
-    unworthy_edge_idx = _unique_pairs(
-        _map_pairs([*_items_or_empty(unworthy_edges), *attr_edges], label_node_map, name="unworthy_edges")
+    must_link_idx = _unique_pairs(
+        _map_pairs([*_items_or_empty(must_link), *attr_edges], label_node_map, name="must_link")
     )
-    attr_nodes = _nodes_from_attribute(nx_graph, nonlinear_node_attr, nonlinear_node_value)
-    nonlinear_node_idx = _map_nodes(
-        [*_items_or_empty(nonlinear_nodes), *attr_nodes],
+    attr_nodes = _nodes_from_attribute(
+        nx_graph,
+        must_group_node_attr,
+        must_group_node_value,
+        name="must_group_node_attr",
+    )
+    must_group_idx = _map_nodes(
+        [*_items_or_empty(must_group), *attr_nodes],
         label_node_map,
-        name="nonlinear_nodes",
+        name="must_group",
     )
 
-    core_labels, cp_metadata = _detect_core_periphery(
+    cp_result = _detect_core_periphery(
         A,
-        unworthy_edges=unworthy_edge_idx,
-        nonlinear_nodes=nonlinear_node_idx,
+        must_link=must_link_idx,
+        must_group=must_group_idx,
         algorithm=cp_algorithm,
+        target=target,
+        spectral_rank=spectral_rank,
         prob_method=prob_method,
         threshold=threshold,
         verbose=verbose,
         seed=seed,
     )
-    grouping_pairs = list(unworthy_edge_idx)
-    if len(nonlinear_node_idx) > 1:
-        representative = nonlinear_node_idx[0]
-        grouping_pairs.extend(
-            (representative, node)
-            for node in nonlinear_node_idx[1:]
-        )
-    grouping_pairs = _unique_pairs(grouping_pairs)
+    if cp_result.node_labels is None:
+        raise RuntimeError("Core-periphery detection did not return binary node labels.")
+    core_labels = cp_result.node_labels
     community_labels, component_info = partition_periphery_components(
         A,
         core_labels,
-        must_link=grouping_pairs,
+        must_link=must_link_idx,
     )
     community_map = {idx: int(label) for idx, label in enumerate(community_labels)}
     communities = component_info["community_node_indices"]
 
     metadata = {
-        **cp_metadata,
+        **cp_result.to_metadata(),
         **component_info,
         "execution_time": time.perf_counter() - start,
         "node_label_map": node_label_map,
         "label_node_map": label_node_map,
-        "unworthy_edges": unworthy_edge_idx,
-        "nonlinear_nodes": nonlinear_node_idx,
+        "must_link": must_link_idx,
+        "must_group": must_group_idx,
         "core_labels": core_labels,
         "community_map": community_map,
         "community_map_labels": map_community_labels(community_map, node_label_map),

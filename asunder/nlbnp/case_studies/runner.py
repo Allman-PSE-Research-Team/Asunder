@@ -104,11 +104,11 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
 
     node_labels = list(G.nodes())
     label_node_map = {label: i for i, label in enumerate(node_labels)}
-    nonlinear_nodes = [label_node_map[node] for node, attr in G.nodes(data=True) if attr.get("constraint") == nonlinear_tag]
+    must_group = [label_node_map[node] for node, attr in G.nodes(data=True) if attr.get("constraint") == nonlinear_tag]
 
     results = {}
     if style == "CP":
-        unworthy_edges = [
+        must_link = [
             (label_node_map[i], label_node_map[j])
             for i, j, attr in G.edges(data=True)
             if attr.get("var_type") == "continuous"
@@ -118,13 +118,16 @@ def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, 
             runs = []
             for _ in range(repeat):
                 start = time.perf_counter()
-                labels, _ = _detect_core_periphery(
+                cp_result = _detect_core_periphery(
                     A,
-                    unworthy_edges=unworthy_edges,
-                    nonlinear_nodes=nonlinear_nodes,
+                    must_link=must_link,
+                    must_group=must_group,
                     algorithm=algo,
                     prob_method="gaussian_mixture",
                 )
+                labels = cp_result.node_labels
+                if labels is None:
+                    raise RuntimeError("Core-periphery detection returned no binary labels.")
                 end = time.perf_counter()
 
                 acc = permuted_accuracy(labels_gt, labels)[0]

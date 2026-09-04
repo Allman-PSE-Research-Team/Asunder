@@ -45,13 +45,16 @@ def refine_partition_linear_group(
     )
     return partition_vector_to_2d_matrix(refined_labels)
 
+
 def refine_partition_with_cp(
     A,
     partition,
     *,
-    unworthy_edges=None,
-    nonlinear_nodes=None,
+    must_link=None,
+    must_group=None,
     cp_algorithm="SPEC",
+    target="contracted",
+    spectral_rank=1,
     prob_method="gaussian_mixture",
     threshold=0.8,
     verbose=False,
@@ -69,15 +72,19 @@ def refine_partition_with_cp(
         Graph adjacency/weight matrix.
     partition : ndarray of int, shape (N,) or (N, N)
         Predicted community labels or a 2D partition matrix.
-    unworthy_edges : list[tuple[int, int]] or None
-        Node pairs that must be linked because the edges between them cannot connect nodes in different communities.
-    nonlinear_nodes : list[int] | None
-        Nodes that correspond to nonlinear constraints and so, should be merged.
+    must_link : list[tuple[int, int]] or None
+        Node pairs constrained to one core-periphery block.
+    must_group : list[int] | None
+        Nodes constrained to one binary core-periphery side.
     cp_algorithm : str
         Core periphery algorithm to be used. Should be one of:
         ``"SPEC"``: Continuous spectral core periphery detection
         ``"GA"``: Continuous genetic search for BE objective
         ``"KL"``: Continuous Kernighan-Lin algorithm
+    target : {"contracted", "original"}
+        Space containing the core-periphery structure of interest.
+    spectral_rank : {1, 2}
+        Spectral approximation rank when ``cp_algorithm="SPEC"``.
     prob_method : str
         One of ``"threshold"``, ``"gaussian_mixture"``, or ``"DBSCAN"``.
     threshold : float
@@ -99,15 +106,20 @@ def refine_partition_with_cp(
     if partition_labels.ndim != 1 or partition_labels.shape[0] != np.asarray(A).shape[0]:
         raise ValueError("partition must contain one label per adjacency-matrix node.")
 
-    cp_labels, _ = _detect_core_periphery(
+    cp_result = _detect_core_periphery(
         A,
-        unworthy_edges=unworthy_edges,
-        nonlinear_nodes=nonlinear_nodes,
+        must_link=must_link,
+        must_group=must_group,
         algorithm=cp_algorithm,
+        target=target,
+        spectral_rank=spectral_rank,
         prob_method=prob_method,
         threshold=threshold,
         verbose=verbose,
         seed=seed,
     )
+    if cp_result.node_labels is None:
+        raise RuntimeError("Core-periphery detection did not return binary node labels.")
+    cp_labels = cp_result.node_labels
     refined_partition = np.where(cp_labels == 1, -1, partition_labels)
     return partition_vector_to_2d_matrix(refined_partition)
