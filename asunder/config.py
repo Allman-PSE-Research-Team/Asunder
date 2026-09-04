@@ -59,10 +59,11 @@ class CSDDecompositionConfig:
             ``"signed_louvain"``, ``"spinglass"``
 
         Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
+    resolution : float
+        Modularity resolution parameter. Pricing algorithms that do not
+        implement non-default resolution reject values other than ``1``.
     seed : int or None
         Random seed value.
-    extract_dual : bool
-        Boolean that determines whether we extract duals from the master problem or not.
     ifc_params : dict[str, callable or dict or int]
         Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments.
     refine_params : dict[str, callable or dict]
@@ -100,7 +101,6 @@ class CSDDecompositionConfig:
     algo: str = "louvain"
     package: str = "sknetwork"
     seed: int | None = 42
-    extract_dual: bool = False
     ifc_params: Dict[str, Any] = field(default_factory=dict)
     refine_params: Dict[str, Any] = field(default_factory=dict)
     subproblem_params: Dict[str, Any] = field(default_factory=dict)
@@ -111,3 +111,4 @@ class CSDDecompositionConfig:
     disable_tqdm: bool = False
     tolerance: float = 1e-10
     verbose: int | bool = 1
+    resolution: float = 1.0

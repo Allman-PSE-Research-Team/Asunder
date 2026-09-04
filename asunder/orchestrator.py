@@ -102,7 +102,10 @@ class CSDDecomposition:
                 )
             )
         final = records[-1] if records else None
-        metadata = {"n_iterations": len(records)}
+        metadata = {
+            "n_iterations": len(records),
+            "resolution": float(cfg["resolution"]),
+        }
         if node2comp is not None:
             metadata["node2comp"] = node2comp
         return DecompositionResult(
