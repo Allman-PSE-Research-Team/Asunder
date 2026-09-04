@@ -40,6 +40,73 @@ except Exception:  # pragma: no cover - optional dependency
     ConcreteModel = None
 
 
+def _validate_resolution_support(
+    *,
+    algo: str,
+    package: str | None,
+    gamma: float,
+) -> None:
+    """Reject non-default resolution for algorithms that cannot use it."""
+
+    supported = {
+        ("networkx", "louvain"),
+        ("networkx", "greedy"),
+        ("sknetwork", "louvain"),
+        ("sknetwork", "leiden"),
+        ("igraph", "leiden"),
+        ("igraph", "multilevel"),
+        ("igraph", "cpm_leiden"),
+        ("leidenalg", "leiden"),
+        ("leidenalg", "signed_leiden"),
+        ("leidenalg", "cpm_leiden"),
+        (None, "signed_louvain"),
+    }
+    if gamma != 1.0 and (package, algo) not in supported:
+        raise ValueError(
+            f"{package or 'internal'}:{algo} does not support a non-default "
+            "modularity resolution."
+        )
+
+
+_ZERO_ROW_SUM_BACKENDS = {
+    ("sknetwork", "louvain"),
+    ("sknetwork", "leiden"),
+    ("igraph", "cpm_leiden"),
+    ("leidenalg", "signed_leiden"),
+    ("leidenalg", "cpm_leiden"),
+    ("leidenalg", "signed_surprise_leiden"),
+    (None, "signed_louvain"),
+    (None, "spinglass"),
+}
+
+
+def _validate_zero_row_sum_support(
+    *,
+    algo: str,
+    package: str | None,
+    exact_rc: bool,
+) -> None:
+    """Reject zero-row-sum augmentation for incompatible heuristic paths."""
+
+    if (package, algo) not in _ZERO_ROW_SUM_BACKENDS:
+        supported = ", ".join(
+            f"{backend or 'internal'}:{algorithm}"
+            for backend, algorithm in sorted(
+                _ZERO_ROW_SUM_BACKENDS,
+                key=lambda item: (item[0] or "", item[1]),
+            )
+        )
+        raise ValueError(
+            "Zero-row-sum augmentation is not supported for "
+            f"{package or 'internal'}:{algo}. Supported choices are: {supported}."
+        )
+    if not exact_rc:
+        raise ValueError(
+            "Zero-row-sum augmentation requires exact_rc=True because signed "
+            "backends do not report the original reduced-cost objective."
+        )
+
+
 def heuristic_subproblem(
     A,
     a,
@@ -50,7 +117,8 @@ def heuristic_subproblem(
     verbose=False,
     gamma=1,
     exact_rc=True,
-    seed=42
+    seed=42,
+    use_zero_row_sum=False,
 ):
     """
     Solve pricing heuristically via selected clustering backend.
@@ -75,22 +143,47 @@ def heuristic_subproblem(
         ``-1``: No output
         ``False`` | ``0``: Minimal output
         ``True`` | ``1``: Detailed output
-    gamma : int
+    gamma : float
         Resolution parameter which controls the scale and size of the detected clusters.
-        Should be left as default (``1``) if:
-        ``"algo"`` is ``"surprise_leiden"`` or ``"signed_surprise_leiden"`` and ``"package"`` is ``"leidenalg"``
-        ``"algo"`` is ``"greedy"`` or ``"multilevel"`` and ``"package"`` is ``"igraph"``
-        ``"algo"`` is ``"girvan_newman"`` and ``"package"`` is ``"networkx"``
+        Algorithms that cannot apply it reject values other than ``1``.
+    exact_rc : bool, default=True
+        Recompute the returned partition's reduced cost using the original
+        graph and duals.
     seed : int or None
         Random seed value
+    use_zero_row_sum : bool, default=False
+        If ``True``, replace the pairwise dual matrix by its zero-row-sum
+        form before constructing the augmented adjacency. This experimental
+        option is limited to scikit-network Louvain/Leiden and the supported
+        signed heuristics. Scikit-network inputs must remain nonnegative;
+        signed heuristics receive the un-clipped augmented adjacency. Exact
+        reduced-cost evaluation is required.
     Returns
     -------
     Any
         Computed result.
     """
+    gamma = float(gamma)
+    _validate_resolution_support(algo=algo, package=package, gamma=gamma)
+    if use_zero_row_sum:
+        _validate_zero_row_sum_support(
+            algo=algo,
+            package=package,
+            exact_rc=exact_rc,
+        )
     dualW, constant_terms = build_dual_weight_matrix(A, duals)
 
     modA = A - (m * dualW)
+    if use_zero_row_sum:
+        diagonal = np.diag_indices_from(modA)
+        modA[diagonal] += m * dualW.sum(axis=1)
+        if package == "sknetwork" and np.min(modA) < -1e-12:
+            raise ValueError(
+                "Zero-row-sum augmentation produced negative weights. "
+                "scikit-network Louvain/Leiden can use this option only when "
+                "the augmented adjacency is nonnegative; select a signed "
+                "heuristic or disable use_zero_row_sum."
+            )
     mod_a = modA.sum(axis=0)
     mod_m = np.sum(mod_a)
     # negative weights will basically lead to a separation of nodes on that edge. The issue however
@@ -98,16 +191,38 @@ def heuristic_subproblem(
     # components are treated as bad splits.
     modA_positive = modA.copy()
     modA_positive[modA_positive < 0] = 0
+    graph_modA = modA
+    if use_zero_row_sum and package != "sknetwork":
+        # NetworkX/igraph count an undirected loop twice in node degree.
+        # Their loop-edge weight must therefore be half the matrix diagonal.
+        graph_modA = modA.copy()
+        graph_modA[np.diag_indices_from(graph_modA)] *= 0.5
 
     if package == "igraph" and algo not in {"greedy", "leiden"}:
-        zii, metric = run_igraph(modA if algo == "cpm_leiden" else modA_positive, algo=algo, resolution=gamma)
+        zii, metric = run_igraph(
+            graph_modA if algo == "cpm_leiden" else modA_positive,
+            algo=algo,
+            resolution=gamma,
+        )
     elif package == "leidenalg":
-        zii, metric = run_leidenalg(modA if algo.startswith("signed") or algo == "cpm_leiden" else modA_positive, algo=algo, seed=seed, resolution=gamma, verbose=verbose)
+        zii, metric = run_leidenalg(
+            graph_modA
+            if algo.startswith("signed") or algo == "cpm_leiden"
+            else modA_positive,
+            algo=algo,
+            seed=seed,
+            resolution=gamma,
+            verbose=verbose,
+        )
     elif algo == "spinglass":
-        zii = run_igraph_spinglass(modA)
-        metric = compute_f_star(modA, mod_a, mod_m, zii)
+        zii = run_igraph_spinglass(graph_modA)
+        metric = compute_f_star(modA, mod_a, mod_m, zii, gamma=gamma)
     elif algo == "signed_louvain":
-        zii, metric = run_signed_louvain(modA, seed=seed)
+        zii, metric = run_signed_louvain(
+            graph_modA,
+            seed=seed,
+            resolution=gamma,
+        )
     elif algo == "lpa" and package == "sknetwork":
         zii, metric = run_lpa(modA_positive)
     else:
@@ -139,7 +254,16 @@ def heuristic_subproblem(
     return sub_obj_val, zii
 
 
-def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=False, solver=None):
+def solve_subproblem(
+    A,
+    a,
+    m,
+    duals,
+    use_augmented_adjacency=False,
+    verbose=False,
+    solver=None,
+    gamma=1.0,
+):
     """
     Solve pricing exactly as a binary ILP with transitivity constraints.
     
@@ -163,6 +287,8 @@ def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=Fals
         ``True`` | ``1``: Detailed output
     solver : Any
         Solver object.
+    gamma : float, default=1.0
+        Modularity resolution parameter.
     
     Returns
     -------
@@ -223,13 +349,22 @@ def solve_subproblem(A, a, m, duals, use_augmented_adjacency=False, verbose=Fals
             mod_a = modA.sum(axis=1)
             mod_m = mod_a.sum()
             M = sum(
-                ((modA[i, j] / mod_m) - ((mod_a[i] * mod_a[j]) / (mod_m**2))) * zpair(i, j)
+                (
+                    (modA[i, j] / mod_m)
+                    - gamma * ((mod_a[i] * mod_a[j]) / (mod_m**2))
+                )
+                * zpair(i, j)
                 for i in mdl.I
                 for j in mdl.I
             )
         else:
             M = sum(
-                ((A[i, j] / m) - ((a[i] * a[j]) / (m**2)) - dualW[i, j]) * zpair(i, j)
+                (
+                    (A[i, j] / m)
+                    - gamma * ((a[i] * a[j]) / (m**2))
+                    - dualW[i, j]
+                )
+                * zpair(i, j)
                 for i in mdl.I
                 for j in mdl.I
             )
@@ -254,7 +389,8 @@ def custom_heuristic_subproblem(
     verbose=False,
     max_iterations=50,
     tolerance=1e-8,
-    seed=42
+    seed=42,
+    gamma=1.0,
 ):
     """
     Run in-package custom pricing heuristics (spectral/modified Louvain).
@@ -283,18 +419,31 @@ def custom_heuristic_subproblem(
         Tolerance value.
     seed : int or None
         Random seed value
+    gamma : float, default=1.0
+        Modularity resolution. Modified Louvain supports non-default values;
+        the other custom heuristics reject them.
     
     Returns
     -------
     Any
         Computed result.
     """
-    # TODO: Add gamma parameter to algorithms and this top level function.
+    if float(gamma) != 1.0 and algo not in {
+        "full_louvain",
+        "one_level_louvain",
+    }:
+        raise ValueError(
+            f"The custom {algo!r} pricing heuristic does not support a "
+            "non-default modularity resolution."
+        )
     assert algo in {"spectral", "full_louvain", "one_level_louvain", "RCCS"}
     dualW, constant_terms = build_dual_weight_matrix(A, duals)
 
     if "louvain" in algo:
-        louvain_model = ModifiedLouvain(random_state=seed)
+        louvain_model = ModifiedLouvain(
+            resolution=gamma,
+            random_state=seed,
+        )
         if algo.startswith("full_"):
             louvain_model.fit(A, duals)
         else:
@@ -308,10 +457,16 @@ def custom_heuristic_subproblem(
             z_sol = partition_vector_to_2d_matrix(best_labels)
             metric = res["best_reduced_cost"] + constant_terms # for normalization sake
         else:
-            z_sol, metric = full_spectral_bisection(A, a, m, dualW, refinement=True, verbose=verbose)
+            z_sol, metric = full_spectral_bisection(A, a, m, dualW, refinement=True, verbose=verbose, max_outer_passes=max_iterations, tol=tolerance)
 
     if metric is None:
-        modularity_contribution = compute_f_star(A, a, m, z_sol)
+        modularity_contribution = compute_f_star(
+            A,
+            a,
+            m,
+            z_sol,
+            gamma=gamma,
+        )
         dual_contribution = (dualW * z_sol).sum()
         metric = modularity_contribution - dual_contribution
     sub_obj_val = metric - constant_terms

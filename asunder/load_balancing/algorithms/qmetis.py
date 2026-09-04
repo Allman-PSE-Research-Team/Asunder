@@ -10,16 +10,16 @@ import warnings
 from collections import defaultdict
 from contextlib import ExitStack
 from functools import lru_cache
-from importlib import import_module
 from importlib.resources import as_file, files
 from typing import Any, Hashable, Sequence
 
 import networkx as nx
 import numpy as np
 
+from asunder.load_balancing.algorithms._qmetis_wrapper import QMETISBinding
+
 QMETIS_IDXTYPEWIDTH = 64
 QMETIS_REALTYPEWIDTH = 32
-QMETIS_MODULARITY_SCALE = 1_000_000
 
 _RESOURCE_STACK = ExitStack()
 _DLL_DIRECTORY_HANDLES: list[Any] = []
@@ -93,23 +93,18 @@ def bundled_qmetis_release() -> str | None:
 
 @lru_cache(maxsize=1)
 def _import_qmetis():
-    """Import and cache the Python wrapper against Asunder's QMETIS library.
-
-    The loader configures the wrapper's library path and integer/real ABI
-    widths before importing :mod:`metis`.
+    """Load and cache Asunder's internal QMETIS-specific Python binding.
 
     Returns
     -------
-    module
-        Imported :mod:`metis` wrapper bound to the bundled QMETIS binary.
+    QMETISBinding
+        Internal binding loaded by absolute path against the bundled binary.
 
     Raises
     ------
     ImportError
         If the platform wheel has no native binary or its ABI metadata does
         not match this loader.
-    RuntimeError
-        If :mod:`metis` was already imported against another native library.
     """
 
     native_package = "asunder.load_balancing.algorithms._native"
@@ -141,21 +136,11 @@ def _import_qmetis():
     if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
         _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(native_dir))
 
-    expected_dll = os.fspath(library_path)
-    loaded = sys.modules.get("metis")
-    configured_dll = os.environ.get("METIS_DLL")
-    if loaded is not None and configured_dll != expected_dll:
-        raise RuntimeError(
-            "The metis wrapper was imported before Asunder configured its "
-            "bundled QMETIS library. Import and use Asunder's QMETIS support "
-            "before importing another METIS library in this process."
-        )
-
-    os.environ["METIS_DLL"] = expected_dll
-    os.environ["METIS_IDXTYPEWIDTH"] = str(QMETIS_IDXTYPEWIDTH)
-    os.environ["METIS_REALTYPEWIDTH"] = str(QMETIS_REALTYPEWIDTH)
-
-    return import_module("metis")
+    return QMETISBinding(
+        library_path,
+        idx_width=QMETIS_IDXTYPEWIDTH,
+        real_width=QMETIS_REALTYPEWIDTH,
+    )
 
 
 def quantize_metis_weights(
@@ -474,6 +459,54 @@ def _epsilon_to_ubvec(
     return ubvec
 
 
+def qmetis_part_graph(
+    adjacency: Sequence[Sequence[Any]],
+    *,
+    nparts: int = 2,
+    resolution: float = 1.0,
+    tpwgts: Sequence[Any] | None = None,
+    ubvec: Sequence[Any] | None = None,
+    recursive: bool = False,
+    nodew: Sequence[Any] | None = None,
+    nodesz: Sequence[Any] | None = None,
+    **metis_options: Any,
+) -> tuple[float, list[int]]:
+    """Partition an adjacency list with bundled modularity QMETIS.
+
+    Parameters
+    ----------
+    adjacency : sequence of sequences
+        Each entry is a neighbor index or ``(neighbor, integer_weight)``.
+    nparts : int, default=2
+        Number of requested parts.
+    resolution : float, default=1.0
+        Modularity resolution :math:`\\gamma`.
+    tpwgts, ubvec, recursive, nodew, nodesz
+        Standard METIS partitioning inputs retained by the QMETIS binding.
+    **metis_options : Any
+        Additional named QMETIS options.
+
+    Returns
+    -------
+    modularity : float
+        Native QMETIS modularity with its fixed-point scale removed.
+    parts : list[int]
+        Part identifier for each adjacency row.
+    """
+
+    return _import_qmetis().part_graph(
+        adjacency,
+        nparts=nparts,
+        resolution=resolution,
+        tpwgts=tpwgts,
+        ubvec=ubvec,
+        recursive=recursive,
+        nodew=nodew,
+        nodesz=nodesz,
+        **metis_options,
+    )
+
+
 def qmetis_load_balanced_partition(
     G: nx.Graph,
     nparts: int,
@@ -483,6 +516,7 @@ def qmetis_load_balanced_partition(
     recursive: bool = False,
     contig: bool = False,
     seed: int | None = None,
+    resolution: float = 1.0,
     **metis_options: Any,
 ) -> dict[str, Any]:
     """Partition an integer-weighted NetworkX graph with bundled QMETIS.
@@ -505,8 +539,10 @@ def qmetis_load_balanced_partition(
         Request contiguous parts from QMETIS.
     seed : int or None
         QMETIS random seed.
+    resolution : float, default=1.0
+        Modularity resolution :math:`\\gamma`.
     **metis_options : Any
-        Additional options accepted by :func:`metis.part_graph`.
+        Additional named QMETIS options.
 
     Returns
     -------
@@ -537,7 +573,6 @@ def qmetis_load_balanced_partition(
     )
     _validate_integer_weights(graph, node_weight_attr, edge_weight_attr)
 
-    qmetis = _import_qmetis()
     ubvec = _epsilon_to_ubvec(balance_epsilon, node_weight_attr)
     options = dict(metis_options)
     options.setdefault("niter", 20)
@@ -546,9 +581,10 @@ def qmetis_load_balanced_partition(
     if seed is not None:
         options["seed"] = seed
 
-    objective, part_ids = qmetis.part_graph(
+    objective, part_ids = qmetis_part_graph(
         adjacency,
         nparts=nparts,
+        resolution=resolution,
         ubvec=ubvec,
         recursive=recursive,
         nodew=node_weights,
@@ -578,6 +614,7 @@ def run_qmetis(
     seed: int | None = None,
     relative_resolution: float = 1e-7,
     safe_total: int = 1 << 50,
+    resolution: float = 1.0,
     **metis_options: Any,
 ) -> tuple[np.ndarray, float]:
     """Partition a nonnegative matrix using bundled modularity QMETIS.
@@ -602,6 +639,8 @@ def run_qmetis(
         Relative precision target used during integer quantization.
     safe_total : int, default=2**50
         Maximum directed adjacency sum after quantization.
+    resolution : float, default=1.0
+        Modularity resolution :math:`\\gamma`.
     **metis_options : Any
         Additional options forwarded to QMETIS.
 
@@ -610,7 +649,7 @@ def run_qmetis(
     partition : numpy.ndarray
         Binary co-association matrix for the generated partition.
     modularity : float
-        Native QMETIS modularity after undoing its fixed return-value scale.
+        Native QMETIS modularity.
 
     Warns
     -----
@@ -627,6 +666,7 @@ def run_qmetis(
     result = qmetis_load_balanced_partition(
         graph,
         nparts=K,
+        resolution=resolution,
         balance_epsilon=balance_epsilon,
         node_weight_attr=node_weight_attr,
         edge_weight_attr=edge_weight_attr,
@@ -636,5 +676,4 @@ def run_qmetis(
 
     labels = result["partition"]
     partition = np.equal.outer(labels, labels).astype(int)
-    modularity = result["obj_val"] / QMETIS_MODULARITY_SCALE
-    return partition, modularity
+    return partition, result["obj_val"]
