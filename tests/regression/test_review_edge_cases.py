@@ -34,6 +34,25 @@ def _small_graph():
     return A, A.sum(axis=1), float(A.sum()), np.eye(2, dtype=int)
 
 
+@pytest.mark.parametrize(
+    ("solver_type", "option_name"),
+    [
+        ("gurobi_direct", "TimeLimit"),
+        ("cplex_direct", "timelimit"),
+        ("appsi_highs", "time_limit"),
+    ],
+)
+def test_projection_time_limit_uses_native_solver_option(solver_type, option_name):
+    solver = SimpleNamespace(type=solver_type, options={option_name: 30.0})
+
+    restore, applied = lb_module._temporarily_apply_projection_time_limit(solver, 15.0)
+
+    assert applied is True
+    assert solver.options[option_name] == 15.0
+    restore()
+    assert solver.options[option_name] == 30.0
+
+
 def _master_ok(A, a, m, Z_star, f_stars, extract_dual=False, **kwargs):
     lambdas = [1.0] + [0.0] * (len(Z_star) - 1)
     if extract_dual:

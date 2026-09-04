@@ -29,33 +29,41 @@ from asunder.types import DecompositionResult
 _CUSTOM_HEURISTIC_ALGOS = {"spectral", "full_louvain", "RCCS"}
 
 
-def _is_gurobi_solver(solver) -> bool:
+def _projection_time_limit_option(solver):
     names = [
         getattr(solver, "type", ""),
         getattr(solver, "name", ""),
         solver.__class__.__name__,
     ]
-    return any("gurobi" in str(name).lower() for name in names)
+    solver_name = " ".join(str(name).lower() for name in names)
+    if "gurobi" in solver_name:
+        return "TimeLimit"
+    if "cplex" in solver_name:
+        return "timelimit"
+    if "highs" in solver_name:
+        return "time_limit"
+    return None
 
 
 def _temporarily_apply_projection_time_limit(solver, projection_time_limit):
-    if projection_time_limit is None or not _is_gurobi_solver(solver):
+    option_name = _projection_time_limit_option(solver)
+    if projection_time_limit is None or option_name is None:
         return lambda: None, False
 
     options = getattr(solver, "options", None)
     if options is None:
         return lambda: None, False
 
-    had_option = "TimeLimit" in options
-    old_value = options.get("TimeLimit")
-    options["TimeLimit"] = float(projection_time_limit)
+    had_option = option_name in options
+    old_value = options.get(option_name)
+    options[option_name] = float(projection_time_limit)
 
     def restore():
         if had_option:
-            options["TimeLimit"] = old_value
+            options[option_name] = old_value
         else:
             try:
-                del options["TimeLimit"]
+                del options[option_name]
             except KeyError:
                 pass
 
