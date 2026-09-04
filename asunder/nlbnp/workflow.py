@@ -140,6 +140,7 @@ def run_nonlinear_branch_and_price(
     cannot_link: Sequence[tuple[Hashable, Hashable]] | None = None,
     algorithm: str = "louvain",
     package: str | None = "networkx",
+    resolution: float = 1.0,
     seed: int | None = 42,
     ifc_params: dict[str, Any] | None = None,
     refine: bool = True,
@@ -148,7 +149,6 @@ def run_nonlinear_branch_and_price(
     use_refined_column: bool = True,
     refine_post_loop: bool = True,
     final_master_solve: bool = False,
-    extract_dual: bool = True,
     max_iterations: int | None = None,
     tolerance: float = 1e-8,
     disable_tqdm: bool = False,
@@ -203,6 +203,9 @@ def run_nonlinear_branch_and_price(
             ``"signed_louvain"``, ``"spinglass"``
 
         Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
+    resolution : float, default=1.0
+        Modularity resolution used by pricing and column scoring. Algorithms
+        that cannot apply non-default resolution reject it.
     seed : int or None
         Random seed.
     ifc_params : dict or None
@@ -222,8 +225,6 @@ def run_nonlinear_branch_and_price(
         Whether to run post-loop refinement after column generation terminates.
     final_master_solve : bool
         Whether to run a final integer master solve.
-    extract_dual : bool
-        Whether to solve the relaxed master with dual extraction.
     max_iterations : int or None
         Maximum column-generation iterations.
     tolerance : float
@@ -308,8 +309,8 @@ def run_nonlinear_branch_and_price(
     cfg.additional_constraints = constraints
     cfg.algo = algorithm
     cfg.package = package
+    cfg.resolution = resolution
     cfg.seed = seed
-    cfg.extract_dual = extract_dual
     cfg.ifc_params = ifc_params
     cfg.refine_params = refine_params
     cfg.use_refined_column = use_refined_column and refine
@@ -329,6 +330,7 @@ def run_nonlinear_branch_and_price(
         {
             "algorithm": algorithm,
             "package": package,
+            "resolution": float(resolution),
             "execution_time": elapsed,
             "node_label_map": node_label_map,
             "label_node_map": label_node_map,

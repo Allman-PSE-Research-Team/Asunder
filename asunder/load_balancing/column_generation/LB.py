@@ -152,7 +152,8 @@ def LoadBalancer(
     projection_time_limit=15.0,
     max_iterations=None,
     disable_tqdm=False,
-    verbose=-1
+    verbose=-1,
+    resolution=1.0,
 ) -> DecompositionResult:
     """
     Solve the load-balanced structure detection problem using Asunder's column generation workflow.
@@ -167,6 +168,9 @@ def LoadBalancer(
         balanced range rule.
     K : int
         Number of communities.
+    resolution : float, default=1.0
+        Modularity resolution parameter used by pricing and column scoring.
+        Algorithms that cannot apply non-default resolution reject it.
     R_bounds : tuple[int, int] | None
         Minimum and maximum number of nodes per community (community size constraint).
     algo : str
@@ -279,9 +283,9 @@ def LoadBalancer(
         additional_constraints=additional_constraints,
         algo=algorithm,
         package=package,
+        resolution=resolution,
         disable_tqdm=disable_tqdm,
         seed=seed,
-        extract_dual=True,
         check_flat_pricing=True,
         stopping_window=3,
         # initial feasible column generator
@@ -343,7 +347,8 @@ def LoadBalancer(
     community_map_labels = map_community_labels(community_map, node_label_map)
     result.metadata.update({
         "community_map_labels": community_map_labels,
-        "modularity": compute_f_star(A, a, m, z),
+        "modularity": compute_f_star(A, a, m, z, gamma=resolution),
+        "resolution": float(resolution),
         "execution_time": elapsed
     })
     if algorithm == "qmetis":

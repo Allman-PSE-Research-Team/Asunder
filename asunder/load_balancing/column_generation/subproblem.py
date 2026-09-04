@@ -69,6 +69,7 @@ def qmetis_pricing_subproblem(
     K: int,
     R: int,
     R_bounds: tuple[int | None, int | None] | None = None,
+    gamma: float = 1.0,
     verbose: int | bool = False,
     seed: int | None = None,
     **_: Any,
@@ -97,6 +98,9 @@ def qmetis_pricing_subproblem(
         Width of the permitted community-size range.
     R_bounds : tuple[int or None, int or None] or None
         Optional explicit lower and upper community-size bounds.
+    gamma : float, default=1.0
+        Modularity resolution passed to QMETIS and exact reduced-cost
+        evaluation.
     verbose : int or bool, default=False
         Emit pricing diagnostics when enabled.
     seed : int or None
@@ -145,6 +149,7 @@ def qmetis_pricing_subproblem(
         z_sol, _native_metric = run_qmetis(
             qmetis_weights,
             K,
+            resolution=gamma,
             balance_epsilon=epsilon,
             seed=seed,
         )
@@ -164,6 +169,7 @@ def qmetis_pricing_subproblem(
             z_sol, _native_metric = run_qmetis(
                 fallback_weights,
                 K,
+                resolution=gamma,
                 balance_epsilon=epsilon,
                 seed=seed,
             )
@@ -175,11 +181,12 @@ def qmetis_pricing_subproblem(
         float(m),
         z_sol,
         duals,
+        gamma=gamma,
     )
 
     if verbose not in (-1, False, 0):
         print(
-            f"[QMETIS pricing] epsilon={epsilon:.6g}, "
+            f"[QMETIS pricing] epsilon={epsilon:.6g}, gamma={gamma:.6g}, "
             f"reduced_cost={reduced_cost:.8g}, "
             f"ignored_diagonal={has_ignored_internal_mass}"
         )
