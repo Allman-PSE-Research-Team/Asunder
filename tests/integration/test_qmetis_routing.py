@@ -40,6 +40,7 @@ def test_load_balancer_routes_qmetis_without_public_backend_parameters(monkeypat
         nx.path_graph(4),
         K=2,
         R=0,
+        resolution=1.25,
         algorithm="qmetis",
         disable_tqdm=True,
         verbose=-1,
@@ -52,4 +53,6 @@ def test_load_balancer_routes_qmetis_without_public_backend_parameters(monkeypat
         "R_bounds": None,
     }
     assert np.array_equal(result.final_partition, partition)
+    assert captured["config"].resolution == 1.25
+    assert result.metadata["resolution"] == 1.25
     assert "qmetis_release" in result.metadata

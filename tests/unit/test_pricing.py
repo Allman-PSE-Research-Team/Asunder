@@ -71,16 +71,25 @@ def test_qmetis_pricing_uses_bound_envelope_and_exact_float_score(monkeypatch):
         duals,
         K=2,
         R=2,
+        gamma=1.25,
         seed=9,
     )
 
     assert np.array_equal(result, candidate)
     assert observed["K"] == 2
     assert observed["balance_epsilon"] == pytest.approx(0.5)
+    assert observed["resolution"] == pytest.approx(1.25)
     assert observed["seed"] == 9
     assert np.all(observed["weights"] >= 0)
     assert reduced_cost == pytest.approx(
-        compute_reduced_cost(adjacency, degrees, total, candidate, duals)
+        compute_reduced_cost(
+            adjacency,
+            degrees,
+            total,
+            candidate,
+            duals,
+            gamma=1.25,
+        )
     )
 
 

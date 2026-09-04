@@ -23,6 +23,7 @@ def main() -> int:
     partition, modularity = run_qmetis(
         adjacency,
         2,
+        resolution=1.25,
         balance_epsilon=0.25,
         seed=7,
     )
@@ -30,6 +31,18 @@ def main() -> int:
         raise RuntimeError(f"Unexpected QMETIS partition shape {partition.shape}.")
     if not np.isfinite(modularity):
         raise RuntimeError(f"QMETIS returned non-finite modularity {modularity}.")
+    recursive_partition, recursive_modularity = run_qmetis(
+        adjacency,
+        2,
+        resolution=1.25,
+        balance_epsilon=0.25,
+        recursive=True,
+        seed=7,
+    )
+    if recursive_partition.shape != adjacency.shape or not np.isfinite(
+        recursive_modularity
+    ):
+        raise RuntimeError("Recursive QMETIS modularity smoke test failed.")
 
     a = adjacency.sum(axis=1)
     m = float(a.sum())
@@ -44,6 +57,7 @@ def main() -> int:
         },
         K=2,
         R=2,
+        gamma=1.25,
         seed=7,
     )
     if priced_partition.shape != adjacency.shape or not np.isfinite(reduced_cost):
@@ -58,6 +72,7 @@ def main() -> int:
         K=2,
         R=2,
         algorithm="qmetis",
+        resolution=1.25,
         ifc_generator="ordered",
         refine_post_loop=True,
         max_iterations=3,
@@ -76,6 +91,7 @@ def main() -> int:
         "qmetis_smoke_ok",
         bundled_qmetis_release(),
         float(modularity),
+        float(recursive_modularity),
         float(reduced_cost),
     )
     return 0

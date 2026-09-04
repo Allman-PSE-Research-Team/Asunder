@@ -38,6 +38,9 @@ def verify_sdist(archive_path: Path) -> None:
         PurePosixPath(
             "asunder/load_balancing/algorithms/_qmetis_assets.json"
         ),
+        PurePosixPath(
+            "asunder/load_balancing/algorithms/_qmetis_wrapper.py"
+        ),
         PurePosixPath("tools/fetch_qmetis.py"),
     }
     for suffix in required_suffixes:

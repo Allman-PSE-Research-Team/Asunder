@@ -128,9 +128,8 @@ def test_final_master_infeasibility_records_no_partition():
         _subproblem_eye,
         columns=[Z],
         f_stars=[0.0],
-        extract_dual=True,
         final_master_solve=True,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -163,9 +162,8 @@ def test_contract_final_master_infeasibility_expands_none():
         must_link=[(0, 1)],
         additional_constraints=dict(),
         contract_graph=True,
-        extract_dual=True,
         final_master_solve=True,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -194,14 +192,13 @@ def test_contracted_decomposition_maps_cannot_links_for_initial_columns():
         must_link=[(0, 1)],
         cannot_link=[(0, 3)],
         contract_graph=True,
-        extract_dual=True,
         ifc_params={
             "generator": make_simple_partition,
             "num": 1,
             "args": {"N": 4, "cannot_link": [(0, 3)]},
         },
         final_master_solve=False,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -241,9 +238,8 @@ def test_contracted_decomposition_transforms_and_rescores_warm_start():
         f_stars=[12345.0],
         must_link=[(0, 1)],
         contract_graph=True,
-        extract_dual=True,
         final_master_solve=False,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -322,14 +318,15 @@ def test_decomposition_accepts_wrapped_heuristic_callables():
             hook,
             columns=[Z],
             f_stars=[0.0],
-            extract_dual=True,
             final_master_solve=False,
-            max_iterations=0,
+            max_iterations=1,
             disable_tqdm=True,
             verbose=-1,
         )
         assert out[-1]["z_sol"].shape == A.shape
 
+def improving_subproblem(A, a, m, duals, **kwargs):
+    return 1.0, np.eye(A.shape[0], dtype=int)
 
 def test_refine_post_loop_false_keeps_in_loop_refinement_only():
     """Regression coverage for decoupling in-loop and post-loop refinement."""
@@ -345,15 +342,14 @@ def test_refine_post_loop_false_keeps_in_loop_refinement_only():
         a,
         m,
         _master_ok,
-        _subproblem_eye,
+        improving_subproblem,
         columns=[Z],
         f_stars=[0.0],
-        extract_dual=True,
         refine_params={"refine_func": refine_once, "kwargs": {}},
         use_refined_column=True,
         refine_post_loop=False,
         final_master_solve=False,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -433,7 +429,8 @@ def test_projection_ilp_returns_strict_k_load_balanced_partition():
     assert meta["K_used"] == 2
     assert meta["requested_K"] == 2
     assert meta["feasibility_fallback"] == "projection_ilp"
-    assert meta["projection_wz_score"] == pytest.approx(4.0)
+    assert meta["projection_objective"] == pytest.approx(2.0)
+    assert meta["projection_distance"] == pytest.approx(8.0)
 
 
 def test_projection_ilp_rejects_infeasible_strict_k_before_solving():
