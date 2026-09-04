@@ -74,7 +74,6 @@ A = np.array([
 # ifc_params contains function and parameters for generating initial feasible partition(s)
 cfg = CSDDecompositionConfig(
     ifc_params={"generator": lambda N, **_: [np.ones((N, N))], "num": 1, "args": {"N": A.shape[0]}},
-    extract_dual=False,
     final_master_solve=False,
 )
 
@@ -121,13 +120,15 @@ print(result.final_partition)
 `result.final_partition` is the detected partition matrix. `result.metadata` includes the modularity score, elapsed time, and label-aware community information so the result can be mapped back to the original graph nodes.
 
 For native modularity pricing with QMETIS, select it as the load-balancing
-algorithm; no QMETIS-specific parameters are added to the high-level API:
+algorithm. `resolution` is a general Asunder modularity parameter; no
+backend-specific QMETIS options are added to the high-level API:
 
 ```python
 result = LoadBalancer(
     G,
     K=2,
     R=2,
+    resolution=1.25,
     algorithm="qmetis",
     disable_tqdm=True,
 )
@@ -140,8 +141,10 @@ It can also be run directly via `asunder.load_balancing.run_qmetis`.
 
 Released Windows x86-64, Linux x86-64, and macOS universal2 wheels contain a
 pinned `idx64-real32` QMETIS build. Each wheel contains only the QMETIS-named
-runtime (`qmetis.dll`, `libqmetis.so`, or `libqmetis.dylib`); it does not
-bundle a generic `metis.dll` or `libmetis` library. Source distributions
+runtime (`qmetis.dll`, `libqmetis.so`, or `libqmetis.dylib`) and Asunder's
+QMETIS-specific Python binding; the external `metis` package is not required.
+The wheels do not bundle a generic `metis.dll` or `libmetis` library. Source
+distributions
 remain usable for the rest of Asunder, but QMETIS requires one of the
 supported platform wheels or a locally staged compatible native library.
 
