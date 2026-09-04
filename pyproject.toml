@@ -18,8 +18,7 @@ dependencies = [
   "scikit-network>=0.33",
   "tqdm>=4.66",
   "pyomo>=6.8",
-  "gurobipy>=11.0",
-  "metis>=0.2a5",
+  "gurobipy>=11.0"
 ]
 keywords = ["graph", "constrained-clustering", "graph-clustering", "community-detection", "core-periphery", "column-generation", "constrained-network-structure-detection", "branch-and-price"]
 classifiers = [
