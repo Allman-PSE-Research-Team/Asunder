@@ -683,7 +683,7 @@ def make_simple_partition(
     cannot_link: Sequence[tuple[int, int]] | None = None, seed=42
 ):
     """
-    Create a single all-ones partition matrix with cannot-link zeroed pairs.
+    Create one transitive partition satisfying the cannot-link pairs.
     
     Parameters
     ----------
@@ -697,9 +697,9 @@ def make_simple_partition(
     list[array]
         Generated partition.
     """
-    cannot_link = [] if cannot_link is None else list(cannot_link)
-    initial_z = np.ones((N, N))
-    for i, j in cannot_link:
-        initial_z[i, j] = 0
-        initial_z[j, i] = 0  # enforce symmetry
-    return [initial_z]
+    return make_partitions_random_links_only(
+        N=N,
+        cannot_link=cannot_link,
+        seed=seed,
+        n_parts=1,
+    )

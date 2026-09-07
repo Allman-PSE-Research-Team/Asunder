@@ -14,7 +14,10 @@ from asunder.base.utils.graph import (
     contract_node_pairs,
     contract_partition_matrix,
     expand_z_matrix,
+    normalize_node_pairs,
+    partition_satisfies_pairwise_constraints,
     sufficiently_different,
+    validate_partition_matrix,
 )
 
 
@@ -23,18 +26,18 @@ def CSD_decomposition(
     mp_function,
     sp_function,
     columns=None, f_stars=None,
-    must_link=[], cannot_link=[],
+    must_link=None, cannot_link=None,
     additional_constraints=None,
     contract_graph=False,
     stopping_window=5,
     check_flat_pricing=True,
-    algo="louvain",
-    package="sknetwork",
+    algo="signed_leiden",
+    package="leidenalg",
     seed=42,
     # initial feasible column generator
-    ifc_params: dict = {},
+    ifc_params: dict | None = None,
     # refinement
-    refine_params: dict={},
+    refine_params: dict | None = None,
     use_refined_column=False,
     refine_post_loop=True,
     final_master_solve=True,
@@ -45,7 +48,7 @@ def CSD_decomposition(
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
-    
+
     Parameters
     ----------
     A : np.ndarray of int | float, shape (N, N)
@@ -117,7 +120,8 @@ def CSD_decomposition(
     subproblem_params : dict[str, Any] or None
         Additional keyword arguments passed to the pricing/subproblem callable.
     use_refined_column : bool
-        Boolean that determines whether refined columns are used in the main column generation loop or not.
+        Whether to run refinement and add its columns inside the main column
+        generation loop.
     refine_post_loop : bool
         Boolean that determines whether a post-loop refinement column is generated after column generation terminates.
     final_master_solve : bool
@@ -147,21 +151,56 @@ def CSD_decomposition(
         contracted columns. Each record also contains ``node2comp``, mapping
         original node indices to contracted component indices.
     """
+    A = np.asarray(A, dtype=float)
+    a = np.asarray(a, dtype=float).reshape(-1)
+    if A.ndim != 2 or A.shape[0] != A.shape[1]:
+        raise ValueError("A must be a square matrix.")
+    if a.shape != (A.shape[0],):
+        raise ValueError(f"a must have shape {(A.shape[0],)}.")
+    if not np.all(np.isfinite(A)) or not np.all(np.isfinite(a)):
+        raise ValueError("A and a must contain only finite values.")
+    if not np.allclose(A, A.T, atol=1e-10, rtol=0):
+        raise ValueError("A must be symmetric for undirected decomposition.")
+    m = float(m)
+    if not np.isfinite(m) or m <= 0:
+        raise ValueError("m must be a finite positive value.")
     if max_iterations is not None and max_iterations < 1:
         raise ValueError("max_iterations must be at least 1 or None")
-    ifc_params = copy.deepcopy(ifc_params)
-    refine_params = copy.deepcopy(refine_params)
+    ifc_params = copy.deepcopy(ifc_params or {})
+    # Keep application-defined provenance identifiers intact.  In particular,
+    # identity-hashable objects in ``component_members`` must remain the same
+    # objects seen by constraint predicate closures.
+    refine_params = dict(refine_params or {})
     resolution = float(resolution)
     if not np.isfinite(resolution) or resolution < 0:
         raise ValueError("resolution must be a finite nonnegative value.")
-    must_link = list(must_link or [])
-    cannot_link = list(cannot_link or [])
+    must_link = normalize_node_pairs(
+        must_link,
+        A.shape[0],
+        relation_name="must-link",
+    )
+    cannot_link = normalize_node_pairs(
+        cannot_link,
+        A.shape[0],
+        relation_name="cannot-link",
+        reject_self=True,
+    )
+    contradictory_pairs = sorted(set(must_link) & set(cannot_link))
+    if contradictory_pairs:
+        raise ValueError(
+            "The same node pair cannot be both must-link and cannot-link: "
+            f"{contradictory_pairs}."
+        )
     if stopping_window < 1:
         raise ValueError("stopping_window must be at least 1")
 
     # normalize refinement configurations
     refine_func = refine_params.get("refine_func")
     refine_kwargs = dict(refine_params.get("kwargs") or {})
+    if callable(refine_func):
+        refine_signature = inspect.signature(refine_func)
+        if "gamma" in refine_signature.parameters:
+            refine_kwargs.setdefault("gamma", resolution)
 
     if use_refined_column and not callable(refine_func):
         raise ValueError(
@@ -192,37 +231,53 @@ def CSD_decomposition(
             "Warm-start columns and f_stars must have the same length."
         )
 
-    if not columns:
-        missing = {"generator", "num"} - ifc_params.keys()
-        if missing:
-            raise ValueError(
-                f"ifc_params is missing required keys: {sorted(missing)}"
-            )
-
-        if not callable(ifc_params["generator"]):
-            raise ValueError("ifc_params['generator'] must be callable.")
-
-        if ifc_params["num"] < 1:
-            raise ValueError("ifc_params['num'] must be at least 1.")
-
     additional_constraints = (
         {} if additional_constraints is None else dict(additional_constraints)
     )
-
-    if contract_graph and additional_constraints.get("LB"):
-        # TODO: Support load-balancing contraction by carrying original
-        # component sizes as vertex weights through pricing and refinement.
-        raise ValueError(
-            "Graph contraction is not supported for load-balancing "
-            "decomposition until component-size vertex weights are implemented."
+    subproblem_signature = inspect.signature(sp_function)
+    if (
+        "balance_weights" in subproblem_signature.parameters
+        and "balance_weights" in additional_constraints
+    ):
+        subproblem_params.setdefault(
+            "balance_weights",
+            additional_constraints["balance_weights"],
         )
+    if callable(refine_func):
+        if "must_link" in refine_signature.parameters:
+            refine_kwargs.setdefault("must_link", must_link)
+        if "cannot_link" in refine_signature.parameters:
+            refine_kwargs.setdefault("cannot_link", cannot_link)
+        if "balance_weights" in refine_signature.parameters and "balance_weights" in additional_constraints:
+            refine_kwargs.setdefault(
+                "balance_weights",
+                additional_constraints["balance_weights"],
+            )
 
     # contract graph if necessary
     if contract_graph and (must_link or additional_constraints.get("worthy_edges")):
+        original_balance_weights = np.asarray(
+            additional_constraints.get("balance_weights", np.ones(A.shape[0], dtype=int))
+        )
+        if original_balance_weights.shape != (A.shape[0],):
+            raise ValueError("balance_weights must contain one value per original node.")
+        if (
+            not np.all(np.isfinite(original_balance_weights))
+            or np.any(original_balance_weights <= 0)
+            or not np.all(original_balance_weights == np.rint(original_balance_weights))
+        ):
+            raise ValueError("balance_weights must contain positive integers.")
         A, node2comp = contract_adj_matrix_new(A, additional_constraints.get("worthy_edges"), must_link)
         a = A.sum(axis=0)
         m = np.sum(a)
         additional_constraints["worthy_edges"] = None
+        component_balance_weights = np.bincount(
+            node2comp,
+            weights=original_balance_weights,
+            minlength=A.shape[0],
+        )
+        if additional_constraints.get("LB") or "balance_weights" in additional_constraints:
+            additional_constraints["balance_weights"] = component_balance_weights
         cannot_link = contract_node_pairs(
             cannot_link,
             node2comp,
@@ -233,6 +288,11 @@ def CSD_decomposition(
         generator_args = ifc_params.get("args", {})
         if "N" in ifc_params.get("args", {}):
             generator_args["N"] = np.shape(A)[0]
+        if "G" in generator_args:
+            import networkx as nx
+
+            generator_args["G"] = nx.from_numpy_array(A)
+            generator_args["nodes"] = list(range(A.shape[0]))
         if "cannot_link" in generator_args:
             generator_args["cannot_link"] = contract_node_pairs(
                 generator_args["cannot_link"],
@@ -242,6 +302,37 @@ def CSD_decomposition(
             )
         if "must_link" in generator_args:
             generator_args["must_link"] = []
+        if "node_weights" in generator_args:
+            generator_args["node_weights"] = component_balance_weights
+
+        if "cannot_link" in refine_kwargs:
+            refine_kwargs["cannot_link"] = cannot_link
+        if "must_link" in refine_kwargs:
+            refine_kwargs["must_link"] = []
+        if "balance_weights" in refine_kwargs:
+            refine_kwargs["balance_weights"] = component_balance_weights
+        if "node_weights" in refine_kwargs:
+            refine_kwargs["node_weights"] = component_balance_weights
+        if callable(refine_func) and "component_members" in refine_signature.parameters:
+            supplied_members = refine_kwargs.get("component_members")
+            if supplied_members is None:
+                source_members = [(int(i),) for i in range(node2comp.shape[0])]
+            else:
+                if len(supplied_members) != node2comp.shape[0]:
+                    raise ValueError(
+                        "component_members must contain one member collection per "
+                        "node before external contraction."
+                    )
+                source_members = [tuple(members) for members in supplied_members]
+
+            contracted_members = [[] for _ in range(A.shape[0])]
+            for source_index, component_index in enumerate(node2comp):
+                contracted_members[int(component_index)].extend(source_members[source_index])
+            refine_kwargs["component_members"] = tuple(
+                tuple(members) for members in contracted_members
+            )
+        if "balance_weights" in subproblem_params:
+            subproblem_params["balance_weights"] = component_balance_weights
 
         if columns is not None and len(columns) > 0:
             columns = [
@@ -256,6 +347,20 @@ def CSD_decomposition(
             ]
 
         if A.shape == (1, 1):
+            if additional_constraints.get("LB"):
+                requested_k = int(additional_constraints.get("K", 1))
+                if requested_k != 1:
+                    return None
+                total_weight = float(component_balance_weights[0])
+                bounds = additional_constraints.get("R_bounds")
+                if bounds is None:
+                    width = int(additional_constraints.get("R", 0))
+                    lower = max(1, int(np.floor(total_weight - width / 2 + 0.5)))
+                    upper = lower + width
+                else:
+                    lower, upper = bounds
+                if not (float(lower) <= total_weight <= float(upper)):
+                    return None
             coarse_partition = np.ones((1, 1), dtype=int)
             score = (
                 compute_f_star(A, a, m, coarse_partition, gamma=resolution)
@@ -271,16 +376,37 @@ def CSD_decomposition(
                 "columns": [coarse_partition],
                 "f_stars": [score],
                 "node2comp": node2comp.copy(),
+                "partition_source": "contracted_trivial",
             }]
     else:
         node2comp = None
+
+    if not columns:
+        missing = {"generator", "num"} - ifc_params.keys()
+        if missing:
+            raise ValueError(
+                f"ifc_params is missing required keys: {sorted(missing)}"
+            )
+
+        if not callable(ifc_params["generator"]):
+            raise ValueError("ifc_params['generator'] must be callable.")
+
+        if ifc_params["num"] < 1:
+            raise ValueError("ifc_params['num'] must be at least 1.")
 
     # deque to track flat pricing for termination
     SUB_OBJS = deque(maxlen=stopping_window)
 
     if (columns is not None and f_stars is not None) and len(columns) > 0:
         # initialize from parameters
-        Z_star = list(columns)
+        Z_star = [
+            validate_partition_matrix(
+                column,
+                A.shape[0],
+                name=f"warm-start column {index}",
+            )
+            for index, column in enumerate(columns)
+        ]
         if resolution != 1.0:
             # Caller-supplied scores do not record the resolution at which
             # they were computed, so non-default runs rescore their columns.
@@ -294,21 +420,32 @@ def CSD_decomposition(
         feasible_columns = ifc_generator(**ifc_params["args"], seed=seed)
 
         # without feasible columns, terminate
-        if len(feasible_columns) == 0:
+        if feasible_columns is None or len(feasible_columns) == 0:
             if verbose != -1:
                 print("A feasible initial partition cannot be generated.")
             return None
 
         # initialize columns and their scores
         if ifc_params["num"] == 1:
-            initial_z = feasible_columns[0]
+            initial_z = validate_partition_matrix(
+                feasible_columns[0],
+                A.shape[0],
+                name="initial feasible column 0",
+            )
             f_star_initial = compute_f_star(
                 A, a, m, initial_z, gamma=resolution
             )
             Z_star = [initial_z]
             f_stars = [f_star_initial]
         else:
-            Z_star = feasible_columns[:ifc_params["num"]]
+            Z_star = [
+                validate_partition_matrix(
+                    column,
+                    A.shape[0],
+                    name=f"initial feasible column {index}",
+                )
+                for index, column in enumerate(feasible_columns[:ifc_params["num"]])
+            ]
             f_stars = [
                 compute_f_star(A, a, m, col, gamma=resolution)
                 for col in Z_star
@@ -380,6 +517,11 @@ def CSD_decomposition(
                 duals,
                 **pricing_kwargs,
             )
+            z_sol = validate_partition_matrix(
+                z_sol,
+                A.shape[0],
+                name="pricing column",
+            )
 
             results.append({
                 "lambda_sol": lambda_sol,
@@ -387,9 +529,10 @@ def CSD_decomposition(
                 "master_obj_val": master_obj_val,
                 "z_sol": expand_z_matrix(z_sol, node2comp) if contract_graph else z_sol,
                 "sub_obj_val": sub_obj_val, "columns": Z_star.copy(),
-                "f_stars": f_stars.copy()
+                "f_stars": f_stars.copy(),
+                "partition_source": "pricing_candidate",
             })
-                        
+
             # check if the pricing problem generated a column with positive reduced cost.
             if sub_obj_val > tolerance: # and iteration == 0:
                 if verbose != -1:
@@ -408,9 +551,9 @@ def CSD_decomposition(
             SUB_OBJS.append(sub_obj_val)
 
             # refine z_sol and potentially add to column list
-            if callable(refine_func) and (use_refined_column or final_master_solve):
-                # refine z_sol if needed in column generation or final master solve
-                in_loop_kwargs = copy.deepcopy(refine_kwargs)
+            if callable(refine_func) and use_refined_column:
+                # refine column only when explicitly enabled in-loop.
+                in_loop_kwargs = dict(refine_kwargs)
                 if "shake_rounds" in inspect.signature(refine_func).parameters:
                     in_loop_kwargs["shake_rounds"] = 0
                 heuristic_col = refine_func(
@@ -419,6 +562,18 @@ def CSD_decomposition(
                     **in_loop_kwargs,
                     seed=seed
                 )
+                if heuristic_col is not None:
+                    heuristic_col = validate_partition_matrix(
+                        heuristic_col,
+                        A.shape[0],
+                        name="in-loop refinement column",
+                    )
+                    if not partition_satisfies_pairwise_constraints(
+                        heuristic_col,
+                        must_link=[] if contract_graph else must_link,
+                        cannot_link=cannot_link,
+                    ):
+                        heuristic_col = None
                 if heuristic_col is not None:
                     results[-1]["heuristic_col"] = heuristic_col
                     # add heuristic column to list if it is needed in column generation and is sufficiently different
@@ -433,7 +588,7 @@ def CSD_decomposition(
                                 gamma=resolution,
                             )
                         )
-            
+
             # if pricing is flat for `stopping_window` iterations, stop.
             if (
                 check_flat_pricing
@@ -456,13 +611,25 @@ def CSD_decomposition(
         wz = np.zeros_like(Z_star[0]).astype(np.float64)
         for lambda_, column in zip(lambda_sol, Z_star):
             wz += (lambda_ * column)
-        
+
         heuristic_col = refine_func(
                 A=A,
                 partition=wz,
                 **refine_kwargs,
                 seed=seed
             )
+        if heuristic_col is not None:
+            heuristic_col = validate_partition_matrix(
+                heuristic_col,
+                A.shape[0],
+                name="post-loop refinement column",
+            )
+            if not partition_satisfies_pairwise_constraints(
+                heuristic_col,
+                must_link=[] if contract_graph else must_link,
+                cannot_link=cannot_link,
+            ):
+                heuristic_col = None
         if heuristic_col is not None:
             Z_star.append(heuristic_col)
             f_stars.append(
@@ -484,29 +651,13 @@ def CSD_decomposition(
                 "heuristic_col": heuristic_col,
                 "sub_obj_val": None,
                 "columns": Z_star.copy(),
-                "f_stars": f_stars.copy()
+                "f_stars": f_stars.copy(),
+                "partition_source": "post_loop_refinement",
             })
 
     if final_master_solve:
         if verbose != -1:
             print("Final Integer Master Solve...")
-        if not use_refined_column:
-            for record in results:
-                if record["sub_obj_val"] is None:
-                    continue
-                heuristic_col = record.get("heuristic_col")
-                if heuristic_col is not None:
-                    Z_star.append(heuristic_col)
-                    f_stars.append(
-                        compute_f_star(
-                            A,
-                            a,
-                            m,
-                            heuristic_col,
-                            gamma=resolution,
-                        )
-                    )
-
         (lambda_sol, master_obj_val) = mp_function(
             A, a, m,
             Z_star, f_stars,
@@ -533,7 +684,8 @@ def CSD_decomposition(
             "heuristic_col": None,
             "sub_obj_val": None,
             "columns": Z_star.copy(),
-            "f_stars": f_stars.copy()
+            "f_stars": f_stars.copy(),
+            "partition_source": "integer_master",
         })
     if node2comp is not None:
         for record in results:

@@ -148,6 +148,89 @@ def partition_matrix_to_vector(Z):
     return labels
 
 
+def normalize_node_pairs(pairs, n_nodes, *, relation_name="node-pair", reject_self=False):
+    """Validate, normalize, and deduplicate node-index pairs.
+
+    Pairs are returned in sorted endpoint order.  Self-pairs are discarded for
+    reflexive relations such as must-links and rejected for irreflexive
+    relations such as cannot-links.
+    """
+    normalized = set()
+    for pair in pairs or []:
+        if len(pair) != 2:
+            raise ValueError(f"Each {relation_name} entry must contain two nodes.")
+        source, target = int(pair[0]), int(pair[1])
+        if not (0 <= source < n_nodes and 0 <= target < n_nodes):
+            raise ValueError(
+                f"{relation_name} pair {(source, target)} contains a node "
+                f"outside 0..{n_nodes - 1}."
+            )
+        if source == target:
+            if reject_self:
+                raise ValueError(
+                    f"{relation_name} pair {(source, target)} cannot contain "
+                    "the same node twice."
+                )
+            continue
+        normalized.add(tuple(sorted((source, target))))
+    return sorted(normalized)
+
+
+def validate_partition_matrix(partition, n_nodes=None, *, name="partition", atol=1e-8):
+    """Return a validated binary co-association matrix.
+
+    Besides shape, symmetry, and unit-diagonal checks, this verifies that the
+    matrix represents an equivalence relation.  The latter prevents malformed
+    custom columns from silently entering a restricted master problem.
+    """
+    matrix = np.asarray(partition)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError(f"{name} must be a square matrix.")
+    if n_nodes is not None and matrix.shape != (int(n_nodes), int(n_nodes)):
+        raise ValueError(
+            f"{name} must have shape {(int(n_nodes), int(n_nodes))}, "
+            f"not {matrix.shape}."
+        )
+    try:
+        finite = np.all(np.isfinite(matrix))
+    except TypeError as exc:
+        raise ValueError(f"{name} must contain numeric values.") from exc
+    if not finite:
+        raise ValueError(f"{name} contains NaN or infinity.")
+    if not np.allclose(matrix, matrix.T, atol=atol, rtol=0):
+        raise ValueError(f"{name} must be symmetric.")
+    if not np.allclose(np.diag(matrix), 1.0, atol=atol, rtol=0):
+        raise ValueError(f"{name} must have a unit diagonal.")
+    rounded = np.rint(matrix).astype(int)
+    if not np.allclose(matrix, rounded, atol=atol, rtol=0) or np.any(
+        (rounded != 0) & (rounded != 1)
+    ):
+        raise ValueError(f"{name} must be binary.")
+    labels = partition_matrix_to_vector(rounded)
+    canonical = partition_vector_to_2d_matrix(labels)
+    if not np.array_equal(rounded, canonical):
+        raise ValueError(f"{name} must define a transitive co-association relation.")
+    return rounded
+
+
+def partition_satisfies_pairwise_constraints(
+    partition,
+    *,
+    must_link=None,
+    cannot_link=None,
+    atol=1e-8,
+):
+    """Check hard must-link and cannot-link values in a partition matrix."""
+    matrix = np.asarray(partition)
+    for source, target in must_link or []:
+        if not np.isclose(matrix[int(source), int(target)], 1.0, atol=atol, rtol=0):
+            return False
+    for source, target in cannot_link or []:
+        if not np.isclose(matrix[int(source), int(target)], 0.0, atol=atol, rtol=0):
+            return False
+    return True
+
+
 def contract_node_pairs(
     pairs,
     node2comp,
@@ -319,6 +402,12 @@ def contract_adj_matrix_new(
         Mapping from original node to supernode id.
     """
     A = np.asarray(A)
+    if A.ndim != 2 or A.shape[0] != A.shape[1]:
+        raise ValueError("A must be a square matrix.")
+    if not np.all(np.isfinite(A)):
+        raise ValueError("A must contain only finite values.")
+    if not np.allclose(A, A.T, atol=1e-10, rtol=0):
+        raise ValueError("A must be symmetric.")
     n = A.shape[0]
 
     # build the merge graph G_ml that defines which nodes are contracted
@@ -355,22 +444,23 @@ def contract_adj_matrix_new(
     for cid, nodes in enumerate(comp2nodes):
         node2comp[nodes] = cid
 
-    # build contracted adjacency while tracking intra weights
-    A_sup = np.zeros((num_super, num_super), dtype=A.dtype)
-    intra_sum = np.zeros(num_super, dtype=float)
-
-    for i, j in edges:
-        wij = A[i, j]
-        ci, cj = node2comp[i], node2comp[j]
-        if ci == cj:
-            intra_sum[ci] += wij
-        else:
-            A_sup[ci, cj] += wij
-            A_sup[cj, ci] += wij
-
-    if keep_self_loops:
-        diag_vals = 2 * intra_sum if degree_preserving else intra_sum
-        A_sup[np.arange(num_super), np.arange(num_super)] = diag_vals
+    membership = np.zeros((n, num_super), dtype=float)
+    membership[np.arange(n), node2comp] = 1.0
+    # P.T @ A @ P exactly preserves every component's summed strength,
+    # including pre-existing diagonal mass.  Reconstructing from the upper
+    # triangle would incorrectly double original self-loops.
+    A_sup = membership.T @ A @ membership
+    if not keep_self_loops:
+        np.fill_diagonal(A_sup, 0)
+    elif not degree_preserving:
+        original_diagonal = np.diag(A)
+        diagonal_mass = np.bincount(
+            node2comp,
+            weights=original_diagonal,
+            minlength=num_super,
+        )
+        current = np.diag(A_sup).copy()
+        np.fill_diagonal(A_sup, 0.5 * (current + diagonal_mass))
 
     return (A_sup, node2comp)
 
