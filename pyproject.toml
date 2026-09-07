@@ -18,7 +18,9 @@ dependencies = [
   "scikit-network>=0.33",
   "tqdm>=4.66",
   "pyomo>=6.8",
-  "gurobipy>=11.0"
+  "gurobipy>=11.0",
+  "python-igraph>=0.11",
+  "leidenalg>=0.10",
 ]
 keywords = ["graph", "constrained-clustering", "graph-clustering", "community-detection", "core-periphery", "column-generation", "constrained-network-structure-detection", "branch-and-price"]
 classifiers = [
@@ -32,7 +34,6 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-graph = ["python-igraph>=0.11", "leidenalg>=0.10"]
 viz = ["matplotlib>=3.8", "seaborn>=0.13"]
 legacy = ["cpnet"]
 docs = [
