@@ -51,34 +51,24 @@ can use the rest of Asunder normally, but selecting ``algorithm="qmetis"``
 requires a compatible QMETIS library to be staged during a platform-wheel
 build.
 
-Optional Extras
----------------
+Included Graph Backends and Optional Extras
+-------------------------------------------
 
 Optional extras add dependencies for workflows that are useful but not required
 for every installation. Extras can be installed one at a time or combined in a
 comma-separated list.
 
-``graph``
-   Installs ``python-igraph`` and ``leidenalg``.
-
-   Use this extra when you want the igraph- or leidenalg-backed community
-   detection paths, such as calling decomposition routines with
-   ``package="igraph"`` or ``package="leidenalg"``. These backends are
-   especially useful for larger graph instances where compiled graph routines
-   can be faster than pure Python alternatives. ``python-igraph`` is also used
-   by some graph automorphism and symmetry-detection helpers.
-
-   .. code-block:: bash
-
-      python -m pip install "put-asunder[graph]"
+``python-igraph`` and ``leidenalg`` are included in the base installation
+because signed Leiden is the default pricing heuristic. They support calls
+using ``package="igraph"`` or ``package="leidenalg"`` and are also used by
+some graph automorphism and symmetry-detection helpers. No additional extra is
+needed for those paths.
 
 ``viz``
    Installs ``matplotlib`` and ``seaborn``.
 
    Use this extra when you want plotting helpers under
    ``asunder.base.visualization`` for graph, partition, and matrix inspection.
-   It is independent of the graph extra, but commonly installed with it for
-   exploratory analysis.
 
    .. code-block:: bash
 
@@ -120,17 +110,18 @@ comma-separated list.
 Common Install Recipes
 ----------------------
 
-Install graph algorithms plus visualization support from PyPI:
+Install visualization support in addition to the graph backends included in
+the base package:
 
 .. code-block:: bash
 
-   python -m pip install "put-asunder[graph,viz]"
+   python -m pip install "put-asunder[viz]"
 
 Install the common contributor environment from a local clone:
 
 .. code-block:: bash
 
-   python -m pip install -e ".[dev,graph,viz,docs]"
+   python -m pip install -e ".[dev,viz,docs]"
 
 Build the documentation after installing the documentation dependencies:
 
@@ -141,10 +132,10 @@ Build the documentation after installing the documentation dependencies:
 Python Support
 --------------
 
-The core package supports Python 3.10, 3.11, 3.12, 3.13, and 3.14. The
-mainstream ``graph`` and ``viz`` extras are also expected to work across those
-versions. The ``legacy`` extra is maintained on a best-effort basis on Python
-3.13 and 3.14 because it depends on upstream legacy dependencies.
+The core package supports Python 3.10, 3.11, 3.12, 3.13, and 3.14. The graph
+backends and ``viz`` extra are also expected to work across those versions.
+The ``legacy`` extra is maintained on a best-effort basis on Python 3.13 and
+3.14 because it depends on upstream legacy dependencies.
 
 Notes
 -----

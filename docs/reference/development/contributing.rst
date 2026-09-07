@@ -7,12 +7,12 @@ contributions.
 Development Setup
 -----------------
 
-For a local clone, install the development, documentation, and common optional
-extras:
+For a local clone, install the development, documentation, and visualization
+extras. Graph backends are core dependencies:
 
 .. code-block:: bash
 
-   python -m pip install -e ".[dev,docs,graph,viz]"
+   python -m pip install -e ".[dev,docs,viz]"
 
 Solver-backed workflows require a working Pyomo-compatible solver in the local
 environment. Solver support is not provided through a dedicated project extra;

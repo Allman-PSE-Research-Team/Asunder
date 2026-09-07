@@ -100,13 +100,12 @@ Use refinement in ``asunder.base`` only when the logic is reusable. Keep
 workflow-specific refinement in application packages such as
 ``asunder.load_balancing`` or ``asunder.nlbnp``.
 
-For constrained partitioning extensions, a custom refinement function can also
-call a feasibility projection directly instead of a local-search refinement such
-as VFD. This is useful when the move logic is too specialized for a new
-constraint combination: project the incoming partition onto the nearest feasible
-partition under the desired constraints first, and only modify or extend
-``modular_VFD`` if that projection is not expressive enough. The load-balancing
-projection is one concrete instance of this pattern.
+For constrained partitioning extensions, ModularVFD accepts component-local,
+affected-community, and partition-wide hard constraints. See
+:doc:`extending_modular_vfd` for the extension protocols, guided repair, and
+their integration boundaries. A custom refinement function can still call a
+feasibility projection directly when its move logic needs an application-specific
+solver. The load-balancing projection is one concrete instance of that pattern.
 
 Generic NLBNP Workflow Contract
 -------------------------------

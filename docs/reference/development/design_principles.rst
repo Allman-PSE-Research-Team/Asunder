@@ -78,8 +78,9 @@ forcing every application into a single monolithic path.
 Optional Dependency Boundaries
 ------------------------------
 
-Some algorithms and workflows rely on optional dependencies such as igraph,
-leidenalg, plotting libraries, or solver backends. The package design favors
+Some algorithms and workflows rely on optional dependencies such as plotting
+libraries or solver backends. Igraph and leidenalg are core dependencies
+because signed Leiden is the default pricing backend. The package design favors
 graceful optionality where possible:
 
 - reusable modules should not pull in heavyweight dependencies unnecessarily
