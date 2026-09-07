@@ -1,5 +1,6 @@
 """Asunder: Constrained structure detection on undirected graphs."""
 
+from asunder.base.algorithms.modular_VFD import refine_partition_modular_vfd
 from asunder.base.column_generation.master import solve_master_problem
 from asunder.base.column_generation.subproblem import solve_subproblem
 from asunder.config import CSDDecompositionConfig
@@ -38,6 +39,7 @@ __all__ = [
     "create_solver",
     "run_csd_decomposition",
     "run_evaluation",
+    "refine_partition_modular_vfd",
     "solve_master_problem",
     "solve_subproblem",
 ]

@@ -26,10 +26,9 @@ class CSDDecompositionConfig:
         Constraints beyond must- and cannot-links. For example, worthy edges (edges that can connect communities), community size, and balance constraints.
     contract_graph : bool
         Whether must-links are handled through graph contraction. Compatible
-        cannot-links, initial-column constraints, and warm starts are mapped
-        to contracted components automatically. Contraction is currently
-        unsupported for load-balancing decompositions because component-size
-        vertex weights are not yet propagated.
+        cannot-links, initial-column constraints, warm starts, refinement
+        constraints, and load-balance weights are mapped to contracted
+        components automatically.
     stopping_window : int
         Maximum number of allowed stagnant CG iterations. After this, CG is terminated.
     check_flat_pricing : bool
@@ -98,8 +97,8 @@ class CSDDecompositionConfig:
     contract_graph: bool = False
     stopping_window: int = 5
     check_flat_pricing: bool = True
-    algo: str = "louvain"
-    package: str = "sknetwork"
+    algo: str = "signed_leiden"
+    package: str = "leidenalg"
     seed: int | None = 42
     ifc_params: Dict[str, Any] = field(default_factory=dict)
     refine_params: Dict[str, Any] = field(default_factory=dict)
