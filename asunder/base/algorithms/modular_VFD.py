@@ -1,4 +1,4 @@
-"""Modular Very Fortunate Descent (VFD):  A local search algorithm for partition refinement under pairwise constraints and optionally, balance constraints."""
+"""Modular VFD refinement with pairwise, balance, and extensible constraints."""
 
 from __future__ import annotations
 
@@ -8,6 +8,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 from scipy.sparse.csgraph import connected_components
 
+from asunder.base.algorithms.vfd_constraints import (
+    VFDAssignmentView,
+    VFDComponentMove,
+    VFDConstraint,
+    VFDConstraintContext,
+    VFDTransition,
+)
 from asunder.base.branch_and_price.symmetry_detection import weighted_constraint_orbits
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
 
@@ -171,6 +178,10 @@ def _symmetrize_unitdiag(M: np.ndarray) -> np.ndarray:
         Symmetric matrix equal to ``0.5 * (M + M.T)`` with unit diagonal.
     """
     M = np.asarray(M, dtype=float)
+    if M.ndim != 2 or M.shape[0] != M.shape[1]:
+        raise ValueError("The input matrix must be square.")
+    if not np.all(np.isfinite(M)):
+        raise ValueError("The input matrix must contain only finite values.")
     S = 0.5 * (M + M.T)
     np.fill_diagonal(S, 1.0)
     return S
@@ -198,6 +209,7 @@ def _build_components(
     N: int,
     must_link: List[Tuple[int, int]],
     cannot_link: List[Tuple[int, int]],
+    node_weights: Optional[Sequence[int]] = None,
     bitmask_C_max=4096,     # switch to sets if C is bigger AND sparse
     dense_deg_threshold=64, # keep bitmask if avg degree is high
 ) -> Optional[Dict[str, Any]]:
@@ -233,6 +245,36 @@ def _build_components(
     Must-link edges are compressed with union-find. Cannot-link edges are
     then lifted to the component level.
     """
+    if N < 0:
+        raise ValueError("N must be nonnegative.")
+    if node_weights is None:
+        weights = np.ones(N, dtype=int)
+    else:
+        raw_weights = np.asarray(node_weights)
+        if raw_weights.shape != (N,):
+            raise ValueError("node_weights must contain one value per node.")
+        if not np.all(np.isfinite(raw_weights)):
+            raise ValueError("node_weights must contain only finite values.")
+        if np.any(raw_weights <= 0) or not np.all(raw_weights == np.rint(raw_weights)):
+            raise ValueError("node_weights must contain positive integers.")
+        weights = np.rint(raw_weights).astype(int)
+
+    for relation_name, pairs, reject_self in (
+        ("must-link", must_link, False),
+        ("cannot-link", cannot_link, True),
+    ):
+        for pair in pairs:
+            if len(pair) != 2:
+                raise ValueError(f"Each {relation_name} entry must contain two nodes.")
+            source, target = int(pair[0]), int(pair[1])
+            if not (0 <= source < N and 0 <= target < N):
+                raise ValueError(
+                    f"{relation_name} pair {(source, target)} contains a node "
+                    f"outside 0..{N - 1}."
+                )
+            if reject_self and source == target:
+                return None
+
     parent = np.arange(N, dtype=int)
 
     def find(x: int) -> int:
@@ -260,6 +302,7 @@ def _build_components(
     for i in range(N):
         comps[int(cid[i])].append(i)
     csz = np.array([len(c) for c in comps], dtype=int)
+    cweight = np.array([weights[c].sum() for c in comps], dtype=int)
 
     # Infeasible if cannot-link inside a must-link component
     for i, j in cannot_link:
@@ -292,6 +335,7 @@ def _build_components(
         comp_bit = [1 << c for c in range(C)]  # precompute (removes repeated shifts)
         return {
             "C": C, "cid": cid, "comps": comps, "csz": csz,
+            "cweight": cweight,
             "use_bitmask": True,
             "forb_mask": forb_mask,
             "comp_bit": comp_bit,
@@ -299,6 +343,7 @@ def _build_components(
 
     return {
         "C": C, "cid": cid, "comps": comps, "csz": csz,
+        "cweight": cweight,
         "use_bitmask": False,
         "forb_mask": forb_sets,
         "comp_bit": None,
@@ -427,7 +472,29 @@ def _component_matrices_from_node_matrix(M: np.ndarray, comp: Dict[str, Any]) ->
     return S
 
 
-def _component_sum_matrix_B(A: np.ndarray, a: np.ndarray, m: float, comp: Dict[str, Any]) -> np.ndarray:
+def _component_sum_matrix(M: np.ndarray, comp: Dict[str, Any]) -> np.ndarray:
+    """Aggregate a node-level square matrix by summing component blocks."""
+    matrix = np.asarray(M, dtype=float)
+    node_count = matrix.shape[0]
+    if matrix.shape != (node_count, node_count):
+        raise ValueError("M must be square.")
+
+    component_count = int(comp["C"])
+    if component_count == 0:
+        return np.zeros((0, 0), dtype=float)
+
+    membership = np.zeros((node_count, component_count), dtype=float)
+    membership[np.arange(node_count), np.asarray(comp["cid"], dtype=int)] = 1.0
+    return membership.T @ matrix @ membership
+
+
+def _component_sum_matrix_B(
+    A: np.ndarray,
+    a: np.ndarray,
+    m: float,
+    comp: Dict[str, Any],
+    gamma: float = 1.0,
+) -> np.ndarray:
     """
     Aggregate the modularity-style matrix to the component level by summation.
 
@@ -460,7 +527,7 @@ def _component_sum_matrix_B(A: np.ndarray, a: np.ndarray, m: float, comp: Dict[s
         raise ValueError("A must be (N,N) and a must be (N,).")
     if m == 0:
         raise ValueError("m must be nonzero.")
-    B = A - np.outer(a, a) / float(m)
+    B = A - float(gamma) * np.outer(a, a) / float(m)
 
     cid = np.asarray(comp["cid"], dtype=int)
     C = int(comp["C"])
@@ -472,7 +539,13 @@ def _component_sum_matrix_B(A: np.ndarray, a: np.ndarray, m: float, comp: Dict[s
     return P.T @ B @ P  # sum between components
 
 
-def _node_partition_B_sum(A: np.ndarray, a: np.ndarray, m: float, z: np.ndarray) -> float:
+def _node_partition_B_sum(
+    A: np.ndarray,
+    a: np.ndarray,
+    m: float,
+    z: np.ndarray,
+    gamma: float = 1.0,
+) -> float:
     """
     Score a node-level partition-like matrix on the unnormalized B scale.
 
@@ -487,7 +560,7 @@ def _node_partition_B_sum(A: np.ndarray, a: np.ndarray, m: float, z: np.ndarray)
         raise ValueError("A, z must be (N,N) and a must be (N,).")
     if m == 0:
         raise ValueError("m must be nonzero.")
-    B = A - np.outer(a, a) / float(m)
+    B = A - float(gamma) * np.outer(a, a) / float(m)
     return float(np.sum(B * z))
 
 
@@ -496,6 +569,7 @@ def _fingerprint_blocks_from_rounded_rows(
     comp: Dict[str, Any],
     fingerprint_decimals: int,
     r_max: Any,
+    component_weights: Optional[np.ndarray] = None,
 ) -> List[List[int]]:
     """
     Form component blocks from rounded co-association fingerprints.
@@ -524,7 +598,10 @@ def _fingerprint_blocks_from_rounded_rows(
 
     use_bitmask = bool(comp["use_bitmask"])
     forb = comp["forb_mask"]
-    csz = np.asarray(comp["csz"], dtype=int)
+    csz = np.asarray(
+        comp["csz"] if component_weights is None else component_weights,
+        dtype=int,
+    )
 
     if r_max is None:
         r_max = int(csz.sum())  # no size-based splitting unless a bucket exceeds total size
@@ -880,6 +957,7 @@ def _resolve_k_control(
     max_K_increase: int,
     clustering_Ks: Sequence[int],
     candidate_Ks: Optional[Sequence[int]],
+    R_bounds: Optional[Tuple[int, int]] = None,
 ) -> Tuple[int, int, List[int]]:
     """
     Resolve size bounds and the list of fixed-K subproblems to evaluate.
@@ -890,9 +968,9 @@ def _resolve_k_control(
         Number of original nodes.
     Cn : int
         Number of must-link components.
-    K : int or None
+    K : int or None, default=2
         Baseline number of communities.
-    R : int or None
+    R : int or None, default=1
         Width of the allowed cluster-size range. Also corresponds to the load balance tightness (smaller R implies tighter load balance).
         For a selected cluster count, the lower and upper bounds are computed from the corresponding
         balanced range rule. Used when the K-constraint is active.
@@ -916,16 +994,26 @@ def _resolve_k_control(
         K values to test in the outer loop.
     """
     if use_K_constraint:
-        if K is None or R is None:
-            raise ValueError("K and R must be provided when use_K_constraint=True.")
-
-        r_min, r_max = _range_bounds_from_KR(N, K, R)
+        if K is None:
+            raise ValueError("K must be provided when use_K_constraint=True.")
+        if R_bounds is None:
+            if R is None:
+                raise ValueError(
+                    "R or R_bounds must be provided when use_K_constraint=True."
+                )
+            r_min, r_max = _range_bounds_from_KR(N, K, R)
+        else:
+            if len(R_bounds) != 2:
+                raise ValueError("R_bounds must contain exactly two values.")
+            r_min, r_max = int(R_bounds[0]), int(R_bounds[1])
+            if r_min < 1 or r_min > r_max:
+                raise ValueError("R_bounds must satisfy 1 <= r_min <= r_max.")
         k_lo, k_hi = _feasible_K_range(N, r_min, r_max)
         if k_lo > k_hi:
             return int(r_min), int(r_max), []
 
-        K0 = min(max(int(K), int(k_lo)), int(k_hi))
-        K_end = min(int(k_hi), K0 + int(max_K_increase))
+        K0 = max(int(K), int(k_lo))
+        K_end = min(int(k_hi), int(K) + int(max_K_increase))
 
         K_values = [
             int(k)
@@ -982,15 +1070,15 @@ def modular_very_fortunate_descent(
     A: np.ndarray,
     a: np.ndarray,
     m: float,
-    K: Optional[int],
-    R: Optional[int],
-    must_link: Sequence[Tuple[int, int]],
-    cannot_link: Sequence[Tuple[int, int]],
-    seed: int = 0,
+    K: Optional[int] = 2,
+    R: Optional[int] = 1,
+    must_link: Sequence[Tuple[int, int]] = (),
+    cannot_link: Sequence[Tuple[int, int]] = (),
+    seed: Optional[int] = 42,
     fingerprint_decimals: int = 6,
     allow_block_splitting: bool = True,
     max_K_increase: int = 0,
-    use_K_constraint: bool = True,
+    use_K_constraint: bool = False,
     candidate_Ks: Optional[Sequence[int]] = None,
     restarts: int = 6,
     local_iters: int = 60,
@@ -1002,6 +1090,12 @@ def modular_very_fortunate_descent(
     tabu_max_steps: int = 60,
     shake_rounds: int = 3,
     orbit_fallback: bool = False,
+    R_bounds: Optional[Tuple[int, int]] = None,
+    balance_weights: Optional[Sequence[int]] = None,
+    gamma: float = 1.0,
+    constraints: Sequence[VFDConstraint] = (),
+    component_members: Optional[Sequence[Sequence[Any]]] = None,
+    constraint_repair_steps: Optional[int] = None,
 ) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
     """
     Modular function for building a feasible decomposition column from co-association structure and local search.
@@ -1027,7 +1121,25 @@ def modular_very_fortunate_descent(
         Must-link pairs.
     cannot_link : sequence of tuple of int
         Cannot-link pairs.
-    seed : int, default=0
+    R_bounds : tuple of int or None, default=None
+        Explicit inclusive lower and upper community-weight bounds. When
+        supplied, these replace the bounds derived from ``K`` and ``R``.
+    balance_weights : sequence of int or None, default=None
+        Positive integer node weights used by balance constraints. Unit
+        weights are used by default.
+    gamma : float, default=1.0
+        Modularity resolution used by the refinement objective.
+    constraints : sequence of VFDConstraint, default=()
+        Additional component-local, community-wide, or partition-wide hard
+        constraints. Constraint specifications are prepared after must-link
+        contraction and rebound for every K candidate and restart.
+    component_members : sequence of sequences, optional
+        Original member identifiers represented by each row of ``A``. This is
+        useful when ``A`` was contracted before ModularVFD was called.
+    constraint_repair_steps : int or None, default=None
+        Maximum guided feasibility-repair steps for partition-wide
+        constraints. ``None`` derives a budget from ``local_iters``.
+    seed : int or None, default=42
         Random seed.
     fingerprint_decimals : int, default=6
         Decimal rounding used to form fingerprint blocks.
@@ -1035,7 +1147,7 @@ def modular_very_fortunate_descent(
         If True, allow refinement of coarse fingerprint blocks.
     max_K_increase : int, default=0
         Maximum increase above the baseline K when the K-constraint is active.
-    use_K_constraint : bool, default=True
+    use_K_constraint : bool, default=False
         If True, enforce K/R-derived balance bounds.
         If False, ignore K/R-derived balance bounds and search over ``candidate_Ks``.
     candidate_Ks : sequence of int or None, default=None
@@ -1066,27 +1178,133 @@ def modular_very_fortunate_descent(
     tuple of (numpy.ndarray, dict) or None
         A pair ``(Z_col, meta)`` if a feasible column is found, else ``None``.
     """
+    if int(restarts) < 1:
+        raise ValueError("restarts must be at least 1.")
+    if int(max_K_increase) < 0:
+        raise ValueError("max_K_increase must be nonnegative.")
+    if int(local_iters) < 0 or int(tabu_max_steps) < 0 or int(shake_rounds) < 0:
+        raise ValueError(
+            "local_iters, tabu_max_steps, and shake_rounds must be nonnegative."
+        )
+    if int(fingerprint_decimals) < 0:
+        raise ValueError("fingerprint_decimals must be nonnegative.")
+    if constraint_repair_steps is not None and int(constraint_repair_steps) < 0:
+        raise ValueError("constraint_repair_steps must be nonnegative or None.")
+    gamma = float(gamma)
+    if not np.isfinite(gamma) or gamma < 0:
+        raise ValueError("gamma must be a finite nonnegative value.")
+    unknown_methods = set(clustering_methods or ()) - {"kmeans", "gmm", "spectral"}
+    if unknown_methods:
+        raise ValueError(f"Unknown clustering methods: {sorted(unknown_methods)}.")
+
     rng = np.random.default_rng(seed)
 
     wz = np.asarray(wz, dtype=float)
+    if wz.ndim != 2 or wz.shape[0] != wz.shape[1]:
+        raise ValueError("wz must be a square matrix.")
     N = int(wz.shape[0])
 
+    A = np.asarray(A, dtype=float)
+    a = np.asarray(a, dtype=float).reshape(-1)
+    if A.shape != (N, N) or a.shape != (N,):
+        raise ValueError("wz and A must be (N,N), and a must be (N,).")
+    if not np.all(np.isfinite(A)) or not np.all(np.isfinite(a)):
+        raise ValueError("A and a must contain only finite values.")
+    try:
+        m = float(m)
+    except (TypeError, ValueError):
+        raise ValueError("m must be finite and positive for a nonempty graph.") from None
+    if not np.isfinite(m) or m < 0 or (N > 0 and m <= 0):
+        raise ValueError("m must be finite and positive for a nonempty graph.")
+
+    constraint_specs = () if constraints is None else tuple(constraints)
+    for constraint in constraint_specs:
+        if not callable(getattr(constraint, "prepare", None)):
+            raise TypeError("Each constraint must implement prepare(context).")
+
+    if component_members is None:
+        input_component_members = tuple((int(i),) for i in range(N))
+    else:
+        if len(component_members) != N:
+            raise ValueError("component_members must contain one collection per row of A.")
+        normalized_members = []
+        for row, members in enumerate(component_members):
+            try:
+                member_tuple = tuple(members)
+            except TypeError as exc:
+                raise TypeError(
+                    f"component_members[{row}] must be an iterable of member identifiers."
+                ) from exc
+            if not member_tuple:
+                raise ValueError("component_members entries must not be empty.")
+            normalized_members.append(member_tuple)
+        input_component_members = tuple(normalized_members)
+        flattened_members = [
+            member for members in input_component_members for member in members
+        ]
+        try:
+            distinct_member_count = len(set(flattened_members))
+        except TypeError as exc:
+            raise TypeError(
+                "component_members must contain hashable member identifiers."
+            ) from exc
+        if distinct_member_count != len(flattened_members):
+            raise ValueError("component_members must contain distinct member identifiers.")
+
     if N == 0:
+        constraint_names = []
+        if constraint_specs:
+            empty_context = VFDConstraintContext(
+                input_adjacency=A,
+                component_adjacency=np.zeros((0, 0), dtype=float),
+                node_to_component=(),
+                component_members=(),
+                component_weights=(),
+                K=0,
+                r_min=0,
+                r_max=0,
+            )
+            empty_assignment = VFDAssignmentView(empty_context, ())
+            for specification in constraint_specs:
+                prepared = specification.prepare(empty_context)
+                if not callable(getattr(prepared, "bind", None)):
+                    raise TypeError(
+                        "Constraint prepare(context) must return an object with bind()."
+                    )
+                runtime = prepared.bind()
+                evaluation = runtime.evaluate_final(empty_assignment)
+                if not hasattr(evaluation, "satisfied"):
+                    raise TypeError(
+                        "Constraint evaluations must be "
+                        "VFDConstraintEvaluation instances."
+                    )
+                if not evaluation.satisfied:
+                    return None
+                constraint_names.append(
+                    str(getattr(runtime, "name", type(runtime).__name__))
+                )
         g0 = np.zeros(0, dtype=int)
         return partition_vector_to_2d_matrix(g0), {
             "r_min": 0,
             "r_max": 0,
             "K_used": 0,
             "use_K_constraint": bool(use_K_constraint),
+            "constraints": tuple(constraint_names),
+            "constraint_repair_steps": 0,
         }
 
     sym = _symmetrize_unitdiag(wz)
-    reference_Q = _node_partition_B_sum(A, a, m, sym)
+    reference_Q = _node_partition_B_sum(A, a, m, sym, gamma=gamma)
 
     must_link = [_normalize_pair(i, j) for (i, j) in (must_link or [])]
     cannot_link = [_normalize_pair(i, j) for (i, j) in (cannot_link or [])]
 
-    comp = _build_components(N, must_link, cannot_link)
+    comp = _build_components(
+        N,
+        must_link,
+        cannot_link,
+        node_weights=balance_weights,
+    )
     if comp is None:
         return None
 
@@ -1100,29 +1318,32 @@ def modular_very_fortunate_descent(
             "use_K_constraint": bool(use_K_constraint),
         }
 
-    csz = np.asarray(comp["csz"], dtype=int)
+    cweight = np.asarray(comp["cweight"], dtype=int)
+    total_balance_weight = int(cweight.sum())
     use_bitmask = bool(comp["use_bitmask"])
     forb = comp["forb_mask"]
     comp_bit = comp["comp_bit"]
     comps = comp["comps"]
+    contracted_component_members = tuple(
+        tuple(
+            member
+            for input_node in component
+            for member in input_component_members[int(input_node)]
+        )
+        for component in comps
+    )
 
+    auto_clustering_ks = clustering_Ks is None
     if clustering_Ks is None:
-        if use_K_constraint and K is not None:
-            clustering_Ks = tuple(
-                sorted(
-                    {
-                        max(2, int(K) - 1),
-                        max(2, int(K)),
-                        min(N, max(2, int(K) + 2)),
-                    }
-                )
-            )
+        if use_K_constraint:
+            # K/R bounds are resolved below; this value is unused by that path.
+            clustering_Ks = ()
         else:
             rough = max(2, int(round(np.sqrt(max(2, N)))))
             clustering_Ks = tuple(sorted({1, 2, min(N, rough), min(N, rough + 2)}))
 
     r_min, r_max, K_candidates = _resolve_k_control(
-        N=N,
+        N=total_balance_weight,
         Cn=Cn,
         K=K,
         R=R,
@@ -1130,12 +1351,32 @@ def modular_very_fortunate_descent(
         max_K_increase=max_K_increase,
         clustering_Ks=clustering_Ks,
         candidate_Ks=candidate_Ks,
+        R_bounds=R_bounds,
     )
 
     if not K_candidates:
         return None
 
-    if int(csz.max()) > r_max:
+    if auto_clustering_ks and use_K_constraint:
+        k_lo, k_hi = _feasible_K_range(total_balance_weight, r_min, r_max)
+        requested_k = int(K or k_lo)
+        clustering_Ks = tuple(
+            sorted(
+                {
+                    int(candidate)
+                    for candidate in (
+                        max(2, k_lo),
+                        min(k_hi, requested_k),
+                        min(k_hi, requested_k + 2),
+                    )
+                    if 1 <= int(candidate) <= min(N, Cn)
+                }
+            )
+        )
+        if not clustering_Ks:
+            clustering_Ks = (min(N, Cn),)
+
+    if int(cweight.max()) > r_max:
         return None
 
     if not wz_is_C_node:
@@ -1157,7 +1398,10 @@ def modular_very_fortunate_descent(
 
     C_node = _symmetrize_unitdiag(C_node)
     C_comp = _component_matrices_from_node_matrix(C_node, comp)
-    W_B = _component_sum_matrix_B(A, a, m, comp)
+    component_adjacency = (
+        _component_sum_matrix(A, comp) if constraint_specs else None
+    )
+    W_B = _component_sum_matrix_B(A, a, m, comp, gamma=gamma)
 
     def build_gvec(comp2g: np.ndarray) -> np.ndarray:
         g = np.empty(N, dtype=int)
@@ -1176,18 +1420,52 @@ def modular_very_fortunate_descent(
         K_used = int(K_used)
         if K_used <= 0:
             continue
-        if not (K_used * r_min <= N <= K_used * r_max):
+        if not (
+            K_used * r_min <= total_balance_weight <= K_used * r_max
+        ):
             continue
         if K_used > Cn:
             continue
 
-        target = _target_sizes_from_bounds(N, K_used, r_min, r_max) if use_K_constraint else None
+        target = (
+            _target_sizes_from_bounds(
+                total_balance_weight,
+                K_used,
+                r_min,
+                r_max,
+            )
+            if use_K_constraint
+            else None
+        )
+
+        constraint_context = None
+        prepared_constraints = []
+        if constraint_specs:
+            constraint_context = VFDConstraintContext(
+                input_adjacency=A,
+                component_adjacency=component_adjacency,
+                node_to_component=np.asarray(comp["cid"], dtype=int),
+                component_members=contracted_component_members,
+                component_weights=cweight,
+                K=K_used,
+                r_min=r_min if use_K_constraint else None,
+                r_max=r_max if use_K_constraint else None,
+            )
+            for specification in constraint_specs:
+                prepared = specification.prepare(constraint_context)
+                if not callable(getattr(prepared, "bind", None)):
+                    raise TypeError(
+                        "Constraint prepare(context) must return an object with bind()."
+                    )
+                prepared_constraints.append(prepared)
+        prepared_constraints = tuple(prepared_constraints)
 
         base_blocks = _fingerprint_blocks_from_rounded_rows(
             C_comp,
             comp,
             fingerprint_decimals=fingerprint_decimals,
             r_max=r_max,
+            component_weights=cweight,
         )
         base_blocks = _make_blocks_conflict_free(
             base_blocks,
@@ -1195,15 +1473,93 @@ def modular_very_fortunate_descent(
             forb=forb,
             comp_bit=comp_bit,
         )
-        base_blocks = _ensure_at_least_K_blocks(base_blocks, K_used, csz)
+        base_blocks = _ensure_at_least_K_blocks(base_blocks, K_used, cweight)
 
-        for _rr in range(int(restarts)):
-            blocks = [list(b) for b in base_blocks]
+        restart_limit = int(restarts)
+        restart_index = 0
+        while restart_index < restart_limit:
+            restart_index += 1
+            bound_constraints = []
+            fast_local_runtime_ids = set()
+            for prepared in prepared_constraints:
+                runtime = prepared.bind()
+                scope = getattr(runtime, "scope", None)
+                if scope not in {"local", "community", "partition"}:
+                    raise ValueError(
+                        "A bound VFD constraint scope must be 'local', 'community', "
+                        "or 'partition'."
+                    )
+                common_methods = (
+                    "block_is_feasible",
+                    "evaluate_partial",
+                    "evaluate_final",
+                )
+                if any(
+                    not callable(getattr(runtime, method, None))
+                    for method in common_methods
+                ):
+                    raise TypeError(
+                        "A bound VFD constraint does not implement the required runtime API."
+                    )
+                fast_local = scope == "local" and all(
+                    callable(getattr(runtime, method, None))
+                    for method in (
+                        "evaluate_component_transition",
+                        "component_transition_applied",
+                        "component_proposals",
+                    )
+                )
+                generic_transition = all(
+                    callable(getattr(runtime, method, None))
+                    for method in (
+                        "evaluate_transition",
+                        "transition_applied",
+                        "repair_proposals",
+                    )
+                )
+                if not fast_local and not generic_transition:
+                    raise TypeError(
+                        "A bound local constraint must implement the component-only "
+                        "transition hooks; other constraints must implement the "
+                        "assignment-view transition hooks."
+                    )
+                if fast_local:
+                    fast_local_runtime_ids.add(id(runtime))
+                bound_constraints.append(runtime)
+            bound_constraints = tuple(bound_constraints)
+
+            def uses_fast_local_api(runtime: Any) -> bool:
+                return id(runtime) in fast_local_runtime_ids
+
+            blocks = []
+            incompatible_block = False
+            for base_block in base_blocks:
+                block = tuple(int(component) for component in base_block)
+                if all(runtime.block_is_feasible(block) for runtime in bound_constraints):
+                    blocks.append(list(block))
+                    continue
+                if not allow_block_splitting or len(block) <= 1:
+                    incompatible_block = True
+                    break
+                for component in block:
+                    singleton = (int(component),)
+                    if not all(
+                        runtime.block_is_feasible(singleton)
+                        for runtime in bound_constraints
+                    ):
+                        incompatible_block = True
+                        break
+                    blocks.append([int(component)])
+                if incompatible_block:
+                    break
+            if incompatible_block:
+                continue
+
             Bn = len(blocks)
             if Bn < K_used:
                 continue
 
-            b_size = [int(sum(int(csz[c]) for c in b)) for b in blocks]
+            b_size = [int(sum(int(cweight[c]) for c in b)) for b in blocks]
             b_ncomp = [int(len(b)) for b in blocks]
 
             if use_bitmask:
@@ -1270,6 +1626,141 @@ def modular_very_fortunate_descent(
                 b_comp_set=b_comp_set,
             )
 
+            community_ids = tuple(range(K_used))
+
+            def assignment_view(labels: Optional[Sequence[int]] = None) -> VFDAssignmentView:
+                if constraint_context is None:
+                    raise RuntimeError("Constraint views require a prepared constraint context.")
+                values = comp2g if labels is None else labels
+                return VFDAssignmentView(
+                    constraint_context,
+                    values,
+                    community_ids=community_ids,
+                )
+
+            def evaluate_constraint_transition(
+                transition: VFDTransition,
+                *,
+                require_satisfied: bool,
+            ) -> Tuple[
+                bool,
+                Tuple[Tuple[float, ...], ...],
+                Optional[VFDAssignmentView],
+            ]:
+                if not bound_constraints:
+                    return True, (), None
+                before = None
+                after = None
+                violation = []
+                for runtime in bound_constraints:
+                    if uses_fast_local_api(runtime):
+                        evaluation = runtime.evaluate_component_transition(transition)
+                    else:
+                        if before is None:
+                            before = assignment_view()
+                            after = before.after(transition)
+                        evaluation = runtime.evaluate_transition(
+                            before,
+                            transition,
+                            after,
+                        )
+                    if not hasattr(evaluation, "satisfied") or not hasattr(
+                        evaluation, "extendable"
+                    ):
+                        raise TypeError(
+                            "Constraint evaluations must be VFDConstraintEvaluation instances."
+                        )
+                    if not evaluation.satisfied and not evaluation.extendable:
+                        return False, (), after
+                    if runtime.scope == "local" and not evaluation.satisfied:
+                        return False, (), after
+                    if require_satisfied and not evaluation.satisfied:
+                        return False, (), after
+                    violation.append(
+                        tuple(float(value) for value in evaluation.violation)
+                    )
+                return True, tuple(violation), after
+
+            def evaluate_final_constraints(
+                labels: Optional[Sequence[int]] = None,
+            ) -> Tuple[
+                bool,
+                Tuple[Tuple[float, ...], ...],
+                Optional[VFDAssignmentView],
+            ]:
+                if not bound_constraints:
+                    return True, (), None
+                view = assignment_view(labels)
+                violation = []
+                feasible = True
+                for runtime in bound_constraints:
+                    evaluation = runtime.evaluate_final(view)
+                    feasible = feasible and evaluation.satisfied
+                    violation.append(
+                        tuple(float(value) for value in evaluation.violation)
+                    )
+                return feasible, tuple(violation), view
+
+            def independently_validate_final_constraints(
+                labels: Sequence[int],
+            ) -> bool:
+                """Validate a saved assignment with fresh, unmodified runtimes."""
+                if not prepared_constraints:
+                    return True
+                view = assignment_view(labels)
+                for prepared in prepared_constraints:
+                    runtime = prepared.bind()
+                    evaluation = runtime.evaluate_final(view)
+                    if not hasattr(evaluation, "satisfied"):
+                        raise TypeError(
+                            "Constraint evaluations must be "
+                            "VFDConstraintEvaluation instances."
+                        )
+                    if not evaluation.satisfied:
+                        return False
+                return True
+
+            def notify_constraint_transition(transition: VFDTransition) -> None:
+                if not bound_constraints:
+                    return
+                after = None
+                for runtime in bound_constraints:
+                    if uses_fast_local_api(runtime):
+                        runtime.component_transition_applied(transition)
+                    else:
+                        if after is None:
+                            after = assignment_view()
+                        runtime.transition_applied(transition, after)
+
+            def block_transition(
+                bi: int,
+                source: Optional[int],
+                target_group: Optional[int],
+                *,
+                phase: str,
+                label: str,
+            ) -> VFDTransition:
+                return VFDTransition.move(
+                    tuple(int(component) for component in blocks[int(bi)]),
+                    source,
+                    target_group,
+                    phase=phase,
+                    label=label,
+                )
+
+            initial_is_extendable = True
+            if bound_constraints:
+                initial_view = assignment_view()
+                for runtime in bound_constraints:
+                    evaluation = runtime.evaluate_partial(initial_view)
+                    if not evaluation.satisfied and (
+                        runtime.scope == "local" or not evaluation.extendable
+                    ):
+                        initial_is_extendable = False
+                        break
+            if not initial_is_extendable:
+                continue
+
             def add_block_to_group(bi: int, g: int) -> None:
                 idx = np.asarray(blocks[bi], dtype=int)
 
@@ -1333,9 +1824,23 @@ def modular_very_fortunate_descent(
                 for bi in order_blocks:
                     if gi >= K_used:
                         break
-                    if int(b_size[bi]) > r_max:
+                    if int(b_size[bi]) > r_max or not feas.can_add(int(bi), int(gi)):
+                        continue
+                    transition = block_transition(
+                        int(bi),
+                        None,
+                        int(gi),
+                        phase="construction",
+                        label="seed",
+                    )
+                    allowed, _, _ = evaluate_constraint_transition(
+                        transition,
+                        require_satisfied=False,
+                    )
+                    if not allowed:
                         continue
                     add_block_to_group(int(bi), int(gi))
+                    notify_constraint_transition(transition)
                     used_blocks.add(int(bi))
                     gi += 1
                 return gi == K_used, used_blocks
@@ -1343,6 +1848,21 @@ def modular_very_fortunate_descent(
             order = list(np.argsort(np.asarray(b_size))[::-1])
             ok_seed, seeded = ensure_nonempty_seeding(order)
             if not ok_seed:
+                if allow_block_splitting:
+                    rejected_multi = next(
+                        (
+                            int(bi)
+                            for bi in order
+                            if int(bi) not in seeded and len(blocks[int(bi)]) > 1
+                        ),
+                        None,
+                    )
+                    if rejected_multi is not None:
+                        rejected_components = list(blocks[rejected_multi])
+                        blocks[rejected_multi] = [rejected_components[0]]
+                        blocks.extend([component] for component in rejected_components[1:])
+                        base_blocks = [list(block) for block in blocks]
+                        restart_limit += 1
                 continue
 
             for bi in order:
@@ -1351,7 +1871,7 @@ def modular_very_fortunate_descent(
                     continue
 
                 F = []
-                rem_nodes = int(N - gsz.sum())
+                rem_nodes = int(total_balance_weight - gsz.sum())
                 deficit_sum = int(np.maximum(0, r_min - gsz).sum())
 
                 for g in range(K_used):
@@ -1360,7 +1880,20 @@ def modular_very_fortunate_descent(
                     old_def = max(0, r_min - int(gsz[g]))
                     new_def = max(0, r_min - int(gsz[g] + b_size[bi]))
                     def2 = deficit_sum - old_def + new_def
-                    if def2 <= (rem_nodes - int(b_size[bi])):
+                    if def2 > (rem_nodes - int(b_size[bi])):
+                        continue
+                    transition = block_transition(
+                        bi,
+                        None,
+                        int(g),
+                        phase="construction",
+                        label="construct",
+                    )
+                    allowed, _, _ = evaluate_constraint_transition(
+                        transition,
+                        require_satisfied=False,
+                    )
+                    if allowed:
                         F.append(g)
 
                 if not F:
@@ -1369,6 +1902,8 @@ def modular_very_fortunate_descent(
                         blocks[bi] = [comps_b[0]]
                         for c in comps_b[1:]:
                             blocks.append([c])
+                        base_blocks = [list(block) for block in blocks]
+                        restart_limit += 1
                         ok_seed = False
                     else:
                         ok_seed = False
@@ -1384,10 +1919,29 @@ def modular_very_fortunate_descent(
                     scored.append((fill, -(gainB + w_coassoc * gainC), tgt_pen, float(rng.random()), g))
                 scored.sort()
                 g_best = int(scored[0][-1])
+                transition = block_transition(
+                    bi,
+                    None,
+                    g_best,
+                    phase="construction",
+                    label="construct",
+                )
                 add_block_to_group(bi, g_best)
+                notify_constraint_transition(transition)
 
             if not ok_seed:
                 continue
+
+            def split_block_for_restart(bi: int) -> bool:
+                nonlocal base_blocks, restart_limit
+                if not allow_block_splitting or len(blocks[bi]) <= 1:
+                    return False
+                components = list(blocks[bi])
+                blocks[bi] = [components[0]]
+                blocks.extend([component] for component in components[1:])
+                base_blocks = [list(block) for block in blocks]
+                restart_limit += 1
+                return True
 
             def repair_min_sizes() -> bool:
                 max_steps = 20000
@@ -1407,6 +1961,7 @@ def modular_very_fortunate_descent(
 
                     donors.sort(key=lambda g: cohesion(g))
                     moved = False
+                    split_candidate = None
 
                     for g_from in donors:
                         cand_blocks = list(members_b[g_from])
@@ -1424,14 +1979,39 @@ def modular_very_fortunate_descent(
                         for bi_ in cand_blocks:
                             bi_ = int(bi_)
                             if not feas.can_remove(bi_, g_from):
+                                if (
+                                    split_candidate is None
+                                    and allow_block_splitting
+                                    and len(blocks[bi_]) > 1
+                                ):
+                                    split_candidate = bi_
                                 continue
                             if not feas.can_add(bi_, g_need):
-                                if allow_block_splitting and len(blocks[bi_]) > 1:
-                                    return False
+                                if (
+                                    split_candidate is None
+                                    and allow_block_splitting
+                                    and len(blocks[bi_]) > 1
+                                ):
+                                    split_candidate = bi_
+                                continue
+
+                            transition = block_transition(
+                                bi_,
+                                int(g_from),
+                                int(g_need),
+                                phase="construction",
+                                label="balance-repair",
+                            )
+                            allowed, _, _ = evaluate_constraint_transition(
+                                transition,
+                                require_satisfied=False,
+                            )
+                            if not allowed:
                                 continue
 
                             remove_block_from_group(bi_, g_from)
                             add_block_to_group(bi_, g_need)
+                            notify_constraint_transition(transition)
                             moved = True
                             break
 
@@ -1439,6 +2019,8 @@ def modular_very_fortunate_descent(
                             break
 
                     if not moved:
+                        if split_candidate is not None:
+                            split_block_for_restart(split_candidate)
                         return False
 
                 return False
@@ -1464,21 +2046,68 @@ def modular_very_fortunate_descent(
                 jj = np.asarray(blocks[bj], dtype=int)
                 return float(M[np.ix_(ii, jj)].sum())
 
-            def apply_move(bi: int, g_from: int, g_to: int) -> None:
+            def apply_move(
+                bi: int,
+                g_from: int,
+                g_to: int,
+                transition: Optional[VFDTransition] = None,
+            ) -> None:
+                if transition is None:
+                    transition = block_transition(
+                        bi,
+                        g_from,
+                        g_to,
+                        phase="feasible_search",
+                        label="move",
+                    )
                 remove_block_from_group(bi, g_from)
                 add_block_to_group(bi, g_to)
+                notify_constraint_transition(transition)
 
-            def apply_swap(bi: int, bj: int, g1: int, g2: int) -> None:
+            def apply_swap(
+                bi: int,
+                bj: int,
+                g1: int,
+                g2: int,
+                transition: Optional[VFDTransition] = None,
+            ) -> None:
+                if transition is None:
+                    transition = VFDTransition.swap(
+                        tuple(int(component) for component in blocks[bi]),
+                        g1,
+                        tuple(int(component) for component in blocks[bj]),
+                        g2,
+                        phase="feasible_search",
+                        label="swap",
+                    )
                 remove_block_from_group(bi, g1)
                 remove_block_from_group(bj, g2)
                 add_block_to_group(bi, g2)
                 add_block_to_group(bj, g1)
+                notify_constraint_transition(transition)
 
-            def apply_ejection(bi: int, g_from: int, g_to: int, bj: int, g_k: int) -> None:
+            def apply_ejection(
+                bi: int,
+                g_from: int,
+                g_to: int,
+                bj: int,
+                g_k: int,
+                transition: Optional[VFDTransition] = None,
+            ) -> None:
+                if transition is None:
+                    transition = VFDTransition(
+                        (
+                            VFDComponentMove(tuple(blocks[bj]), g_to, g_k),
+                            VFDComponentMove(tuple(blocks[bi]), g_from, g_to),
+                        ),
+                        phase="feasible_search",
+                        label="ejection",
+                    )
                 remove_block_from_group(bj, g_to)
                 add_block_to_group(bj, g_k)
                 remove_block_from_group(bi, g_from)
                 add_block_to_group(bi, g_to)
+                notify_constraint_transition(transition)
 
             def split_block_into_singletons_in_place(bi: int) -> bool:
                 if not allow_block_splitting:
@@ -1494,7 +2123,7 @@ def modular_very_fortunate_descent(
                 c0 = int(comps_b[0])
                 blocks[bi] = [c0]
 
-                b_size[bi] = int(csz[c0])
+                b_size[bi] = int(cweight[c0])
                 b_ncomp[bi] = 1
                 b_intB[bi] = float(W_B[c0, c0])
                 b_intC[bi] = float(C_comp[c0, c0])
@@ -1514,7 +2143,7 @@ def modular_very_fortunate_descent(
                     blocks.append([c])
                     new_bi = len(blocks) - 1
 
-                    b_size.append(int(csz[c]))
+                    b_size.append(int(cweight[c]))
                     b_ncomp.append(1)
                     b_intB.append(float(W_B[c, c]))
                     b_intC.append(float(C_comp[c, c]))
@@ -1551,6 +2180,335 @@ def modular_very_fortunate_descent(
             def current_B_sum() -> float:
                 return float(totB.sum())
 
+            def structural_assignment_is_feasible(labels: Sequence[int]) -> bool:
+                labels = np.asarray(labels, dtype=int)
+                if labels.shape != (Cn,) or np.any(labels < 0) or np.any(labels >= K_used):
+                    return False
+
+                loads = np.bincount(
+                    labels,
+                    weights=cweight,
+                    minlength=K_used,
+                )
+                component_counts = np.bincount(labels, minlength=K_used)
+                if np.any(component_counts == 0):
+                    return False
+                if np.any(loads < r_min) or np.any(loads > r_max):
+                    return False
+
+                if use_bitmask:
+                    group_masks = [0] * K_used
+                    for component, group in enumerate(labels):
+                        if int(forb[component]) & int(group_masks[int(group)]):
+                            return False
+                        group_masks[int(group)] |= int(comp_bit[component])
+                else:
+                    group_components = [set() for _ in range(K_used)]
+                    for component, group in enumerate(labels):
+                        if set(forb[component]) & group_components[int(group)]:
+                            return False
+                        group_components[int(group)].add(int(component))
+                return True
+
+            def structural_transition_is_feasible(
+                transition: VFDTransition,
+            ) -> Tuple[bool, Optional[VFDAssignmentView]]:
+                try:
+                    after = assignment_view().after(transition)
+                except ValueError:
+                    return False, None
+                return (
+                    structural_assignment_is_feasible(
+                        after.component_to_community
+                    ),
+                    after,
+                )
+
+            def component_transition_is_applicable(
+                transition: VFDTransition,
+            ) -> bool:
+                """Check whether current fingerprint blocks can realize a transition."""
+                targets = {
+                    int(component): move.target
+                    for move in transition.moves
+                    for component in move.components
+                }
+                for block in blocks:
+                    moved = [component for component in block if component in targets]
+                    if not moved:
+                        continue
+                    destinations = {targets[component] for component in moved}
+                    requires_split = (
+                        len(moved) != len(block) or len(destinations) != 1
+                    )
+                    if requires_split and (
+                        not allow_block_splitting or len(block) <= 1
+                    ):
+                        return False
+                    if None in destinations:
+                        return False
+                return True
+
+            def repair_transition_evaluation(
+                transition: VFDTransition,
+            ) -> Tuple[
+                bool,
+                Tuple[Tuple[float, ...], ...],
+                Optional[VFDAssignmentView],
+            ]:
+                if not component_transition_is_applicable(transition):
+                    return False, (), None
+                structural_ok, after = structural_transition_is_feasible(transition)
+                if not structural_ok or after is None:
+                    return False, (), after
+                if not bound_constraints:
+                    return True, (), after
+
+                before = assignment_view()
+                violation = []
+                for runtime in bound_constraints:
+                    if uses_fast_local_api(runtime):
+                        transition_evaluation = (
+                            runtime.evaluate_component_transition(transition)
+                        )
+                    else:
+                        transition_evaluation = runtime.evaluate_transition(
+                            before,
+                            transition,
+                            after,
+                        )
+                    if (
+                        runtime.scope == "local"
+                        and not transition_evaluation.satisfied
+                    ):
+                        return False, (), after
+                    final_evaluation = runtime.evaluate_final(after)
+                    if runtime.scope == "local" and not final_evaluation.satisfied:
+                        return False, (), after
+                    violation.append(
+                        tuple(float(value) for value in final_evaluation.violation)
+                    )
+                return True, tuple(violation), after
+
+            def normalize_repair_transition(transition: VFDTransition) -> VFDTransition:
+                if not isinstance(transition, VFDTransition):
+                    raise TypeError("Constraint repair proposals must be VFDTransition instances.")
+                return VFDTransition(
+                    transition.moves,
+                    phase="repair",
+                    label=transition.label or "constraint-repair",
+                )
+
+            def transition_key(transition: VFDTransition) -> Tuple[Any, ...]:
+                return tuple(
+                    (
+                        tuple(int(component) for component in move.components),
+                        move.source,
+                        move.target,
+                    )
+                    for move in transition.moves
+                )
+
+            def ordinary_repair_transitions() -> List[VFDTransition]:
+                proposals = []
+                per_group_limit = min(8, max(1, len(blocks)))
+
+                for source in range(K_used):
+                    source_blocks = candidate_blocks(source, per_group_limit)
+                    for bi in source_blocks:
+                        for target_group in range(K_used):
+                            if target_group == source:
+                                continue
+                            proposals.append(
+                                block_transition(
+                                    int(bi),
+                                    source,
+                                    target_group,
+                                    phase="repair",
+                                    label="constraint-move",
+                                )
+                            )
+
+                for left_group in range(K_used):
+                    left_blocks = candidate_blocks(left_group, per_group_limit)
+                    for right_group in range(left_group + 1, K_used):
+                        right_blocks = candidate_blocks(right_group, per_group_limit)
+                        for left_block in left_blocks:
+                            for right_block in right_blocks:
+                                proposals.append(
+                                    VFDTransition.swap(
+                                        tuple(blocks[int(left_block)]),
+                                        left_group,
+                                        tuple(blocks[int(right_block)]),
+                                        right_group,
+                                        phase="repair",
+                                        label="constraint-swap",
+                                    )
+                                )
+
+                ejection_limit = min(4, per_group_limit)
+                for source in range(K_used):
+                    for bi in candidate_blocks(source, ejection_limit):
+                        for middle in range(K_used):
+                            if middle == source:
+                                continue
+                            for bj in candidate_blocks(middle, ejection_limit):
+                                for target_group in range(K_used):
+                                    if target_group == middle:
+                                        continue
+                                    proposals.append(
+                                        VFDTransition(
+                                            (
+                                                VFDComponentMove(
+                                                    tuple(blocks[int(bj)]),
+                                                    middle,
+                                                    target_group,
+                                                ),
+                                                VFDComponentMove(
+                                                    tuple(blocks[int(bi)]),
+                                                    source,
+                                                    middle,
+                                                ),
+                                            ),
+                                            phase="repair",
+                                            label="constraint-ejection",
+                                        )
+                                    )
+                return proposals
+
+            def apply_atomic_component_transition(transition: VFDTransition) -> bool:
+                target_by_component = {
+                    int(component): move.target
+                    for move in transition.moves
+                    for component in move.components
+                }
+
+                for bi in list(range(len(blocks))):
+                    moved_components = [
+                        int(component)
+                        for component in blocks[bi]
+                        if int(component) in target_by_component
+                    ]
+                    if not moved_components:
+                        continue
+                    targets = {target_by_component[component] for component in moved_components}
+                    if len(moved_components) != len(blocks[bi]) or len(targets) != 1:
+                        if not split_block_into_singletons_in_place(bi):
+                            return False
+
+                moving_blocks = []
+                for bi, block in enumerate(blocks):
+                    moved = [int(component) for component in block if int(component) in target_by_component]
+                    if not moved:
+                        continue
+                    targets = {target_by_component[component] for component in moved}
+                    if len(moved) != len(block) or len(targets) != 1 or None in targets:
+                        return False
+                    moving_blocks.append(
+                        (int(bi), int(block2g[bi]), int(next(iter(targets))))
+                    )
+
+                for bi, source, _ in moving_blocks:
+                    remove_block_from_group(bi, source)
+                for bi, _, target_group in moving_blocks:
+                    add_block_to_group(bi, target_group)
+                notify_constraint_transition(transition)
+                return True
+
+            repair_steps_used = 0
+            constraints_feasible, current_violation, current_constraint_view = (
+                evaluate_final_constraints()
+            )
+            if bound_constraints and not constraints_feasible:
+                repair_budget = (
+                    max(200, int(local_iters) * 5)
+                    if constraint_repair_steps is None
+                    else int(constraint_repair_steps)
+                )
+                seen_assignments = {tuple(int(group) for group in comp2g)}
+
+                for repair_step in range(repair_budget):
+                    repair_steps_used = repair_step + 1
+                    proposed = ordinary_repair_transitions()
+                    if current_constraint_view is None:
+                        current_constraint_view = assignment_view()
+                    for runtime in bound_constraints:
+                        runtime_proposals = (
+                            runtime.component_proposals()
+                            if uses_fast_local_api(runtime)
+                            else runtime.repair_proposals(current_constraint_view)
+                        )
+                        proposed.extend(
+                            normalize_repair_transition(transition)
+                            for transition in runtime_proposals
+                        )
+
+                    unique_proposals = []
+                    seen_transitions = set()
+                    for transition in proposed:
+                        transition = normalize_repair_transition(transition)
+                        key = transition_key(transition)
+                        if key not in seen_transitions:
+                            seen_transitions.add(key)
+                            unique_proposals.append(transition)
+
+                    best_repair = None
+                    for transition in unique_proposals:
+                        allowed, violation, after = repair_transition_evaluation(
+                            transition
+                        )
+                        if not allowed or after is None:
+                            continue
+                        state = tuple(after.component_to_community)
+                        if violation > current_violation:
+                            continue
+                        if violation == current_violation and state in seen_assignments:
+                            continue
+                        labels_after = np.asarray(state, dtype=int)
+                        modularity_after = _objective_B_from_comp_assignment(
+                            W_B,
+                            labels_after,
+                            K_used,
+                        )
+                        rank = (violation, -float(modularity_after))
+                        if best_repair is None or rank < best_repair[0]:
+                            best_repair = (rank, transition, state, after)
+
+                    if best_repair is None:
+                        split_for_repair = False
+                        if allow_block_splitting:
+                            multi_blocks = [
+                                int(bi)
+                                for bi, block in enumerate(blocks)
+                                if len(block) > 1 and int(block2g[bi]) >= 0
+                            ]
+                            multi_blocks.sort(
+                                key=lambda bi: attachment_to_group(
+                                    bi,
+                                    int(block2g[bi]),
+                                )
+                            )
+                            if multi_blocks:
+                                split_for_repair = split_block_into_singletons_in_place(
+                                    multi_blocks[0]
+                                )
+                        if split_for_repair:
+                            continue
+                        break
+
+                    _, selected_transition, selected_state, _ = best_repair
+                    if not apply_atomic_component_transition(selected_transition):
+                        break
+                    seen_assignments.add(tuple(selected_state))
+                    constraints_feasible, current_violation, current_constraint_view = (
+                        evaluate_final_constraints()
+                    )
+                    if constraints_feasible:
+                        break
+
+                if not constraints_feasible:
+                    continue
+
             def improve_with_tabu(
                 max_steps: int,
                 tenure: int,
@@ -1571,6 +2529,7 @@ def modular_very_fortunate_descent(
                     best_move = None
                     best_swap = None
                     best_eject = None
+                    best_custom = None
 
                     for g_from in g_order:
                         for bi in candidate_blocks(g_from, L_blocks):
@@ -1585,6 +2544,19 @@ def modular_very_fortunate_descent(
                                 if g_to == g_from:
                                     continue
                                 if not feas.can_add(bi, g_to):
+                                    continue
+                                transition = block_transition(
+                                    bi,
+                                    g_from,
+                                    g_to,
+                                    phase="feasible_search",
+                                    label="move",
+                                )
+                                allowed, _, _ = evaluate_constraint_transition(
+                                    transition,
+                                    require_satisfied=True,
+                                )
+                                if not allowed:
                                     continue
 
                                 dB = delta_move_generic(sumB, b_intB, bi, g_from, g_to)
@@ -1617,6 +2589,21 @@ def modular_very_fortunate_descent(
                                     if not feas.can_add_after_removal(bi, g2, bj):
                                         continue
                                     if not feas.can_add_after_removal(bj, g1, bi):
+                                        continue
+
+                                    transition = VFDTransition.swap(
+                                        tuple(int(component) for component in blocks[bi]),
+                                        g1,
+                                        tuple(int(component) for component in blocks[bj]),
+                                        g2,
+                                        phase="feasible_search",
+                                        label="swap",
+                                    )
+                                    allowed, _, _ = evaluate_constraint_transition(
+                                        transition,
+                                        require_satisfied=True,
+                                    )
+                                    if not allowed:
                                         continue
 
                                     STB = cross_sum(W_B, bi, bj)
@@ -1692,6 +2679,29 @@ def modular_very_fortunate_descent(
                                             if not feas.can_add(bj, gk):
                                                 continue
 
+                                        transition = VFDTransition(
+                                            (
+                                                VFDComponentMove(
+                                                    tuple(int(component) for component in blocks[bj]),
+                                                    g_to,
+                                                    gk,
+                                                ),
+                                                VFDComponentMove(
+                                                    tuple(int(component) for component in blocks[bi]),
+                                                    g_from,
+                                                    g_to,
+                                                ),
+                                            ),
+                                            phase="feasible_search",
+                                            label="ejection",
+                                        )
+                                        allowed, _, _ = evaluate_constraint_transition(
+                                            transition,
+                                            require_satisfied=True,
+                                        )
+                                        if not allowed:
+                                            continue
+
                                         STB = cross_sum(W_B, bi, bj)
                                         STC = cross_sum(C_comp, bi, bj)
 
@@ -1719,8 +2729,65 @@ def modular_very_fortunate_descent(
                                         if best_eject is None or d > best_eject[-1]:
                                             best_eject = ("eject", bi, g_from, g_to, bj, gk, d)
 
+                    if bound_constraints:
+                        current_view = None
+                        seen_custom = set()
+                        for runtime in bound_constraints:
+                            if uses_fast_local_api(runtime):
+                                runtime_proposals = runtime.component_proposals()
+                            else:
+                                if current_view is None:
+                                    current_view = assignment_view()
+                                runtime_proposals = runtime.repair_proposals(
+                                    current_view
+                                )
+                            for proposal in runtime_proposals:
+                                if not isinstance(proposal, VFDTransition):
+                                    raise TypeError(
+                                        "Constraint repair proposals must be "
+                                        "VFDTransition instances."
+                                    )
+                                transition = VFDTransition(
+                                    proposal.moves,
+                                    phase="feasible_search",
+                                    label=proposal.label or "constraint-neighborhood",
+                                )
+                                key = transition_key(transition)
+                                if key in seen_custom:
+                                    continue
+                                seen_custom.add(key)
+                                if not component_transition_is_applicable(transition):
+                                    continue
+                                structural_ok, after = (
+                                    structural_transition_is_feasible(transition)
+                                )
+                                if not structural_ok or after is None:
+                                    continue
+                                allowed, _, _ = evaluate_constraint_transition(
+                                    transition,
+                                    require_satisfied=True,
+                                )
+                                if not allowed:
+                                    continue
+                                labels_after = np.asarray(
+                                    after.component_to_community,
+                                    dtype=int,
+                                )
+                                total_after = _objective_B_from_comp_assignment(
+                                    W_B,
+                                    labels_after,
+                                    K_used,
+                                ) + w_coassoc * _objective_B_from_comp_assignment(
+                                    C_comp,
+                                    labels_after,
+                                    K_used,
+                                )
+                                delta = float(total_after - base_total)
+                                if best_custom is None or delta > best_custom[-1]:
+                                    best_custom = ("custom", transition, delta)
+
                     best_action = None
-                    for cand in (best_move, best_swap, best_eject):
+                    for cand in (best_move, best_swap, best_eject, best_custom):
                         if cand is None:
                             continue
                         if best_action is None or cand[-1] > best_action[-1]:
@@ -1754,11 +2821,16 @@ def modular_very_fortunate_descent(
                         set_tabu(int(bi), int(g1), step, tenure)
                         set_tabu(int(bj), int(g2), step, tenure)
 
-                    else:
+                    elif kind == "eject":
                         _, bi, g_from, g_to, bj, gk, _ = best_action
                         apply_ejection(int(bi), int(g_from), int(g_to), int(bj), int(gk))
                         set_tabu(int(bi), int(g_from), step, tenure)
                         set_tabu(int(bj), int(g_to), step, tenure)
+
+                    else:
+                        _, transition, _ = best_action
+                        if not apply_atomic_component_transition(transition):
+                            break
 
                     curT = current_total()
                     if curT > best_total + 1e-12:
@@ -1818,14 +2890,31 @@ def modular_very_fortunate_descent(
                         for g_to in dests:
                             if g_to == g_from:
                                 continue
-                            if feas.can_add(bi, g_to):
-                                apply_move(bi, g_from, g_to)
+                            if not feas.can_add(bi, g_to):
+                                continue
+                            transition = block_transition(
+                                bi,
+                                g_from,
+                                g_to,
+                                phase="shake",
+                                label="shake",
+                            )
+                            allowed, _, _ = evaluate_constraint_transition(
+                                transition,
+                                require_satisfied=True,
+                            )
+                            if allowed:
+                                apply_move(bi, g_from, g_to, transition)
                                 moved += 1
                                 break
                     if moved >= shake_moves:
                         break
 
             comp2g_final = best_local_comp2g.copy()
+            if not structural_assignment_is_feasible(comp2g_final):
+                continue
+            if not independently_validate_final_constraints(comp2g_final):
+                continue
             Q = _objective_B_from_comp_assignment(W_B, comp2g_final, K_used)
             if not np.isfinite(Q):
                 continue
@@ -1841,7 +2930,14 @@ def modular_very_fortunate_descent(
                 "use_K_constraint": bool(use_K_constraint),
                 "fingerprint_decimals": int(fingerprint_decimals),
                 "allow_block_splitting": bool(allow_block_splitting),
-                "seed": int(seed),
+                "seed": None if seed is None else int(seed),
+                "resolution": gamma,
+                "total_balance_weight": total_balance_weight,
+                "constraints": tuple(
+                    str(getattr(runtime, "name", type(runtime).__name__))
+                    for runtime in bound_constraints
+                ),
+                "constraint_repair_steps": int(repair_steps_used),
             }
 
             candidate = (Z, meta)
@@ -1875,6 +2971,12 @@ def modular_very_fortunate_descent(
                 R=R,
                 must_link=must_link,
                 cannot_link=cannot_link,
+                R_bounds=R_bounds,
+                balance_weights=balance_weights,
+                gamma=gamma,
+                constraints=constraint_specs,
+                component_members=input_component_members,
+                constraint_repair_steps=constraint_repair_steps,
                 seed=seed,
                 fingerprint_decimals=fingerprint_decimals,
                 allow_block_splitting=allow_block_splitting,
@@ -1895,6 +2997,62 @@ def modular_very_fortunate_descent(
         return None
 
     return best
+
+
+def refine_partition_modular_vfd(
+    A: np.ndarray,
+    partition: np.ndarray,
+    *,
+    a: Optional[np.ndarray] = None,
+    m: Optional[float] = None,
+    K: Optional[int] = 2,
+    R: Optional[int] = 1,
+    R_bounds: Optional[Tuple[int, int]] = None,
+    balance_weights: Optional[Sequence[int]] = None,
+    must_link: Sequence[Tuple[int, int]] = (),
+    cannot_link: Sequence[Tuple[int, int]] = (),
+    use_K_constraint: bool = False,
+    shake_rounds: int = 3,
+    gamma: float = 1.0,
+    constraints: Sequence[VFDConstraint] = (),
+    component_members: Optional[Sequence[Sequence[Any]]] = None,
+    constraint_repair_steps: Optional[int] = None,
+    seed: Optional[int] = 42,
+    **kwargs: Any,
+) -> Optional[np.ndarray]:
+    """Adapt :func:`modular_very_fortunate_descent` to CSD refinement hooks.
+
+    The decomposition calls refiners with ``A`` and ``partition`` and expects
+    only a partition matrix in return.  This adapter supplies degree and graph
+    volume defaults and unwraps ModularVFD's diagnostic metadata.
+    """
+    adjacency = np.asarray(A, dtype=float)
+    candidate = np.asarray(partition)
+    if candidate.ndim == 1:
+        candidate = partition_vector_to_2d_matrix(candidate)
+    strengths = adjacency.sum(axis=1) if a is None else np.asarray(a, dtype=float)
+    volume = float(strengths.sum()) if m is None else float(m)
+    out = modular_very_fortunate_descent(
+        wz=candidate,
+        A=adjacency,
+        a=strengths,
+        m=volume,
+        K=K,
+        R=R,
+        R_bounds=R_bounds,
+        balance_weights=balance_weights,
+        must_link=must_link,
+        cannot_link=cannot_link,
+        use_K_constraint=use_K_constraint,
+        shake_rounds=shake_rounds,
+        gamma=gamma,
+        constraints=constraints,
+        component_members=component_members,
+        constraint_repair_steps=constraint_repair_steps,
+        seed=seed,
+        **kwargs,
+    )
+    return None if out is None else out[0]
 
 
 # Usage:

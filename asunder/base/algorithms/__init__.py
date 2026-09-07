@@ -13,10 +13,30 @@ from asunder.base.algorithms.core_periphery import (
     spectral_continuous_cp_detection,
 )
 from asunder.base.algorithms.louvain_modified import ModifiedLouvain
-from asunder.base.algorithms.modular_VFD import modular_very_fortunate_descent
+from asunder.base.algorithms.modular_VFD import (
+    modular_very_fortunate_descent,
+    refine_partition_modular_vfd,
+)
 from asunder.base.algorithms.projection import project_partition_pairwise_ilp
 from asunder.base.algorithms.RCCS import search_partition_by_reduced_cost
 from asunder.base.algorithms.spectral import full_spectral_bisection
+from asunder.base.algorithms.vfd_constraints import (
+    CommunityPredicateConstraint,
+    PartitionPredicateConstraint,
+    QuantifiedCommunityConstraint,
+    VFDAssignmentView,
+    VFDBoundConstraint,
+    VFDBoundLocalConstraint,
+    VFDCommunityView,
+    VFDComponentMove,
+    VFDConstraint,
+    VFDConstraintContext,
+    VFDConstraintEvaluation,
+    VFDLocalConstraint,
+    VFDPreparedConstraint,
+    VFDPreparedLocalConstraint,
+    VFDTransition,
+)
 
 __all__ = [
     "CorePeripheryContraction",
@@ -34,5 +54,21 @@ __all__ = [
     "run_modularity",
     "run_signed_louvain",
     "modular_very_fortunate_descent",
+    "refine_partition_modular_vfd",
     "project_partition_pairwise_ilp",
+    "CommunityPredicateConstraint",
+    "PartitionPredicateConstraint",
+    "QuantifiedCommunityConstraint",
+    "VFDBoundConstraint",
+    "VFDBoundLocalConstraint",
+    "VFDCommunityView",
+    "VFDComponentMove",
+    "VFDConstraint",
+    "VFDConstraintContext",
+    "VFDConstraintEvaluation",
+    "VFDLocalConstraint",
+    "VFDPreparedConstraint",
+    "VFDPreparedLocalConstraint",
+    "VFDAssignmentView",
+    "VFDTransition",
 ]

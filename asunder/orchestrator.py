@@ -10,8 +10,115 @@ import numpy as np
 from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import solve_master_problem
 from asunder.base.column_generation.subproblem import heuristic_subproblem
+from asunder.base.utils.graph import (
+    partition_satisfies_pairwise_constraints,
+    validate_partition_matrix,
+)
 from asunder.config import CSDDecompositionConfig
 from asunder.types import DecompositionResult, IterationRecord, MasterProblemFn, SubproblemFn
+
+
+def _one_hot_master_partition(item: dict[str, Any]) -> np.ndarray | None:
+    """Recover an integral selected column from a master record, if present."""
+    lambda_sol = item.get("lambda_sol")
+    columns = item.get("columns") or []
+    if lambda_sol is None or len(lambda_sol) != len(columns) or not columns:
+        return None
+    values = np.asarray(lambda_sol, dtype=float)
+    if not np.all(np.isfinite(values)):
+        return None
+    selected = int(np.argmax(values))
+    if not np.isclose(values[selected], 1.0, atol=1e-7, rtol=0):
+        return None
+    if np.any(np.delete(values, selected) > 1e-7):
+        return None
+    partition = np.asarray(columns[selected], dtype=int)
+    node2comp = item.get("node2comp")
+    if node2comp is not None:
+        from asunder.base.utils.graph import expand_z_matrix
+
+        partition = expand_z_matrix(partition, node2comp)
+    return partition
+
+
+def _validated_final_candidate(
+    partition: np.ndarray,
+    *,
+    n_nodes: int,
+    must_link,
+    cannot_link,
+    additional_constraints,
+) -> np.ndarray | None:
+    """Validate structural, pairwise, and load-balancing constraints."""
+    try:
+        candidate = validate_partition_matrix(
+            partition,
+            n_nodes,
+            name="final partition",
+        )
+    except ValueError:
+        return None
+    if not partition_satisfies_pairwise_constraints(
+        candidate,
+        must_link=must_link,
+        cannot_link=cannot_link,
+    ):
+        return None
+    constraints = additional_constraints or {}
+    if constraints.get("LB"):
+        from asunder.load_balancing.utils.balance import (
+            partition_satisfies_balance_constraints,
+        )
+
+        if not partition_satisfies_balance_constraints(
+            candidate,
+            K=constraints.get("K"),
+            R=constraints.get("R", 0),
+            R_bounds=constraints.get("R_bounds"),
+            balance_weights=constraints.get("balance_weights"),
+        ):
+            return None
+    return candidate
+
+
+def _select_final_partition(
+    raw: list[dict[str, Any]],
+    *,
+    n_nodes: int,
+    must_link,
+    cannot_link,
+    additional_constraints,
+) -> tuple[np.ndarray | None, str | None]:
+    """Select only a genuine integral solution, never a pricing candidate."""
+    solution_sources = {
+        "contracted_trivial",
+        "integer_master",
+        "post_loop_refinement",
+    }
+    for item in reversed(raw):
+        if item.get("partition_source") in solution_sources and item.get("z_sol") is not None:
+            candidate = _validated_final_candidate(
+                np.asarray(item["z_sol"]),
+                n_nodes=n_nodes,
+                must_link=must_link,
+                cannot_link=cannot_link,
+                additional_constraints=additional_constraints,
+            )
+            if candidate is not None:
+                return candidate, item["partition_source"]
+    for item in reversed(raw):
+        partition = _one_hot_master_partition(item)
+        if partition is not None:
+            candidate = _validated_final_candidate(
+                partition,
+                n_nodes=n_nodes,
+                must_link=must_link,
+                cannot_link=cannot_link,
+                additional_constraints=additional_constraints,
+            )
+            if candidate is not None:
+                return candidate, "one_hot_relaxed_master"
+    return None, None
 
 
 class CSDDecomposition:
@@ -87,6 +194,7 @@ class CSDDecomposition:
                     "columns",
                     "f_stars",
                     "node2comp",
+                    "partition_source",
                 }
             }
             records.append(
@@ -99,18 +207,28 @@ class CSDDecomposition:
                     sub_obj_val=item.get("sub_obj_val"),
                     columns=item.get("columns", []),
                     f_stars=item.get("f_stars", []),
+                    partition_source=item.get("partition_source"),
                 )
             )
         final = records[-1] if records else None
+        final_partition, final_partition_source = _select_final_partition(
+            raw,
+            n_nodes=A.shape[0],
+            must_link=cfg.get("must_link"),
+            cannot_link=cfg.get("cannot_link"),
+            additional_constraints=cfg.get("additional_constraints"),
+        )
         metadata = {
             "n_iterations": len(records),
             "resolution": float(cfg["resolution"]),
+            "final_partition_source": final_partition_source,
+            "status": "ok" if final_partition is not None else "no_integral_partition",
         }
         if node2comp is not None:
             metadata["node2comp"] = node2comp
         return DecompositionResult(
             records=records,
-            final_partition=(final.z_sol if final else None),
+            final_partition=final_partition,
             final_master_obj=(final.master_obj_val if final else None),
             metadata=metadata,
         )

@@ -78,6 +78,9 @@ class IterationRecord:
         is expanded to original-node dimensions.
     f_stars : list[float]
         List of objective values computed using each column in ``columns``.
+    partition_source : str or None
+        Role of ``z_sol`` in this record, such as ``"pricing_candidate"``,
+        ``"post_loop_refinement"``, or ``"integer_master"``.
 
     Notes
     -----
@@ -94,6 +97,7 @@ class IterationRecord:
     sub_obj_val: Optional[float] = None
     columns: List[np.ndarray] = field(default_factory=list)
     f_stars: List[float] = field(default_factory=list)
+    partition_source: Optional[str] = None
 
 
 @dataclass
