@@ -143,8 +143,8 @@ def run_nonlinear_branch_and_price(
     worthy_edge_value: Any = None,
     must_link: Sequence[tuple[Hashable, Hashable]] | None = None,
     cannot_link: Sequence[tuple[Hashable, Hashable]] | None = None,
-    algorithm: str = "louvain",
-    package: str | None = "networkx",
+    algorithm: str = "signed_leiden",
+    package: str | None = "leidenalg",
     resolution: float = 1.0,
     seed: int | None = 42,
     ifc_params: dict[str, Any] | None = None,
@@ -154,6 +154,9 @@ def run_nonlinear_branch_and_price(
     use_refined_column: bool = True,
     refine_post_loop: bool = True,
     final_master_solve: bool = False,
+    check_flat_pricing: bool = True,
+    stopping_window: int = 5,
+    contract_graph: bool = False,
     max_iterations: int | None = None,
     tolerance: float = 1e-8,
     disable_tqdm: bool = False,
@@ -225,11 +228,18 @@ def run_nonlinear_branch_and_price(
         Probability-to-label method passed to the default linear-group
         refinement function.
     use_refined_column : bool
-        Whether refined columns should be added to the column pool.
+        Whether to run refinement and add its columns inside the main loop.
     refine_post_loop : bool
         Whether to run post-loop refinement after column generation terminates.
     final_master_solve : bool
         Whether to run a final integer master solve.
+    check_flat_pricing : bool
+        Whether to terminate after a window of stagnant reduced costs.
+    stopping_window : int
+        Number of reduced costs used by the flat-pricing test.
+    contract_graph : bool
+        Whether to contract must-link and unworthy-edge components before
+        decomposition.
     max_iterations : int or None
         Maximum column-generation iterations.
     tolerance : float
@@ -321,6 +331,9 @@ def run_nonlinear_branch_and_price(
     cfg.use_refined_column = use_refined_column and refine
     cfg.refine_post_loop = refine_post_loop and refine
     cfg.final_master_solve = final_master_solve
+    cfg.check_flat_pricing = check_flat_pricing
+    cfg.stopping_window = stopping_window
+    cfg.contract_graph = contract_graph
     cfg.max_iterations = max_iterations
     cfg.disable_tqdm = disable_tqdm
     cfg.tolerance = tolerance

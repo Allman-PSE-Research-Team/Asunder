@@ -34,8 +34,9 @@ def solve_master_problem(
     f_stars,
     LB=True, 
     R=1, 
-    K=2, 
+    K=2,
     R_bounds=None,
+    balance_weights=None,
     cannot_link=None,
     must_link=None,
     extract_dual=False,
@@ -44,7 +45,7 @@ def solve_master_problem(
 ):
     """
     Solve the restricted master problem for the current column pool.
-    
+
     Parameters
     ----------
     A : np.ndarray of int | float, shape (N, N)
@@ -66,7 +67,10 @@ def solve_master_problem(
     K : int | None
         Number of communities.
     R_bounds : tuple[int, int] | None
-        Minimum and maximum number of nodes per community (community size constraint).
+        Minimum and maximum total node weight per community.
+    balance_weights : array-like or None
+        Positive node weights used to compute each community's load. Unit
+        weights are used when omitted.
     cannot_link : list[tuple[int, int]] or None
         List of node pairs that must not be together.
     must_link : list[tuple[int, int]] or None
@@ -80,7 +84,7 @@ def solve_master_problem(
         ``True`` | ``1``: Detailed output
     solver : Any
         Solver object.
-    
+
     Returns
     -------
     lambda_sol: list or ndarray of float
@@ -103,11 +107,27 @@ def solve_master_problem(
     if LB:
         if K is None:
             raise ValueError("K is required when load-balancing constraints are active.")
-        if R == 0 and R_bounds is None and I % K != 0:
+        if balance_weights is None:
+            balance_weights = np.ones(I, dtype=int)
+        else:
+            balance_weights = np.asarray(balance_weights)
+            if balance_weights.shape != (I,):
+                raise ValueError("balance_weights must contain one value per node.")
+            if not np.all(np.isfinite(balance_weights)):
+                raise ValueError("balance_weights must contain only finite values.")
+            if np.any(balance_weights <= 0):
+                raise ValueError("balance_weights must contain positive values.")
+        total_balance_weight = float(np.sum(balance_weights))
+        if R == 0 and R_bounds is None and total_balance_weight % K != 0:
             raise ValueError(
-                "Infeasible R and K combination, given the number of nodes."
+                "Infeasible R and K combination, given the total node weight."
             )
-        R_min, R_max = resolve_balance_bounds(I, K, R, R_bounds)
+        R_min, R_max = resolve_balance_bounds(
+            total_balance_weight,
+            K,
+            R,
+            R_bounds,
+        )
 
     if extract_dual:
         model.lmbd = Var(model.C, domain=NonNegativeReals, bounds=(0, None), initialize=0)
@@ -150,14 +170,24 @@ def solve_master_problem(
 
     if LB:
         model.Rmin = Constraint(
-            model.I, rule=lambda m, i: R_min <= sum(
-                sum(m.lmbd[c] * Z_star[c][i, j] for c in m.C) for j in m.I
-            )
+            model.I,
+            rule=lambda m, i: R_min
+            <= sum(
+                sum(
+                    m.lmbd[c] * Z_star[c][i, j] * float(balance_weights[j])
+                    for c in m.C
+                )
+                for j in m.I
+            ),
         )
 
         model.Rmax = Constraint(
             model.I, rule=lambda m, i: R_max >= sum(
-                sum(m.lmbd[c] * Z_star[c][i, j] for c in m.C) for j in m.I
+                sum(
+                    m.lmbd[c] * Z_star[c][i, j] * float(balance_weights[j])
+                    for c in m.C
+                )
+                for j in m.I
             )
         )
 
@@ -183,14 +213,23 @@ def solve_master_problem(
     duals = {"mu_dual": model.dual.get(model.OneColumn, 0)}
 
     if LB:
-        # Build tau_dual array from the Rmin constraint.
-        tau_dual = np.zeros((I,))
+        # Lift node-constraint duals to their exact weighted pairwise
+        # coefficients.  A plain half-sum is correct only for unit weights.
+        tau_node_dual = np.zeros((I,))
         for j in model.I:
-            tau_dual[j] = model.dual.get(model.Rmin[j], 0)
-        # Build pi_dual array from the Rmax constraint.
-        pi_dual = np.zeros((I,))
+            tau_node_dual[j] = model.dual.get(model.Rmin[j], 0)
+        pi_node_dual = np.zeros((I,))
         for j in model.I:
-            pi_dual[j] = model.dual.get(model.Rmax[j], 0)
+            pi_node_dual[j] = model.dual.get(model.Rmax[j], 0)
+        weights = np.asarray(balance_weights, dtype=float)
+        tau_dual = 0.5 * (
+            tau_node_dual[:, None] * weights[None, :]
+            + weights[:, None] * tau_node_dual[None, :]
+        )
+        pi_dual = 0.5 * (
+            pi_node_dual[:, None] * weights[None, :]
+            + weights[:, None] * pi_node_dual[None, :]
+        )
         duals["tau_dual"] = tau_dual
         duals["pi_dual"] = pi_dual
 

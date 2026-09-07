@@ -21,7 +21,11 @@ from asunder.load_balancing.utils.balance import (
 )
 
 
-def _balanced_fallback_partition(n_nodes: int, K: int) -> np.ndarray:
+def _balanced_fallback_partition(
+    n_nodes: int,
+    K: int,
+    balance_weights: np.ndarray | None = None,
+) -> np.ndarray:
     """Construct a deterministic near-equal partition.
 
     Parameters
@@ -44,7 +48,18 @@ def _balanced_fallback_partition(n_nodes: int, K: int) -> np.ndarray:
 
     if K < 1 or K > n_nodes:
         raise ValueError("K must be between 1 and the number of nodes.")
-    labels = np.arange(n_nodes, dtype=int) % K
+    if balance_weights is None:
+        labels = np.arange(n_nodes, dtype=int) % K
+    else:
+        weights = np.asarray(balance_weights, dtype=int)
+        if weights.shape != (n_nodes,):
+            raise ValueError("balance_weights must contain one value per node.")
+        labels = np.empty(n_nodes, dtype=int)
+        loads = np.zeros(K, dtype=int)
+        for node in np.argsort(weights)[::-1]:
+            group = int(np.argmin(loads))
+            labels[int(node)] = group
+            loads[group] += int(weights[int(node)])
     return np.equal.outer(labels, labels).astype(int)
 
 
@@ -72,6 +87,7 @@ def qmetis_pricing_subproblem(
     gamma: float = 1.0,
     verbose: int | bool = False,
     seed: int | None = None,
+    balance_weights: np.ndarray | None = None,
     **_: Any,
 ) -> tuple[float, np.ndarray]:
     """Generate and exactly score a pricing candidate with QMETIS.
@@ -134,8 +150,20 @@ def qmetis_pricing_subproblem(
     if adjacency.ndim != 2 or adjacency.shape[0] != adjacency.shape[1]:
         raise ValueError("A must be a square matrix.")
 
-    _, R_max = resolve_balance_bounds(adjacency.shape[0], K, R, R_bounds)
-    epsilon = epsilon_for_upper_bound(adjacency.shape[0], K, R_max)
+    if balance_weights is None:
+        node_weights = np.ones(adjacency.shape[0], dtype=int)
+    else:
+        raw_weights = np.asarray(balance_weights)
+        if raw_weights.shape != (adjacency.shape[0],):
+            raise ValueError("balance_weights must contain one value per node.")
+        if not np.all(np.isfinite(raw_weights)) or np.any(raw_weights <= 0):
+            raise ValueError("balance_weights must contain finite positive values.")
+        if not np.all(raw_weights == np.rint(raw_weights)):
+            raise ValueError("balance_weights must contain integer values.")
+        node_weights = np.rint(raw_weights).astype(int)
+    total_balance_weight = int(node_weights.sum())
+    _, R_max = resolve_balance_bounds(total_balance_weight, K, R, R_bounds)
+    epsilon = epsilon_for_upper_bound(total_balance_weight, K, R_max)
     has_ignored_internal_mass = bool(np.any(np.diag(adjacency) != 0))
 
     dual_weight, _ = build_dual_weight_matrix(adjacency, duals)
@@ -151,6 +179,7 @@ def qmetis_pricing_subproblem(
             K,
             resolution=gamma,
             balance_epsilon=epsilon,
+            node_weights=node_weights,
             seed=seed,
         )
     else:
@@ -171,10 +200,15 @@ def qmetis_pricing_subproblem(
                 K,
                 resolution=gamma,
                 balance_epsilon=epsilon,
+                node_weights=node_weights,
                 seed=seed,
             )
         else:
-            z_sol = _balanced_fallback_partition(adjacency.shape[0], K)
+            z_sol = _balanced_fallback_partition(
+                adjacency.shape[0],
+                K,
+                balance_weights=node_weights,
+            )
     reduced_cost = compute_reduced_cost(
         adjacency,
         np.asarray(a),

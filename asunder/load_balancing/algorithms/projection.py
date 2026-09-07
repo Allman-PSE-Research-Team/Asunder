@@ -57,6 +57,7 @@ def project_partition_ilp(
     R_bounds: Optional[Tuple[int, int]] = None,
     must_link: Sequence[Tuple[int, int]] = (),
     cannot_link: Sequence[Tuple[int, int]] = (),
+    balance_weights: Optional[Sequence[int]] = None,
     seed: int | None = 42,
     solver=None,
 ) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
@@ -96,20 +97,38 @@ def project_partition_ilp(
     if K <= 0:
         raise ValueError("K must be positive.")
 
+    if balance_weights is None:
+        node_weights = np.ones(N, dtype=int)
+    else:
+        raw_weights = np.asarray(balance_weights)
+        if raw_weights.shape != (N,):
+            raise ValueError("balance_weights must contain one value per node.")
+        if not np.all(np.isfinite(raw_weights)) or np.any(raw_weights <= 0):
+            raise ValueError("balance_weights must contain finite positive values.")
+        if not np.all(raw_weights == np.rint(raw_weights)):
+            raise ValueError("balance_weights must contain integer values.")
+        node_weights = np.rint(raw_weights).astype(int)
+    total_balance_weight = int(node_weights.sum())
+
     if R_bounds is None:
-        r_min, r_max = _range_bounds_from_KR(N, K, int(R))
+        r_min, r_max = _range_bounds_from_KR(total_balance_weight, K, int(R))
     else:
         r_min, r_max = int(R_bounds[0]), int(R_bounds[1])
         if r_min > r_max:
             raise ValueError("R_bounds must satisfy r_min <= r_max.")
 
-    if not (K * r_min <= N <= K * r_max):
+    if not (K * r_min <= total_balance_weight <= K * r_max):
         return None
 
     must_link = [_normalize_pair(i, j) for i, j in (must_link or [])]
     cannot_link = [_normalize_pair(i, j) for i, j in (cannot_link or [])]
 
-    comp = _build_components(N, must_link, cannot_link)
+    comp = _build_components(
+        N,
+        must_link,
+        cannot_link,
+        node_weights=node_weights,
+    )
     if comp is None:
         return None
 
@@ -125,7 +144,8 @@ def project_partition_ilp(
         }
 
     csz = np.asarray(comp["csz"], dtype=int)
-    if int(csz.max()) > r_max or K > Cn:
+    cweight = np.asarray(comp["cweight"], dtype=int)
+    if int(cweight.max()) > r_max or K > Cn:
         return None
 
     cid = np.asarray(comp["cid"], dtype=int)
@@ -165,7 +185,7 @@ def project_partition_ilp(
         model.constraints.add(sum(model.x[c, g] for g in model.G) == 1)
 
     for g in range(K):
-        group_size = sum(int(csz[c]) * model.x[c, g] for c in model.C)
+        group_size = sum(int(cweight[c]) * model.x[c, g] for c in model.C)
         model.constraints.add(group_size >= int(r_min))
         model.constraints.add(group_size <= int(r_max))
 
@@ -223,5 +243,6 @@ def project_partition_ilp(
         "feasibility_fallback": "projection_ilp",
         "solver_termination_condition": str(term),
         "seed": int(seed or 0),
+        "total_balance_weight": total_balance_weight,
     }
     return Z, meta

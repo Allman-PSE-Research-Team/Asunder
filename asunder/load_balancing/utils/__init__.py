@@ -2,6 +2,7 @@
 
 from asunder.load_balancing.utils.balance import (
     epsilon_for_upper_bound,
+    partition_satisfies_balance_constraints,
     resolve_balance_bounds,
 )
 from asunder.load_balancing.utils.partition_generation import (
@@ -16,4 +17,5 @@ __all__ = [
     "check_balance",
     "resolve_balance_bounds",
     "epsilon_for_upper_bound",
+    "partition_satisfies_balance_constraints",
 ]

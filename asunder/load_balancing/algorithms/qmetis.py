@@ -609,12 +609,11 @@ def run_qmetis(
     modified_A: np.ndarray,
     K: int,
     balance_epsilon: float | Sequence[float] | None = None,
-    node_weight_attr: str | Sequence[str] | None = None,
-    edge_weight_attr: str | None = "weight",
     seed: int | None = None,
     relative_resolution: float = 1e-7,
     safe_total: int = 1 << 50,
     resolution: float = 1.0,
+    node_weights: Sequence[int] | None = None,
     **metis_options: Any,
 ) -> tuple[np.ndarray, float]:
     """Partition a nonnegative matrix using bundled modularity QMETIS.
@@ -629,10 +628,6 @@ def run_qmetis(
         Number of requested parts.
     balance_epsilon : float, sequence of float, or None
         Relative upper imbalance tolerance.
-    node_weight_attr : str, sequence of str, or None
-        Optional node-balance attributes.
-    edge_weight_attr : str or None, default="weight"
-        Integer graph edge attribute passed to QMETIS.
     seed : int or None
         QMETIS random seed.
     relative_resolution : float, default=1e-7
@@ -641,6 +636,8 @@ def run_qmetis(
         Maximum directed adjacency sum after quantization.
     resolution : float, default=1.0
         Modularity resolution :math:`\\gamma`.
+    node_weights : sequence of int or None
+        Positive integer balance weight for each matrix row.
     **metis_options : Any
         Additional options forwarded to QMETIS.
 
@@ -657,19 +654,42 @@ def run_qmetis(
         If nonzero diagonal weights are omitted.
     """
 
+    if "node_weight_attr" in metis_options or "edge_weight_attr" in metis_options:
+        raise TypeError(
+            "run_qmetis accepts matrix input without node/edge attributes; "
+            "pass node weights through node_weights instead and edge weights through the adjacency."
+        )
+
     quantized, _scale = quantize_metis_weights(
         modified_A,
         relative_resolution=relative_resolution,
         safe_total=safe_total,
     )
     graph = _integer_weight_graph(quantized)
+
+    internal_weight_attr = None
+    if node_weights is not None:
+        weights = np.asarray(node_weights)
+        if weights.shape != (graph.number_of_nodes(),):
+            raise ValueError("node_weights must contain one value per matrix row.")
+        if not np.all(np.isfinite(weights)) or np.any(weights <= 0):
+            raise ValueError("node_weights must contain finite positive values.")
+        if not np.all(weights == np.rint(weights)):
+            raise ValueError("node_weights must contain integer values.")
+        internal_weight_attr = "__asunder_balance_weight"
+        nx.set_node_attributes(
+            graph,
+            {node: int(weights[node]) for node in graph.nodes()},
+            internal_weight_attr,
+        )
+
     result = qmetis_load_balanced_partition(
         graph,
         nparts=K,
         resolution=resolution,
         balance_epsilon=balance_epsilon,
-        node_weight_attr=node_weight_attr,
-        edge_weight_attr=edge_weight_attr,
+        node_weight_attr=internal_weight_attr,
+        edge_weight_attr="weight",
         seed=seed,
         **metis_options,
     )

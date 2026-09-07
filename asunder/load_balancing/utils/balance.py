@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from asunder.base.algorithms.modular_VFD import _range_bounds_from_KR
+from asunder.base.utils.graph import partition_matrix_to_vector
 
 
 def resolve_balance_bounds(
-    n_nodes: int,
+    n_nodes: int | float,
     K: int,
     R: int,
     R_bounds: tuple[int | None, int | None] | None = None,
@@ -45,6 +48,9 @@ def resolve_balance_bounds(
     # ⌊(I/K - R/2) + 1/2⌋ = ((2*I) - K*(R - 1)) // (2*K)
     # We, however, do not anticipate such issues as a graph that big should only be looked at from afar.
 
+    if not float(n_nodes).is_integer():
+        raise ValueError("The total balance weight must be an integer.")
+    n_nodes = int(n_nodes)
     if n_nodes < 0:
         raise ValueError("n_nodes must be nonnegative.")
     if K < 1:
@@ -111,3 +117,48 @@ def epsilon_for_upper_bound(n_nodes: int, K: int, R_max: int) -> float:
 
     average = n_nodes / K
     return max(0.0, float(R_max) / average - 1.0)
+
+
+def partition_satisfies_balance_constraints(
+    partition,
+    *,
+    K: int,
+    R: int,
+    R_bounds: tuple[int | None, int | None] | None = None,
+    balance_weights=None,
+) -> bool:
+    """Return whether a partition has exactly ``K`` weight-balanced groups."""
+    matrix = np.asarray(partition)
+    n_nodes = matrix.shape[0]
+    try:
+        K = int(K)
+        R = int(R)
+    except (TypeError, ValueError):
+        return False
+    if balance_weights is None:
+        weights = np.ones(n_nodes, dtype=int)
+    else:
+        weights = np.asarray(balance_weights)
+        if weights.shape != (n_nodes,):
+            return False
+        if (
+            not np.all(np.isfinite(weights))
+            or np.any(weights <= 0)
+            or not np.all(weights == np.rint(weights))
+        ):
+            return False
+    labels = partition_matrix_to_vector(matrix)
+    communities = np.unique(labels)
+    if communities.size != K:
+        return False
+    loads = np.bincount(labels, weights=weights, minlength=K)
+    try:
+        lower, upper = resolve_balance_bounds(
+            float(np.sum(weights)),
+            K,
+            R,
+            R_bounds,
+        )
+    except ValueError:
+        return False
+    return bool(np.all((loads >= lower) & (loads <= upper)))

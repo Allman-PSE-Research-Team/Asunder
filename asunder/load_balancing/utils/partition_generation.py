@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import networkx as nx
 import numpy as np
@@ -37,6 +37,7 @@ def assign_from_order_with_links_range(
     w_contig: float = 1.0,
     w_switch: float = 0.25,
     w_target: float = 0.15,
+    node_weights: Optional[Sequence[int]] = None,
 ) -> Optional[Tuple[np.ndarray, Dict[str, int]]]:
     """
     Assign nodes to balanced clusters from an ordered node sequence.
@@ -104,32 +105,39 @@ def assign_from_order_with_links_range(
     must_link = [] if must_link is None else list(must_link)
     cannot_link = [] if cannot_link is None else list(cannot_link)
 
+    if N == 0:
+        r_min, r_max = (0, 0) if R_bounds is None else R_bounds
+        return np.zeros(0, dtype=int), {"r_min": r_min, "r_max": r_max, "K_used": 0}
+
+    comp = _build_components(
+        N,
+        must_link,
+        cannot_link,
+        node_weights=node_weights,
+    )
+    if comp is None:
+        return None
+    total_weight = int(np.asarray(comp["cweight"], dtype=int).sum())
+
     if R_bounds is None:
-        r_min, r_max = _range_bounds_from_KR(N, K, R)
+        r_min, r_max = _range_bounds_from_KR(total_weight, K, R)
     else:
         r_min, r_max = R_bounds
 
-    if N == 0:
-        return np.zeros(0, dtype=int), {"r_min": r_min, "r_max": r_max, "K_used": 0}
-
-    k_lo, k_hi = _feasible_K_range(N, r_min, r_max)
+    k_lo, k_hi = _feasible_K_range(total_weight, r_min, r_max)
     if k_lo > k_hi:
         return None
 
-    K0 = min(max(K, k_lo), k_hi)
-    K_end = min(k_hi, K0 + max_K_increase)
+    K0 = max(K, k_lo)
+    K_end = min(k_hi, K + max_K_increase)
     K_candidates = list(range(K0, K_end + 1))
 
     # rng = np.random.default_rng(seed)
 
-    comp = _build_components(N, must_link, cannot_link)
-    if comp is None:
-        return None
-
     C = comp["C"]
     cid = comp["cid"]
     comps = comp["comps"]
-    csz = comp["csz"]
+    csz = comp["cweight"]
     use_bitmask = comp["use_bitmask"]
     comp_bit = comp["comp_bit"]
     forb_mask = comp["forb_mask"]
@@ -151,7 +159,7 @@ def assign_from_order_with_links_range(
         return gvec
 
     def try_one(K_used: int, run_seed: int) -> Optional[np.ndarray]:
-        target = _target_sizes_from_bounds(N, K_used, r_min, r_max)
+        target = _target_sizes_from_bounds(total_weight, K_used, r_min, r_max)
         used = np.zeros(K_used, dtype=int)
         deficit = np.full(K_used, r_min, dtype=int)  # deficit[g] = max(0, r_min - used[g])
         deficit_sum = int(deficit.sum())
@@ -276,7 +284,7 @@ def assign_from_order_with_links_range(
             deficit_sum += (new_def_g - prev_def_g)
             deficit[g] = new_def_g
 
-            rem_nodes = N - assigned_sum
+            rem_nodes = total_weight - assigned_sum
             if deficit_sum > rem_nodes:
                 # undo and continue trying next candidate
                 used[g] -= sc0
@@ -303,7 +311,8 @@ def assign_from_order_with_links_range(
         if int(csz.max(initial=0)) > r_max:
             continue
         for r in range(max_restarts):
-            gvec = try_one(K_used, run_seed=int(seed + 31 * (K_used + 1) + 997 * r))
+            base_seed = 0 if seed is None else int(seed)
+            gvec = try_one(K_used, run_seed=base_seed + 31 * (K_used + 1) + 997 * r)
             if gvec is not None:
                 return gvec, {"r_min": r_min, "r_max": r_max, "K_used": K_used}
 
@@ -324,6 +333,8 @@ def make_partitions(
     n_cols: int = 15,
     seed: int | None = 42,
     nodes=None,
+    node_weights: Optional[Sequence[int]] = None,
+    max_K_increase: int = 50,
 ):
     """
     Generate graph-informed feasible partition columns.
@@ -378,13 +389,15 @@ def make_partitions(
     def build_from_label_order(name: str, order_labels: List[Any]):
         order_idx = [node_to_idx[u] for u in order_labels]
 
-        if must_link != [] or cannot_link != []:
+        if must_link != [] or cannot_link != [] or node_weights is not None:
             # For more “contiguous” order, increase w_contig and reduce branch (fewer “jumps”).
             # To succeed more often under heavy cannot-link density, increase max_K_increase, branch, and/or max_restarts.
             out = assign_from_order_with_links_range(
                 order_idx, N, K, R, R_bounds=R_bounds,
                 must_link=must_link,
                 cannot_link=cannot_link,
+                node_weights=node_weights,
+                max_K_increase=max_K_increase,
                 seed=seed,
                 # max_attempts=1000, If we are not trying enough with the default, it could be increased
             )
@@ -518,6 +531,7 @@ def make_one_feasible_partition_mrv_restarts(
     jitter_top=2,
     max_K_increase=50,
     return_Z=True,
+    node_weights: Optional[Sequence[int]] = None,
 ):
     """
     Construct one feasible partition using MRV search with restarts.
@@ -570,29 +584,36 @@ def make_one_feasible_partition_mrv_restarts(
     must_link = [] if must_link is None else list(must_link)
     cannot_link = [] if cannot_link is None else list(cannot_link)
 
-    if R_bounds is None:
-        r_min, r_max = _range_bounds_from_KR(N, K, R)
-    else:
-        r_min, r_max = R_bounds
     if N == 0:
         g0 = np.zeros(0, dtype=int)
         return partition_vector_to_2d_matrix(g0) if return_Z else g0
 
-    comp = _build_components(N, must_link, cannot_link)
+    comp = _build_components(
+        N,
+        must_link,
+        cannot_link,
+        node_weights=node_weights,
+    )
     if comp is None:
         return None
+
+    total_weight = int(np.asarray(comp["cweight"], dtype=int).sum())
+    if R_bounds is None:
+        r_min, r_max = _range_bounds_from_KR(total_weight, K, R)
+    else:
+        r_min, r_max = R_bounds
 
     use_bitmask = comp["use_bitmask"]
     comp_bit = comp["comp_bit"]
     C = comp["C"]
     comps = comp["comps"]
-    csz = comp["csz"]
+    csz = comp["cweight"]
     forb_mask = comp["forb_mask"]
 
     if int(csz.max(initial=0)) > r_max:
         return None
 
-    k_lo, k_hi = _feasible_K_range(N, r_min, r_max)
+    k_lo, k_hi = _feasible_K_range(total_weight, r_min, r_max)
     if k_lo > k_hi:
         return None
 
@@ -604,8 +625,8 @@ def make_one_feasible_partition_mrv_restarts(
     if k_lo > k_hi:
         return None
 
-    K0 = min(max(K, k_lo), k_hi)
-    K_end = min(k_hi, K0 + max_K_increase)
+    K0 = max(K, k_lo)
+    K_end = min(k_hi, K + max_K_increase)
     K_candidates = list(range(K0, K_end + 1))
 
     if use_bitmask:
@@ -621,7 +642,7 @@ def make_one_feasible_partition_mrv_restarts(
 
     for K_used in K_candidates:
         # quick sanity: N must fit in [K_used*r_min, K_used*r_max]
-        if not (K_used * r_min <= N <= K_used * r_max):
+        if not (K_used * r_min <= total_weight <= K_used * r_max):
             continue
 
         for _ in range(max_tries):
@@ -633,7 +654,7 @@ def make_one_feasible_partition_mrv_restarts(
             # in_mask = [0] * K_used
             in_mask = ([0] * K_used) if use_bitmask else [set() for _ in range(K_used)]
             unassigned = set(range(C))
-            rem_nodes = int(N)
+            rem_nodes = int(total_weight)
 
             def feas_groups(c):
                 sc = int(csz[c])
@@ -728,6 +749,7 @@ def make_partitions_random(
     seed=42,
     return_Z=True,
     max_K_increase=50,
+    node_weights: Optional[Sequence[int]] = None,
 ):
     """
     Generate random feasible partitions subject to link and size constraints.
@@ -774,27 +796,33 @@ def make_partitions_random(
     must_link = [] if must_link is None else list(must_link)
     cannot_link = [] if cannot_link is None else list(cannot_link)
 
-    if R_bounds is None:
-        r_min, r_max = _range_bounds_from_KR(N, K, R)
-    else:
-        r_min, r_max = R_bounds
     if N == 0:
         return [partition_vector_to_2d_matrix(np.zeros(0, dtype=int))] if return_Z else []
 
-    comp = _build_components(N, must_link, cannot_link)
+    comp = _build_components(
+        N,
+        must_link,
+        cannot_link,
+        node_weights=node_weights,
+    )
     if comp is None:
         return []
+    total_weight = int(np.asarray(comp["cweight"], dtype=int).sum())
+    if R_bounds is None:
+        r_min, r_max = _range_bounds_from_KR(total_weight, K, R)
+    else:
+        r_min, r_max = R_bounds
     use_bitmask = comp["use_bitmask"]
     comp_bit = comp["comp_bit"]
     C = comp["C"]
     comps = comp["comps"]
-    csz = comp["csz"]
+    csz = comp["cweight"]
     forb_mask = comp["forb_mask"]
 
     if int(csz.max(initial=0)) > r_max:
         return []
 
-    k_lo, k_hi = _feasible_K_range(N, r_min, r_max)
+    k_lo, k_hi = _feasible_K_range(total_weight, r_min, r_max)
     if k_lo > k_hi:
         return []
 
@@ -803,8 +831,8 @@ def make_partitions_random(
     if k_lo > k_hi:
         return []
 
-    K0 = min(max(K, k_lo), k_hi)
-    K_end = min(k_hi, K0 + max_K_increase)
+    K0 = max(K, k_lo)
+    K_end = min(k_hi, K + max_K_increase)
     K_candidates = list(range(K0, K_end + 1))
 
     def build_gvec(comp2g):
@@ -817,7 +845,7 @@ def make_partitions_random(
         sz = np.zeros(K_used, dtype=int)
         deficit = np.maximum(0, r_min - sz)
         deficit_sum = int(deficit.sum())
-        rem_nodes = int(N)
+        rem_nodes = int(total_weight)
 
         in_mask = ([0] * K_used) if use_bitmask else [set() for _ in range(K_used)]
         comp2g = -np.ones(C, dtype=int)
@@ -880,7 +908,7 @@ def make_partitions_random(
 
     # try a couple K_used values near K (and larger if needed)
     for K_used in K_candidates:
-        if not (K_used * r_min <= N <= K_used * r_max):
+        if not (K_used * r_min <= total_weight <= K_used * r_max):
             continue
 
         order = np.argsort(csz)[::-1]  # largest first
@@ -902,10 +930,12 @@ def make_partitions_random(
         N=N, K=K, R=R, R_bounds=R_bounds,
         must_link=must_link,
         cannot_link=cannot_link,
-        seed=seed + 1,
+        seed=(0 if seed is None else int(seed)) + 1,
         max_tries=500,
         jitter_top=2,
+        max_K_increase=max_K_increase,
         return_Z=False,
+        node_weights=node_weights,
     )
 
     if not parts and g_last is None:
@@ -924,7 +954,7 @@ def make_partitions_random(
     return out
 
 
-def check_balance(Z, K, R, R_bounds=None):
+def check_balance(Z, K, R, R_bounds=None, node_weights=None):
     """
     Check whether a co-clustering matrix satisfies balance bounds.
 
@@ -954,8 +984,14 @@ def check_balance(Z, K, R, R_bounds=None):
         otherwise ``False``.
     """
     N = Z.shape[0]
+    weights = np.ones(N, dtype=int) if node_weights is None else np.asarray(node_weights)
+    if weights.shape != (N,):
+        raise ValueError("node_weights must contain one value per node.")
+    if not np.all(np.isfinite(weights)) or np.any(weights <= 0):
+        raise ValueError("node_weights must contain finite positive values.")
+    total_weight = int(weights.sum())
 
-    R_min, R_max = resolve_balance_bounds(N, K, R, R_bounds)
+    R_min, R_max = resolve_balance_bounds(total_weight, K, R, R_bounds)
 
-    rs = Z.sum(axis=1)
+    rs = np.asarray(Z) @ weights
     return rs.min(), rs.max(), (rs.min() >= R_min and rs.max() <= R_max)
