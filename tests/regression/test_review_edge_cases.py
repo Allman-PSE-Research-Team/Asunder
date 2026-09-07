@@ -301,23 +301,52 @@ def test_contracted_single_component_short_circuits_pricing():
     assert out[0]["lambda_sol"] == [1.0]
 
 
-def test_load_balancing_contraction_is_explicitly_unsupported():
-    """Component cardinalities require vertex weights before LB contraction."""
-    A, a, m, _ = _small_graph()
+def test_load_balancing_contraction_propagates_component_weights():
+    """Contracted load balancing counts original node mass, not supernodes."""
+    A = nx.to_numpy_array(nx.path_graph(3), dtype=float)
+    captured = {}
 
-    with pytest.raises(ValueError, match="component-size vertex weights"):
-        CSD_decomposition(
-            A,
-            a,
-            m,
-            _master_ok,
-            _subproblem_eye,
-            must_link=[(0, 1)],
-            additional_constraints={"LB": True, "K": 1, "R": 0},
-            contract_graph=True,
-            disable_tqdm=True,
-            verbose=-1,
-        )
+    def generator(N, node_weights, **_):
+        captured["generator_weights"] = np.asarray(node_weights).copy()
+        return [np.eye(N, dtype=int)]
+
+    def master(A, a, m, Z_star, f_stars, balance_weights=None, **_):
+        captured["master_weights"] = np.asarray(balance_weights).copy()
+        return [1.0], {"mu_dual": 0.0}, float(f_stars[0])
+
+    def pricing(A, a, m, duals, balance_weights=None, **_):
+        captured["pricing_weights"] = np.asarray(balance_weights).copy()
+        return 0.0, np.eye(A.shape[0], dtype=int)
+
+    out = CSD_decomposition(
+        A,
+        A.sum(axis=1),
+        float(A.sum()),
+        master,
+        pricing,
+        must_link=[(0, 1)],
+        additional_constraints={
+            "LB": True,
+            "K": 2,
+            "R": 1,
+            "balance_weights": np.ones(3, dtype=int),
+        },
+        contract_graph=True,
+        ifc_params={
+            "generator": generator,
+            "num": 1,
+            "args": {"N": 3, "node_weights": np.ones(3, dtype=int)},
+        },
+        final_master_solve=False,
+        max_iterations=1,
+        disable_tqdm=True,
+        verbose=-1,
+    )
+
+    assert np.array_equal(captured["generator_weights"], np.array([2.0, 1.0]))
+    assert np.array_equal(captured["master_weights"], np.array([2.0, 1.0]))
+    assert np.array_equal(captured["pricing_weights"], np.array([2.0, 1.0]))
+    assert out[-1]["node2comp"].tolist() == [0, 0, 1]
 
 
 def test_decomposition_accepts_wrapped_heuristic_callables():
@@ -517,7 +546,10 @@ def test_vfd_returns_feasible_fallback_when_reference_score_is_unattainable():
     )
 
     for out in (
-        modular_very_fortunate_descent(**common_kwargs),
+        modular_very_fortunate_descent(
+            **common_kwargs,
+            use_K_constraint=True,
+        ),
         very_fortunate_descent(**common_kwargs),
     ):
         assert out is not None

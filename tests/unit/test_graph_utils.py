@@ -79,6 +79,21 @@ def test_contraction_maps_constraints_and_warm_start_partition():
     )
 
 
+def test_contraction_preserves_existing_diagonal_mass_exactly():
+    A = np.array(
+        [
+            [2.0, 3.0, 0.0],
+            [3.0, 4.0, 1.0],
+            [0.0, 1.0, 5.0],
+        ]
+    )
+    contracted, node2comp = contract_adj_matrix_new(A, must_link=[(0, 1)])
+
+    assert node2comp.tolist() == [0, 0, 1]
+    assert np.array_equal(contracted, np.array([[12.0, 1.0], [1.0, 5.0]]))
+    assert np.array_equal(contracted.sum(axis=1), np.array([13.0, 6.0]))
+
+
 def test_contraction_rejects_conflicting_or_inconsistent_inputs():
     """Cannot-links and warm starts may not split a contracted component."""
     node2comp = np.array([0, 0, 1])

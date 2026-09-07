@@ -16,17 +16,12 @@ Base install:
 python3 -m pip install put-asunder
 ```
 
-Graph extras (supports ``leidenalg`` and ``igraph`` algorithms):
+The default signed-Leiden pricing backend and its igraph dependency are
+included in the base install. Add the visualization dependencies
+(``matplotlib`` and ``seaborn``) when plotting support is needed:
 
 ```bash
-python3 -m pip install "put-asunder[graph]"
-```
-
-
-Graph and visualization (``matplotlib`` and ``seaborn``) extras:
-
-```bash
-python3 -m pip install "put-asunder[graph,viz]"
+python3 -m pip install "put-asunder[viz]"
 ```
 
 Legacy core periphery heuristics (best-effort on Python 3.13 and 3.14):
@@ -38,7 +33,7 @@ python3 -m pip install "put-asunder[legacy]"
 ## Python Support
 
 - Guaranteed: Python 3.10, 3.11, 3.12, 3.13, 3.14 for core package.
-- Guaranteed: mainstream extras (`graph`, `viz`) on Python 3.10 to 3.14.
+- Guaranteed: mainstream graph backends and the `viz` extra on Python 3.10 to 3.14.
 - Best-effort: `legacy` extra on Python 3.13 and 3.14.
 
 ## Package Layout
@@ -85,7 +80,10 @@ The example above uses the top-level facade. Canonical reusable imports live und
 
 ```python
 from asunder.base.column_generation.subproblem import heuristic_subproblem
-from asunder.base.algorithms.modular_VFD import modular_very_fortunate_descent
+from asunder.base.algorithms.modular_VFD import (
+    modular_very_fortunate_descent,
+    refine_partition_modular_vfd,
+)
 from asunder.nlbnp import CorePeripheryPartition, NonlinearBranchAndPrice
 from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group, refine_partition_with_cp
 from asunder.nlbnp.case_studies import run_evaluation
@@ -118,6 +116,45 @@ print(result.final_partition)
 ```
 
 `result.final_partition` is the detected partition matrix. `result.metadata` includes the modularity score, elapsed time, and label-aware community information so the result can be mapped back to the original graph nodes.
+
+Use a positive integer node attribute when balance means load rather than node
+count. Must-link contraction preserves the summed load of each component:
+
+```python
+nx.set_node_attributes(G, {node: node + 1 for node in G}, "load")
+result = LoadBalancer(
+    G,
+    K=2,
+    R=2,
+    node_weight_attr="load",
+    contract_graph=True,
+)
+```
+
+For large instances, `refine=False` disables VFD refinement entirely;
+`use_refined_column=False` disables it inside the main loop, and
+`refine_post_loop=False` disables the single post-loop pass. Flat-pricing
+termination is controlled by `check_flat_pricing` and `stopping_window`.
+
+The generic decomposition interface can use ModularVFD through its adapter:
+
+```python
+from asunder import CSDDecompositionConfig, refine_partition_modular_vfd
+
+cfg = CSDDecompositionConfig(
+    refine_params={
+        "refine_func": refine_partition_modular_vfd,
+        "kwargs": {"K": 2, "R": 2, "use_K_constraint": True},
+    },
+    use_refined_column=False,
+    refine_post_loop=True,
+)
+```
+
+ModularVFD also accepts component-local, affected-community, and
+partition-wide hard constraints. See the
+[constraint extension guide](https://asunder.readthedocs.io/en/latest/reference/development/extending_modular_vfd.html)
+for examples and column-generation integration boundaries.
 
 For native modularity pricing with QMETIS, select it as the load-balancing
 algorithm. `resolution` is a general Asunder modularity parameter; no
