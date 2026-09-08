@@ -37,7 +37,8 @@ LEIDENALG_ALGOS = ['leiden', 'signed_leiden', 'cpm_leiden', 'surprise_leiden', '
 
 def run_evaluation(problem="cpcong", build_params=None, style="CP", algos=None, repeat=3):
     """
-    Run benchmark evaluations for CP (Core-Periphery) and CD_Refine (Community Detection + Refinement to identify linear group) workflows.
+    Run NLBNP benchmark evaluations for the linear-only-separator (CP) and
+    community-detection-plus-linear-group-refinement (CD_Refine) workflows.
     
     Parameters
     ----------

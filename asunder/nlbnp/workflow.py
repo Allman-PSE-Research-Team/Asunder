@@ -1,4 +1,4 @@
-"""Generic high-level nonlinear branch-and-price workflow."""
+"""High-level nonlinear branch-and-price application workflows."""
 
 from __future__ import annotations
 
@@ -23,7 +23,10 @@ from asunder.base.column_generation.subproblem import (
 from asunder.base.utils.graph import group_nodes_by_community, map_community_labels
 from asunder.base.utils.partition_generation import make_partitions_random_links_only
 from asunder.config import CSDDecompositionConfig
-from asunder.nlbnp.algorithms.core_periphery import _detect_core_periphery
+from asunder.nlbnp.algorithms.core_periphery import (
+    _detect_core_periphery,
+    _nlbnp_linear_only_mask,
+)
 from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group
 from asunder.orchestrator import run_csd_decomposition
 from asunder.types import DecompositionResult, MasterProblemFn, SubproblemFn
@@ -385,12 +388,16 @@ def CorePeripheryPartition(
     verbose: bool = False,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
-    Solve NLBNP by separating a core and partitioning periphery components.
+    Apply the NLBNP linear-only-group structural shortcut.
 
-    This path is appropriate when removing the detected core naturally leaves
-    each connected periphery component as a complete final community. Use
-    :func:`run_nonlinear_branch_and_price` when those components need further
-    subdivision.
+    In the intended NLBNP interpretation, grouping constraints collect the
+    nonlinear nodes into one detection block on the core side. The complementary
+    periphery is merged into the single linear-only community required by the
+    cardinality constraint. That linear-only group is then excluded from the
+    original input adjacency, not the contracted detection adjacency, and each
+    remaining core-side connected component becomes an independent final
+    community. Use :func:`run_nonlinear_branch_and_price` when this shortcut is
+    not valid.
 
     Parameters
     ----------
@@ -403,8 +410,8 @@ def CorePeripheryPartition(
     must_link_edge_value : Any, optional
         Attribute value selected by ``must_link_edge_attr``.
     must_group : sequence, optional
-        Nodes constrained to the same binary core-periphery side. This does
-        not force disconnected periphery nodes into one final community.
+        Designated nonlinear nodes merged into one detection block. They share
+        the core side but are not forced into one final independent community.
     must_group_node_attr : str, optional
         Node attribute used to derive ``must_group`` nodes.
     must_group_node_value : Any, optional
@@ -413,7 +420,8 @@ def CorePeripheryPartition(
         Core-periphery detection algorithm.
     target : {"contracted", "original"}
         Space whose core-periphery structure is optimized and reported as the
-        primary fit. Contracted space is the default.
+        primary fit. Contracted space is the default. The final connected
+        components are always calculated from the original input adjacency.
     spectral_rank : {1, 2}
         Spectral approximation rank. Rank two uses a scaled adjacency spectral
         embedding and requires Gaussian-mixture conversion.
@@ -429,8 +437,9 @@ def CorePeripheryPartition(
     Returns
     -------
     community_labels : ndarray of int, shape (N,)
-        Community labels where the core is community ``0`` and connected
-        periphery components are communities ``1..K``.
+        Community labels where the merged linear-only periphery is community
+        ``0`` and independent original-graph core components are communities
+        ``1..K``.
     metadata : dict
         Core-periphery detection, component, and graph-label metadata.
     """
@@ -475,10 +484,25 @@ def CorePeripheryPartition(
     if cp_result.node_labels is None:
         raise RuntimeError("Core-periphery detection did not return binary node labels.")
     core_labels = cp_result.node_labels
+    linear_only_mask = _nlbnp_linear_only_mask(
+        core_labels,
+        nonlinear_nodes=must_group_idx,
+    )
     community_labels, component_info = partition_periphery_components(
         A,
-        core_labels,
+        linear_only_mask,
         must_link=must_link_idx,
+    )
+    component_info.update(
+        {
+            "n_core": int(np.count_nonzero(core_labels)),
+            "n_periphery": int(np.count_nonzero(linear_only_mask)),
+            "n_linear_only": int(np.count_nonzero(linear_only_mask)),
+            "n_independent_nodes": int(np.count_nonzero(core_labels)),
+            "linear_only_node_indices": np.flatnonzero(linear_only_mask),
+            "independent_components": component_info["components"],
+            "component_graph_space": "original",
+        }
     )
     community_map = {idx: int(label) for idx, label in enumerate(community_labels)}
     communities = component_info["community_node_indices"]

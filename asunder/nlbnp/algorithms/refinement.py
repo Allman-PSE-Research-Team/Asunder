@@ -9,7 +9,10 @@ from asunder.base.algorithms.community import (
     probability_to_integer_labels,
 )
 from asunder.base.utils.graph import partition_matrix_to_vector, partition_vector_to_2d_matrix
-from asunder.nlbnp.algorithms.core_periphery import _detect_core_periphery
+from asunder.nlbnp.algorithms.core_periphery import (
+    _detect_core_periphery,
+    _nlbnp_linear_only_mask,
+)
 
 
 def refine_partition_linear_group(
@@ -61,10 +64,12 @@ def refine_partition_with_cp(
     seed=42,
 ):
     """
-    Refine a partition by detecting and merging a standalone core community.
+    Refine a partition by detecting and merging the linear-only periphery.
 
-    Existing periphery community assignments are preserved. All detected core
-    nodes are assigned to one shared community.
+    Existing assignments on the nonlinear/core side are preserved. All nodes
+    in the complementary periphery are assigned to one shared linear-only
+    community. In the intended NLBNP use, ``must_group`` identifies the
+    nonlinear detection block and validates that it lies on the core side.
 
     Parameters
     ----------
@@ -75,7 +80,7 @@ def refine_partition_with_cp(
     must_link : list[tuple[int, int]] or None
         Node pairs constrained to one core-periphery block.
     must_group : list[int] | None
-        Nodes constrained to one binary core-periphery side.
+        Designated nonlinear nodes constrained to one binary detection side.
     cp_algorithm : str
         Core periphery algorithm to be used. Should be one of:
         ``"SPEC"``: Continuous spectral core periphery detection
@@ -88,7 +93,7 @@ def refine_partition_with_cp(
     prob_method : str
         One of ``"threshold"``, ``"gaussian_mixture"``, or ``"DBSCAN"``.
     threshold : float
-        Value below which a node is reassigned to the linear-only group.
+        Value used when converting continuous core scores to binary roles.
     verbose : bool
         Controls the verbosity of the output.
     seed : int | None
@@ -121,5 +126,9 @@ def refine_partition_with_cp(
     if cp_result.node_labels is None:
         raise RuntimeError("Core-periphery detection did not return binary node labels.")
     cp_labels = cp_result.node_labels
-    refined_partition = np.where(cp_labels == 1, -1, partition_labels)
+    linear_only_mask = _nlbnp_linear_only_mask(
+        cp_labels,
+        nonlinear_nodes=must_group,
+    )
+    refined_partition = np.where(linear_only_mask, -1, partition_labels)
     return partition_vector_to_2d_matrix(refined_partition)

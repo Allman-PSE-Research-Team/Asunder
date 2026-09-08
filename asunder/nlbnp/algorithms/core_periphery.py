@@ -216,3 +216,40 @@ def _detect_core_periphery(
         verbose=verbose,
     )
     return _orient_and_score(matrix, result, integer_block_labels, grouped_nodes)
+
+
+def _nlbnp_linear_only_mask(
+    core_labels: np.ndarray,
+    *,
+    nonlinear_nodes: Sequence[int] | None = None,
+) -> np.ndarray:
+    """Return the linear-only side of a valid NLBNP binary separation.
+
+    Core-periphery detection labels the nonlinear-containing side as ``1`` in
+    the NLBNP interpretation. The complementary ``0`` side is the single
+    linear-only group. When designated nonlinear nodes are supplied, reject a
+    detection that places any of them outside the core.
+    """
+
+    labels = np.asarray(core_labels)
+    if labels.ndim != 1 or not np.all(np.isin(labels, (0, 1))):
+        raise RuntimeError("Core-periphery detection must return binary node labels.")
+
+    core_mask = labels.astype(bool)
+    linear_only_mask = ~core_mask
+    if not np.any(core_mask) or not np.any(linear_only_mask):
+        raise RuntimeError(
+            "NLBNP structural partitioning requires nonempty nonlinear-core "
+            "and linear-only sides."
+        )
+
+    nonlinear = [] if nonlinear_nodes is None else [int(node) for node in nonlinear_nodes]
+    if any(not 0 <= node < labels.shape[0] for node in nonlinear):
+        raise ValueError("nonlinear_nodes contains a node index outside the detected partition.")
+    if nonlinear and not np.all(core_mask[nonlinear]):
+        raise RuntimeError(
+            "The designated nonlinear block was not detected in the core; "
+            "the NLBNP linear-only group cannot be identified."
+        )
+
+    return linear_only_mask
