@@ -156,16 +156,8 @@ rule. Narrow checks avoid rebuilding or scanning unrelated communities.
      - A frequently evaluated rule needs an incremental cache for speed.
      - Large conflict sets, cached capacities, specialized state machines.
 
-All custom constraints use the same ``constraints`` argument and can be
-combined:
-
-.. code-block:: python
-
-   refined = refine_partition_modular_vfd(
-       A,
-       initial_labels,
-       constraints=(community_rule, counting_rule, partition_rule),
-   )
+All custom constraints use the same ``constraints`` argument. Pass several
+constraint objects in one tuple when a refinement must satisfy several rules.
 
 Community predicates
 --------------------
@@ -350,6 +342,15 @@ proposal:
        VFDTransition,
    )
 
+   allowed_spread = 3
+
+   def communities(assignment):
+       return tuple(assignment.iter_communities(include_empty=False))
+
+   def load_spread(assignment):
+       loads = [community.total_weight for community in communities(assignment)]
+       return 0 if not loads else max(loads) - min(loads)
+
    def spread_is_allowed(assignment):
        return load_spread(assignment) <= allowed_spread
 
@@ -429,12 +430,8 @@ identifier represented by each contracted row:
        ("south-a", "south-b", "south-c"),
    )
 
-   refined = refine_partition_modular_vfd(
-       A_contracted,
-       initial_contracted_partition,
-       component_members=component_members,
-       constraints=(rule,),
-   )
+Pass this value as ``component_members=component_members`` when refining the
+corresponding three-row contracted adjacency.
 
 If ModularVFD performs another must-link contraction, it combines these member
 groups automatically. Never assume that one component represents one original

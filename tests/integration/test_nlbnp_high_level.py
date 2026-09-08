@@ -115,7 +115,7 @@ def test_nonlinear_branch_and_price_accepts_adjacency_matrix():
     assert result.metadata["worthy_edges"] == [(1, 2)]
 
 
-def test_refine_partition_with_cp_merges_core_and_preserves_periphery(monkeypatch):
+def test_refine_partition_with_cp_merges_linear_periphery_and_preserves_core(monkeypatch):
     partition = np.array([0, 0, 1, 1])
     core_labels = np.array([1, 0, 1, 0])
 
@@ -131,10 +131,10 @@ def test_refine_partition_with_cp_merges_core_and_preserves_periphery(monkeypatc
         refined,
         np.array(
             [
-                [1, 0, 1, 0],
-                [0, 1, 0, 0],
-                [1, 0, 1, 0],
-                [0, 0, 0, 1],
+                [1, 0, 0, 0],
+                [0, 1, 0, 1],
+                [0, 0, 1, 0],
+                [0, 1, 0, 1],
             ]
         ),
     )
@@ -174,59 +174,88 @@ def test_nonlinear_branch_and_price_accepts_core_periphery_refinement_hook(monke
     assert result.final_partition.shape == (3, 3)
 
 
-def test_core_periphery_partition_splits_connected_periphery_components(monkeypatch):
+def test_core_periphery_partition_merges_linear_periphery_and_splits_original_core(
+    monkeypatch,
+):
     captured = {}
 
     def fake_detect(A, **kwargs):
         captured.update(kwargs)
         return _fake_cp_result(
-            [1, 0, 0, 0, 0],
+            [1, 1, 0, 1, 1, 0],
             algorithm="SPEC",
             target_space="contracted",
             primary_fit=1.0,
+            must_group_role="core",
         )
 
     monkeypatch.setattr(workflow_module, "_detect_core_periphery", fake_detect)
     G = nx.Graph()
     G.add_nodes_from(
         [
-            ("core", {"role": "nonlinear"}),
+            ("nonlinear-a", {"role": "nonlinear"}),
             ("a", {}),
+            ("linear-only-a", {}),
+            ("nonlinear-b", {"role": "nonlinear"}),
             ("b", {}),
-            ("c", {}),
-            ("d", {}),
+            ("linear-only-b", {}),
         ]
     )
     G.add_edges_from(
         [
-            ("core", "a", {"kind": "continuous"}),
-            ("a", "b", {"kind": "integer"}),
-            ("core", "c", {"kind": "continuous"}),
-            ("c", "d", {"kind": "integer"}),
+            ("nonlinear-a", "a", {"kind": "continuous"}),
+            ("nonlinear-a", "linear-only-a", {"kind": "integer"}),
+            ("linear-only-a", "nonlinear-b", {"kind": "integer"}),
+            ("nonlinear-b", "b", {"kind": "continuous"}),
+            ("nonlinear-a", "linear-only-b", {"kind": "integer"}),
+            ("linear-only-b", "nonlinear-b", {"kind": "integer"}),
         ]
     )
 
     labels, metadata = CorePeripheryPartition(
         G,
         must_link_edge_attr="kind",
-        must_link_edge_value="integer",
+        must_link_edge_value="continuous",
         must_group_node_attr="role",
         must_group_node_value="nonlinear",
     )
 
-    assert np.array_equal(labels, np.array([0, 1, 1, 2, 2]))
-    assert captured["must_link"] == [(1, 2), (3, 4)]
-    assert captured["must_group"] == [0]
-    assert metadata["community_map_labels"] == {"core": 0, "a": 1, "b": 1, "c": 2, "d": 2}
-    assert metadata["communities_labels"] == [["core"], ["a", "b"], ["c", "d"]]
+    assert np.array_equal(labels, np.array([1, 1, 0, 2, 2, 0]))
+    assert captured["must_link"] == [(0, 1), (3, 4)]
+    assert captured["must_group"] == [0, 3]
+    assert metadata["community_map_labels"] == {
+        "nonlinear-a": 1,
+        "a": 1,
+        "linear-only-a": 0,
+        "nonlinear-b": 2,
+        "b": 2,
+        "linear-only-b": 0,
+    }
+    assert metadata["communities_labels"] == [
+        ["linear-only-a", "linear-only-b"],
+        ["nonlinear-a", "a"],
+        ["nonlinear-b", "b"],
+    ]
+    assert metadata["component_graph_space"] == "original"
+    assert metadata["n_linear_only"] == 2
+    assert metadata["n_core"] == 4
+    assert metadata["n_periphery"] == 2
+    assert metadata["n_independent_nodes"] == 4
+    assert metadata["linear_only_node_indices"].tolist() == [2, 5]
+    assert metadata["independent_components"] == [{0, 1}, {3, 4}]
 
 
-def test_core_periphery_allows_disconnected_must_group_nodes_to_split(monkeypatch):
-    """must_group constrains CP side, not final periphery connectivity."""
+def test_core_periphery_allows_disconnected_nonlinear_block_nodes_to_split(monkeypatch):
+    """must_group constrains detection, not final core-side connectivity."""
 
     def fake_detect(A, **kwargs):
-        labels = np.zeros(A.shape[0], dtype=int)
-        return _fake_cp_result(labels, algorithm="SPEC", primary_fit=0.0)
+        labels = np.array([1, 0, 1])
+        return _fake_cp_result(
+            labels,
+            algorithm="SPEC",
+            primary_fit=0.0,
+            must_group_role="core",
+        )
 
     monkeypatch.setattr(workflow_module, "_detect_core_periphery", fake_detect)
     G = nx.Graph()
@@ -239,6 +268,22 @@ def test_core_periphery_allows_disconnected_must_group_nodes_to_split(monkeypatc
     )
 
     assert labels[0] != labels[2]
+    assert labels[1] == 0
+
+
+def test_core_periphery_rejects_nonlinear_block_on_periphery(monkeypatch):
+    monkeypatch.setattr(
+        workflow_module,
+        "_detect_core_periphery",
+        lambda A, **kwargs: _fake_cp_result(
+            [0, 1, 0],
+            algorithm="SPEC",
+            must_group_role="periphery",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="nonlinear block was not detected in the core"):
+        CorePeripheryPartition(nx.path_graph(3), must_group=[0, 2])
 
 
 @pytest.mark.parametrize("algorithm", ["SPEC", "GA", "KL"])
@@ -307,8 +352,5 @@ def test_core_periphery_partition_real_spectral_path():
 
 
 def test_core_periphery_partition_handles_single_node_graph():
-    labels, metadata = CorePeripheryPartition(nx.empty_graph(1))
-
-    assert np.array_equal(labels, np.array([0]))
-    assert metadata["core_labels"].tolist() == [1]
-    assert metadata["n_communities"] == 1
+    with pytest.raises(RuntimeError, match="requires nonempty nonlinear-core"):
+        CorePeripheryPartition(nx.empty_graph(1))

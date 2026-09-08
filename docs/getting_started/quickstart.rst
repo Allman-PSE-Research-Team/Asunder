@@ -1,213 +1,135 @@
-Quickstart Guide
-================
+Load-Balancing Quickstart
+=========================
 
-This page shows the two most useful starting points: the packaged load
-balancing workflow and the lower-level decomposition API. Start with load
-balancing when you need balanced graph communities. Drop to the decomposition
-API when you need to customize the column-generation pieces directly.
+Use ``LoadBalancer`` when you want a fixed number of graph communities whose
+node counts or node loads are nearly equal.
 
-Load Balancing Run
-------------------
+Prerequisites
+-------------
+
+- Install Asunder as described in :doc:`installation`.
+- Configure an available Pyomo-compatible solver. Gurobi is the default.
+- Provide an undirected ``networkx.Graph`` with at least one edge.
+
+Run a complete example
+----------------------
+
+This graph contains two dense regions joined by one edge. The example asks for
+two nearly equal communities, keeps ``"a"`` and ``"b"`` together, and prevents
+``"a"`` and ``"f"`` from sharing a community.
 
 .. code-block:: python
+
+   from collections import defaultdict
 
    import networkx as nx
 
    from asunder.load_balancing import LoadBalancer
 
-
-   G = nx.Graph()
-   G.add_edges_from(
+   graph = nx.Graph(
        [
            ("a", "b"),
            ("a", "c"),
            ("b", "c"),
            ("c", "d"),
            ("d", "e"),
-           ("e", "f"),
            ("d", "f"),
+           ("e", "f"),
        ]
    )
 
    result = LoadBalancer(
-       G,
+       graph,
        K=2,
        R=1,
        must_link=[("a", "b")],
        cannot_link=[("a", "f")],
+       final_master_solve=True,
        disable_tqdm=True,
    )
 
-   print(result.final_partition)
-   print(result.metadata["modularity"])
+   groups = defaultdict(list)
+   for node, community in result.metadata["community_map_labels"].items():
+       groups[community].append(node)
 
-``LoadBalancer`` accepts node labels from the input graph in ``must_link`` and
-``cannot_link`` constraints, then returns a ``DecompositionResult`` whose
-partition and metadata map communities back to those labels. Use ``K`` and ``R`` for near-equal
-communities, or use ``R_bounds=(lower, upper)`` when every community must stay
-inside explicit size bounds.
+   print(dict(groups))
+   print("modularity:", result.metadata["modularity"])
 
-Minimal Decomposition Run
--------------------------
+The exact numeric community labels are arbitrary. What matters is which nodes
+share a label.
 
-.. code-block:: python
+Understand the result
+---------------------
 
-   import numpy as np
+``result`` is a :class:`~asunder.types.DecompositionResult`.
 
-   from asunder import CSDDecompositionConfig, run_csd_decomposition
+``result.final_partition``
+   An ``N x N`` binary co-membership matrix in the graph's node iteration
+   order. Entry ``[i, j]`` is one when those nodes share a community.
 
+``result.metadata["community_map_labels"]``
+   A mapping from the original NetworkX node labels to community numbers.
 
-   def trivial_ifc_generator(N, **_):
-       # One feasible starting column: all nodes placed in a single block.
-       return [np.ones((N, N), dtype=int)]
+``result.metadata["community_balance_weights"]``
+   The final node count or total node load in each community.
 
+``result.metadata["modularity"]``
+   The modularity score at the configured ``resolution``.
 
-   A = np.array(
-       [
-           [0, 1, 1, 0],
-           [1, 0, 1, 0],
-           [1, 1, 0, 1],
-           [0, 0, 1, 0],
-       ],
-       dtype=float,
-   )
+``result.records``
+   Per-iteration column-generation diagnostics. Most first-time users do not
+   need to inspect them.
 
-   cfg = CSDDecompositionConfig(
-       ifc_params={
-           "generator": trivial_ifc_generator,
-           "num": 1,
-           "args": {"N": A.shape[0]},
-       },
-       final_master_solve=False,
-       max_iterations=2,
-       verbose=0,
-   )
-
-   result = run_csd_decomposition(A, config=cfg)
-
-   print(result.metadata)
-   print(result.final_partition)
-
-This example uses the top-level facade. Internally, the top-level API delegates
-to the reusable modules in ``asunder.base``.
-
-Important Practical Note
-------------------------
-
-The decomposition loop expects an initial feasible column generator unless you
-provide an existing column pool. In many real applications, that generator is
-problem-specific and deserves deliberate design. The trivial example above is
-appropriate only for smoke tests and first experiments.
-
-Using Canonical Namespaces
---------------------------
-
-The canonical reusable imports live under ``asunder.base``. For example:
-
-.. code-block:: python
-
-   from asunder.base.column_generation.subproblem import heuristic_subproblem
-   from asunder.base.algorithms.modular_VFD import modular_very_fortunate_descent
-
-The generic nonlinear branch-and-price workflow and application pieces live
-under ``asunder.nlbnp``:
-
-.. code-block:: python
-
-   from asunder.nlbnp import CorePeripheryPartition, NonlinearBranchAndPrice
-   from asunder.nlbnp.case_studies import build_circle_cutting_graph, run_evaluation
-   from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group, refine_partition_with_cp
-
-Use ``NonlinearBranchAndPrice`` when you already have a graph and want the NLBNP
-column-generation workflow without a packaged case-study builder:
-
-.. code-block:: python
-
-   import networkx as nx
-
-   from asunder.nlbnp import NonlinearBranchAndPrice
-
-
-   G = nx.Graph()
-   G.add_edge("u", "v", edge_kind="integer")
-   G.add_edge("v", "w", edge_kind="continuous")
-
-   result = NonlinearBranchAndPrice(
-       G,
-       worthy_edge_attr="edge_kind",
-       worthy_edge_value="integer",
-       algorithm="louvain",
-       package="networkx",
-       disable_tqdm=True,
-   )
-
-   print(result.final_partition)
-
-Use ``CorePeripheryPartition`` when removing the detected core leaves connected
-periphery components that are already suitable final communities:
-
-.. code-block:: python
-
-   community_labels, metadata = CorePeripheryPartition(
-       G,
-       must_link_edge_attr="edge_kind",
-       must_link_edge_value="continuous",
-       cp_algorithm="SPEC",
-       target="contracted",
-   )
-
-   print(metadata["community_map_labels"])
-
-Use ``NonlinearBranchAndPrice`` when the community structure is beyond the direct core-periphery logic. Core-periphery detection can be used through the generic
-``refine_params`` hook:
-
-.. code-block:: python
-
-   result = NonlinearBranchAndPrice(
-       G,
-       refine_params={
-           "refine_func": refine_partition_with_cp,
-           "kwargs": {
-               "must_link": [(1, 2)],
-               "must_group": [],
-               "cp_algorithm": "SPEC",
-           },
-       },
-       disable_tqdm=True,
-   )
-
-The load balancing application pieces live under ``asunder.load_balancing``:
-
-.. code-block:: python
-
-   from asunder.load_balancing import LoadBalancer
-   from asunder.load_balancing.utils.partition_generation import make_partitions
-
-Built-In NLBNP Case-Study Evaluation
-------------------------------------
-
-If you want to use the packaged nonlinear branch-and-price benchmark evaluation
-flow, the top-level convenience wrapper remains available:
-
-.. code-block:: python
-
-   from asunder import run_evaluation
-
-   results = run_evaluation(
-       problem="cpcong",
-       build_params={"K": 2, "J": 3, "T": 5},
-       style="CP",
-       algos=["SPEC"],
-       repeat=1,
-   )
-
-   print(results["SPEC"])
-
-Where To Go Next
+Balance controls
 ----------------
 
-- For direct reusable APIs, see ``API -> Base API``.
-- For balanced graph partitioning, see ``API -> Load Balancing API``.
-- For the generic and case-study NLBNP workflows, see ``API -> NLBNP API``.
-- For a fuller explanation of when the package works well as-is versus when you
-  should customize it, see :doc:`../learn/guides/problem_fit`.
+.. list-table:: Common options
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Option
+     - Meaning
+   * - ``K=4, R=1``
+     - Request four communities whose allowed load range has width one.
+   * - ``R_bounds=(10, 14)``
+     - Require every community to have total load between 10 and 14,
+       inclusive.
+   * - ``node_weight_attr="load"``
+     - Balance a positive integer node attribute instead of node count.
+       Missing attribute values default to one.
+   * - ``contract_graph=True``
+     - Contract must-linked nodes before column generation while preserving
+       their summed load.
+   * - ``resolution=1.25``
+     - Change the modularity resolution used by pricing and scoring.
+
+Search and runtime controls
+---------------------------
+
+Signed Leiden is the default pricing heuristic. Select
+``algorithm="qmetis"`` to use bundled QMETIS on a supported platform; see
+:doc:`../reference/qmetis` for its approximation and platform details.
+
+For large inputs, ``refine=False`` disables VFD refinement entirely.
+``use_refined_column=False`` disables refinement inside the main loop, while
+``refine_post_loop=False`` disables the final refinement pass.
+``check_flat_pricing`` and ``stopping_window`` control early termination when
+pricing stops improving.
+
+Failure behavior
+----------------
+
+``LoadBalancer`` raises ``ValueError`` for invalid inputs or impossible bound
+definitions. It raises ``RuntimeError`` if the search finishes without an
+integral feasible partition. In that case, check the pairwise constraints and
+bounds first, then consider a larger search budget or
+``projection_repair=True`` when an appropriate solver is available.
+
+Next steps
+----------
+
+- Use :doc:`base_decomposition` to replace master, pricing, or refinement
+  logic.
+- Use :doc:`../reference/development/extending_modular_vfd` to add custom hard
+  constraints to ModularVFD refinement.
+- See :doc:`../api/load_balancing/index` for the full load-balancing API.

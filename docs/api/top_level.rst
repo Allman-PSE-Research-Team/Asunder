@@ -1,45 +1,78 @@
 Top-Level API
 =============
 
-Package Entry Points
+Choose an entry point by task before consulting the full signatures below.
+
+.. list-table:: Goal-to-entry-point map
+   :header-rows: 1
+   :widths: 38 32 30
+
+   * - Goal
+     - Entry point
+     - Namespace
+   * - Balanced or bounded graph communities
+     - ``LoadBalancer``
+     - ``asunder.load_balancing``
+   * - NLBNP linear-only separator plus independent components
+     - ``CorePeripheryPartition``
+     - ``asunder.nlbnp``
+   * - Nonlinear branch-and-price decomposition
+     - ``NonlinearBranchAndPrice``
+     - ``asunder.nlbnp``
+   * - Reusable configured decomposition
+     - ``run_csd_decomposition``
+     - ``asunder``
+   * - Reusable object for repeated decomposition runs
+     - ``CSDDecomposition``
+     - ``asunder``
+   * - Refine one partition with custom constraints
+     - ``refine_partition_modular_vfd``
+     - ``asunder``
+   * - Configure a process-wide solver
+     - ``create_solver`` and ``set_default_solver``
+     - ``asunder`` and ``asunder.solvers``
+   * - Run packaged NLBNP case-study evaluation
+     - ``run_evaluation``
+     - ``asunder.nlbnp``
+
+See :doc:`../getting_started/index` for complete examples. The API reference
+below documents exact signatures and return types.
+
+Package entry points
 --------------------
 
-Asunder Package
+Asunder package
 ^^^^^^^^^^^^^^^
 
 .. automodule:: asunder
 
-The top-level package re-exports the most common entry points for convenience.
-Canonical API documentation is provided on the module pages below to avoid
-duplicate object targets for the same symbols.
+The top-level package re-exports common reusable entry points. Canonical API
+documentation remains on the module pages to avoid duplicate object targets.
 
 Common package-level imports
-""""""""""""""""""""""""""""
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 - ``asunder.run_csd_decomposition``
 - ``asunder.solve_master_problem``
 - ``asunder.solve_subproblem``
 - ``asunder.run_evaluation``
 - ``asunder.create_solver``
+- ``asunder.refine_partition_modular_vfd``
 - ``asunder.CSDDecomposition``
 - ``asunder.CSDDecompositionConfig``
 - ``asunder.IterationRecord``
 - ``asunder.DecompositionResult``
 
 Application package imports
-"""""""""""""""""""""""""""
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- ``asunder.load_balancing.LoadBalancer`` for the built-in load-balanced graph
-  partitioning workflow
-- ``asunder.nlbnp.CorePeripheryPartition`` for component-level NLBNP
-  partitioning after core removal
-- ``asunder.nlbnp.NonlinearBranchAndPrice`` for generic nonlinear
-  branch-and-price runs on user-provided graphs
-- ``asunder.nlbnp.run_evaluation`` for the built-in nonlinear branch-and-price
-  case-study evaluation workflow
+- ``asunder.load_balancing.LoadBalancer``
+- ``asunder.nlbnp.CorePeripheryPartition``
+- ``asunder.nlbnp.NonlinearBranchAndPrice``
+- ``asunder.nlbnp.run_evaluation``
 
 Configuration
-^^^^^^^^^^^^^
+-------------
 
 .. automodule:: asunder.config
    :members:
@@ -47,7 +80,7 @@ Configuration
    :show-inheritance:
 
 Orchestrator
-^^^^^^^^^^^^
+------------
 
 .. automodule:: asunder.orchestrator
    :members:
@@ -55,15 +88,15 @@ Orchestrator
    :show-inheritance:
 
 Solvers
-^^^^^^^
+-------
 
 .. automodule:: asunder.solvers
    :members:
    :member-order: bysource
    :show-inheritance:
 
-Types
-^^^^^
+Result types
+------------
 
 .. automodule:: asunder.types
    :members:

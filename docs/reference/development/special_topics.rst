@@ -1,166 +1,222 @@
 Special Topics
 ==============
 
-This page collects advanced integration notes for extending Asunder beyond the
-default workflows.
+This page documents advanced integration contracts for replacing parts of
+Asunder's decomposition loop. Start with
+:doc:`../../getting_started/base_decomposition` for a complete configured
+workflow before implementing these callables.
 
-Choosing Where New Code Belongs
--------------------------------
+Where new code belongs
+----------------------
 
-Before adding new logic, decide whether it is reusable or application-specific.
+Put reusable algorithms, orchestration, and utilities in ``asunder.base``.
+Put fixed-K balance behavior in ``asunder.load_balancing``. Put logic that
+depends on NLBNP graph semantics or packaged case studies in
+``asunder.nlbnp``. Keep the top-level ``asunder`` namespace as a convenience
+facade rather than a second package tree.
 
-Put code in ``asunder.base`` when:
+Partition-matrix invariant
+--------------------------
 
-- it can support multiple application packages
-- it does not depend on application-specific assumptions
-- it belongs to reusable decomposition, algorithm, utility, or visualization
-  infrastructure
+Initial-column, pricing, and refinement callables exchange binary
+co-membership matrices ``Z`` with shape ``(N, N)``. A valid matrix is:
 
-Put code in ``asunder.nlbnp`` when:
+- square and finite;
+- symmetric;
+- binary with a unit diagonal; and
+- transitive, so it represents an equivalence relation.
 
-- it is specific to the nonlinear branch-and-price workflow
-- it depends on NLBNP case-study conventions
-- it exists mainly to support the built-in evaluation path
+Entry ``Z[i, j]`` is one exactly when nodes ``i`` and ``j`` share a community.
+The decomposition validates custom columns before admitting them to the master
+problem. Use
+:func:`~asunder.base.utils.graph.validate_partition_matrix` in standalone
+extensions and tests.
 
-Put code in ``asunder.load_balancing`` when:
+Initial feasible column generator
+---------------------------------
 
-- it is specific to balanced or bounded-size graph partitioning
-- it depends on load balancing semantics such as ``K``, ``R``, or
-  ``R_bounds``
-- it supports the packaged ``LoadBalancer`` workflow rather than a reusable
-  base-layer contract
-
-Initial Feasible Column Generator Contract
-------------------------------------------
-
-The decomposition loop expects an initial feasible column generator through
-``ifc_params`` unless an existing column pool is supplied.
-
-The expected ``ifc_params`` shape is:
+Configure an initial generator through:
 
 .. code-block:: python
 
-   {
+   ifc_params = {
        "generator": callable,
-       "num": int,
-       "args": {...},
+       "num": 1,
+       "args": {"N": 4},
    }
 
-The generator should return a list of partition matrices, each typically shaped
-``(N, N)``.
+The decomposition calls the generator with ``**args`` and ``seed=seed``. It
+must return a sequence of valid partition matrices; returning ``None`` or an
+empty sequence ends the run as infeasible.
 
-Master Problem Callable
------------------------
-
-Custom master callables must accept:
-
-- ``A, a, m, Z_star, f_stars``
-- keyword constraints such as ``must_link``, ``cannot_link``, and other
-  supported additional constraints
-
-and return either:
-
-- ``(lambda_sol, master_obj_val)`` for integer master mode, or
-- ``(lambda_sol, duals, master_obj_val)`` when dual extraction is enabled
-
-In other words, the master callable is responsible for honoring the current
-column pool and for returning either an integer selection or a relaxed solution
-plus dual information.
-
-Subproblem Callable
--------------------
-
-Custom subproblem callables must accept:
-
-- ``A, a, m, duals``
-
-and return:
-
-- ``(sub_obj_val, z_sol)``
-
-where ``z_sol`` is a partition or co-association matrix compatible with the
-rest of the decomposition loop.
-
-Refinement Callable
--------------------
-
-Refinement hooks are passed through ``refine_params`` and are expected to look
-like a callable of the form:
+This minimal generator returns one all-in-one partition:
 
 .. code-block:: python
 
-   refine_func(A=A, partition=z_or_wz, **kwargs)
+   from typing import Any
 
-The callable should return either:
+   import numpy as np
 
-- a refined partition matrix, or
-- ``None`` when no refined result should be added
+   def initial_columns(
+       N: int,
+       *,
+       seed: int | None = None,
+       **kwargs: Any,
+   ) -> list[np.ndarray]:
+       del seed, kwargs
+       return [np.ones((N, N), dtype=int)]
 
-Use refinement in ``asunder.base`` only when the logic is reusable. Keep
-workflow-specific refinement in application packages such as
-``asunder.load_balancing`` or ``asunder.nlbnp``.
+The generator is responsible for satisfying every hard constraint applicable
+to initial columns. An all-in-one partition is therefore only a minimal
+contract example, not a general feasible generator.
 
-For constrained partitioning extensions, ModularVFD accepts component-local,
-affected-community, and partition-wide hard constraints. See
-:doc:`extending_modular_vfd` for the extension protocols, guided repair, and
-their integration boundaries. A custom refinement function can still call a
-feasibility projection directly when its move logic needs an application-specific
-solver. The load-balancing projection is one concrete instance of that pattern.
+Master problem callable
+-----------------------
 
-Generic NLBNP Workflow Contract
--------------------------------
+A master callable has this effective interface:
 
-Use ``asunder.nlbnp.CorePeripheryPartition`` when removing a detected core
-leaves connected periphery components that can be used directly as final
-communities. It returns a one-dimensional community-label vector and
-label-aware metadata.
+.. code-block:: python
 
-Use ``asunder.nlbnp.NonlinearBranchAndPrice`` when you already have a graph or
-adjacency matrix and want the NLBNP column-generation workflow without a packaged
-case-study builder, especially when the community structure is beyond the direct
-core-periphery logic. The workflow accepts:
+   from typing import Any
 
-- ``networkx.Graph`` inputs with labeled ``worthy_edges``, ``must_link``, and
-  ``cannot_link`` pairs
-- square adjacency matrices with integer-indexed pair constraints
-- optional worthy-edge derivation through ``worthy_edge_attr`` and
-  ``worthy_edge_value``
-- optional custom refinement, including ``refine_partition_with_cp``, through
-  ``refine_params``
+   import numpy as np
 
-The wrapper returns the standard ``DecompositionResult`` and adds label-aware
-metadata when the input is a ``networkx.Graph``.
+   def master_problem(
+       A: np.ndarray,
+       a: np.ndarray,
+       m: float,
+       Z_star: list[np.ndarray],
+       f_stars: list[float],
+       *,
+       extract_dual: bool = False,
+       **constraints: Any,
+   ) -> tuple:
+       del A, a, m, constraints
+       weights = [1.0] + [0.0] * (len(Z_star) - 1)
+       objective = float(f_stars[0])
+       if extract_dual:
+           return weights, {"mu_dual": 0.0}, objective
+       return weights, objective
 
-Case-Study Evaluation Contract
+This implementation only selects the first column and is useful for testing
+the callable contract; it is not an optimizing master problem.
+
+Arguments have these meanings:
+
+``A``
+   Square adjacency matrix with shape ``(N, N)``.
+
+``a`` and ``m``
+   Degree-like vector with shape ``(N,)`` and graph volume scalar.
+
+``Z_star`` and ``f_stars``
+   Current partition columns and their objective scores.
+
+``extract_dual``
+   False for an integer selection and true for a relaxed solve that supplies
+   pricing duals.
+
+When ``extract_dual=False``, return ``(lambda_sol, master_obj_val)``. When it is
+true, return ``(lambda_sol, duals, master_obj_val)``. Return ``None`` objective
+values to report an infeasible master problem.
+
+Pricing or subproblem callable
 ------------------------------
 
-The built-in ``run_evaluation`` path is application-specific and lives in
-``asunder.nlbnp.case_studies.runner``. It assumes a packaged case-study style
-graph schema rather than a completely generic graph input.
+A pricing callable receives the graph data and the master's dual dictionary,
+then returns ``(sub_obj_val, z_sol)``. ``sub_obj_val`` is the reduced cost and
+``z_sol`` is a valid ``(N, N)`` partition matrix.
 
-If you only need reusable decomposition behavior, prefer working directly with
-``NonlinearBranchAndPrice`` or the base-layer APIs rather than routing through
-``run_evaluation``.
+.. code-block:: python
 
-Documentation Responsibilities
-------------------------------
+   from typing import Any
 
-Because the API docs are hand-authored, changes to public modules should be
-paired with updates to:
+   import numpy as np
 
-- the relevant ``docs/api/...`` pages
-- any examples that import the moved or renamed modules
-- narrative docs if the public mental model changed
+   def pricing_problem(
+       A: np.ndarray,
+       a: np.ndarray,
+       m: float,
+       duals: dict[str, Any],
+       *,
+       gamma: float = 1.0,
+       seed: int | None = None,
+       **kwargs: Any,
+   ) -> tuple[float, np.ndarray]:
+       del a, m, duals, gamma, seed, kwargs
+       # Zero reduced cost tells the loop that no improving column was found.
+       return 0.0, np.eye(A.shape[0], dtype=int)
 
-Useful Local Validation Commands
---------------------------------
+Custom pricing must calculate reduced cost under the same objective and
+resolution convention as the master. A positive value above ``tolerance``
+causes the column to be added; a non-improving value stops ordinary pricing.
 
-For changes that touch public APIs or docs, the most useful checks are:
+Refinement callable
+-------------------
+
+A refinement hook receives the adjacency and a candidate partition. Return a
+valid refined matrix or ``None`` when no refinement should be added.
+
+.. code-block:: python
+
+   from typing import Any
+
+   import numpy as np
+
+   from asunder.base.utils import validate_partition_matrix
+
+   def refine_partition(
+       A: np.ndarray,
+       partition: np.ndarray,
+       *,
+       seed: int | None = None,
+       **kwargs: Any,
+   ) -> np.ndarray | None:
+       del seed, kwargs
+       return validate_partition_matrix(partition, A.shape[0])
+
+The decomposition may call refinement inside the main loop and after it. Keep
+state local to one call unless the callable explicitly implements safe restart
+semantics. When a function exposes ``shake_rounds``, the decomposition sets it
+to zero for in-loop refinement to avoid duplicating the heavier final search.
+
+ModularVFD constraints
+----------------------
+
+ModularVFD supports fast component-local constraints, affected-community
+predicates, and partition-wide predicates with guided repair. See
+:doc:`extending_modular_vfd` for complete examples and the preparation/binding
+lifecycle.
+
+Those constraints govern ModularVFD output only. Complete model-wide
+enforcement also requires compatible initial-column, master, pricing, warm
+start, and final-validation behavior.
+
+NLBNP integration
+-----------------
+
+``CorePeripheryPartition`` is an NLBNP-specific structural shortcut, not a
+general core-periphery workflow. It merges the detected periphery into one
+linear-only group, excludes that group from the original graph, and treats the
+remaining core-side connected components as independent communities. Use
+``NonlinearBranchAndPrice`` when that structure is insufficient. Detailed graph
+labels, worthy edges, attribute derivation, contraction targets, and packaged
+case-study schemas are in :doc:`../nlbnp_inputs`.
+
+The packaged ``run_evaluation`` function is application-specific. Prefer the
+generic NLBNP or base APIs when the application does not use a packaged
+case-study graph schema.
+
+Documentation and validation responsibilities
+---------------------------------------------
+
+Public changes should update narrative examples, the matching ``docs/api``
+page, and tests of the callable contract. Useful checks are:
 
 .. code-block:: bash
 
    pytest -m "not legacy"
-   sphinx-build -b html docs docs/_build/html
+   ruff check .
+   sphinx-build -W --keep-going -b html docs docs/_build/html
 
-If solver-backed workflows were affected and a solver is available locally, also
-run the solver-marked tests.
+Run solver-marked tests when an available solver is configured.

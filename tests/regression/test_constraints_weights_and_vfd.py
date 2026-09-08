@@ -1,8 +1,6 @@
 import networkx as nx
 import numpy as np
 
-import asunder.load_balancing.column_generation.LB as lb_module
-import asunder.nlbnp.workflow as nlbnp_module
 from asunder import CSDDecompositionConfig, refine_partition_modular_vfd, run_csd_decomposition
 from asunder.base.algorithms.modular_VFD import modular_very_fortunate_descent
 from asunder.base.column_generation.decomposition import CSD_decomposition
@@ -10,7 +8,6 @@ from asunder.load_balancing.utils.partition_generation import (
     check_balance,
     make_partitions_random,
 )
-from asunder.types import DecompositionResult
 
 
 def _one_hot_master(A, a, m, Z_star, f_stars, extract_dual=False, **_):
