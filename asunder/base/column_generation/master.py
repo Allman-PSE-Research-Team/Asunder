@@ -99,7 +99,9 @@ def solve_master_problem(
     must_link : list[tuple[int, int]] or None
         List of node pairs that must be together.
     worthy_edges : list[tuple[int, int]] or None
-        List of edges that are allowed to connect different communities
+        Edges allowed to connect different communities. ``None`` disables the
+        edge rule; an empty collection requires every structural edge to stay
+        within a community.
     extract_dual : bool
         Boolean that determines whether we extract duals from the master problem or not.
     verbose : int or bool
@@ -141,18 +143,19 @@ def solve_master_problem(
 
     model.OneColumn = Constraint(rule=one_column_rule)
 
-    if worthy_edges:
+    if worthy_edges is not None:
         worthy_edges = tuple(tuple(sorted(edge)) for edge in worthy_edges)
+        worthy_edge_set = set(worthy_edges)
 
         def worthy_edge_rule(mdl, i, j):
             """
             Enforce worthy-edge consistency for a candidate edge pair.
             """
-            if ((i, j) in worthy_edges) or ((j, i) in worthy_edges):
+            if tuple(sorted((int(i), int(j)))) in worthy_edge_set:
                 return Constraint.Skip
             return sum(mdl.lmbd[c] * Z_star[c][i, j] for c in mdl.C) == 1
 
-        all_edges = np.argwhere(np.triu(A, k=0) >= 1).tolist()
+        all_edges = np.argwhere(np.triu(A, k=1) != 0).tolist() # edge (i, j) where i < j
         model.WorthyEdges = Constraint(all_edges, rule=worthy_edge_rule)
     else:
         all_edges = []
@@ -216,10 +219,10 @@ def solve_master_problem(
             gamma_dual[i, j] = model.dual.get(model.MustLink[i, j], 0)
         duals["gamma_dual"] = gamma_dual
 
-    if worthy_edges:
+    if worthy_edges is not None:
         pi_dual = np.zeros((I, I))
         for (i, j) in all_edges:
-            if not ((i, j) in worthy_edges or (j, i) in worthy_edges):
+            if tuple(sorted((int(i), int(j)))) not in worthy_edge_set:
                 pi_dual[i, j] = model.dual.get(model.WorthyEdges[i, j], 0)
         duals["pi_dual"] = pi_dual
 

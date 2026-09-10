@@ -1,30 +1,37 @@
 import networkx as nx
-import numpy as np
 
-from asunder import CSDDecomposition, CSDDecompositionConfig
-from asunder.nlbnp.case_studies import build_circle_cutting_graph
+from asunder.nlbnp import NonlinearBranchAndPrice
 
 
 def main():
-    G, _, _ = build_circle_cutting_graph(
-        num_circles=5,
-        num_rectangles=4,
-        dimensions=["x", "y"],
+    graph = nx.Graph()
+    graph.add_nodes_from(
+        [
+            ("n1", {"kind": "nonlinear"}),
+            ("n2", {"kind": "linear"}),
+            ("n3", {"kind": "linear"}),
+            ("n4", {"kind": "linear"}),
+        ]
     )
-    A = nx.to_numpy_array(G, dtype=float)
+    graph.add_edge("n1", "n2", relationship="integer")
+    graph.add_edge("n2", "n3", relationship="continuous")
+    graph.add_edge("n3", "n4", relationship="continuous")
+    graph.add_edge("n1", "n4", relationship="integer")
 
-    cfg = CSDDecompositionConfig(
-        ifc_params={
-            "generator": lambda N, **_: [np.ones((N, N), dtype=int)],
-            "num": 1,
-            "args": {"N": A.shape[0]},
-        },
+    result = NonlinearBranchAndPrice(
+        graph,
+        worthy_edge_attr="relationship",
+        worthy_edge_value="integer",
+        nonlinear_node_attr="kind",
+        nonlinear_node_value="nonlinear",
         final_master_solve=False,
         max_iterations=3,
-        verbose=0,
+        disable_tqdm=True,
     )
-    result = CSDDecomposition(config=cfg).run(A)
-    print("iterations:", result.metadata["n_iterations"])
+    if result.final_partition is None:
+        raise RuntimeError(result.metadata)
+    print(result.metadata["community_map_labels"])
+    print("maximum linear-only cardinality:", result.metadata["K_max"])
 
 
 if __name__ == "__main__":

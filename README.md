@@ -165,9 +165,22 @@ returning a partition with the nonlinear block in the linear-only community.
 Use this solver-free shortcut only when that NLBNP structure is appropriate and
 the exposed components are already the desired independent communities. Use
 `NonlinearBranchAndPrice` when the structural shortcut is insufficient and the
-constraint graph needs the packaged column-generation workflow. The [NLBNP workflow
+constraint graph needs the packaged column-generation workflow.
+
+`NonlinearBranchAndPrice` requires at least one worthy edge from the input graph;
+without an active edge rule, the problem is no longer NLBNP. It has three
+cardinality modes. The default, `cardinality_method="reformulated"`, finds the
+exact maximum linear-only set, reduces the result to pairwise constraints, and
+enforces them alongside the edge-based constraint using column generation. An
+explicit cannot-link inside that set is reported as infeasible. The
+`"confidence"` and `"core_periphery"` modes first enforce the edge-based
+constraint and then detect the linear-only group using confidence-score
+clustering and core-periphery detection, respectively. All modes require the
+nonlinear nodes, supplied directly or by a NetworkX node attribute.
+
+The [NLBNP workflow
 guide](https://asunder.readthedocs.io/en/latest/getting_started/nlbnp.html)
-contains separate, complete examples for both entry points.
+contains complete examples and explains how the three modes differ.
 
 ## Reusable decomposition and custom constraints
 

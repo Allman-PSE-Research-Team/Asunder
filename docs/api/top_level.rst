@@ -13,10 +13,10 @@ Choose an entry point by task before consulting the full signatures below.
    * - Balanced or bounded graph communities
      - ``LoadBalancer``
      - ``asunder.load_balancing``
-   * - NLBNP linear-only separator plus independent components
+   * - NLBNP constraints enforced using core-periphery detection
      - ``CorePeripheryPartition``
      - ``asunder.nlbnp``
-   * - Nonlinear branch-and-price decomposition
+   * - NLBNP constraints enforced using community detection
      - ``NonlinearBranchAndPrice``
      - ``asunder.nlbnp``
    * - Reusable configured decomposition

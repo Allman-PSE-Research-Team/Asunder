@@ -80,72 +80,96 @@ def labels_to_probabilities(A, labels, p=1):
     return normalize(A @ M, p=p)
 
 
-def probability_to_integer_labels(probabilities, method="threshold", threshold=0.8, verbose=False):
-    """
-    Heuristic map from probability / soft memberships values to integer labels using a configurable rule. It is used to sunder a core-like community from every other node based on the observation that such core-like nodes have low membership scores across every community, given their central role.
-    These nodes are core-like and not exactly core nodes because they do not exhibit the typical dense connection one expects from core nodes. They, in fact, are not adjacent to one another.
+def probability_to_integer_labels(
+    probabilities,
+    method="threshold",
+    threshold=0.8,
+    verbose=False,
+    seed=42,
+):
+    """Convert soft memberships to labels with a low-confidence group.
+
+    Nodes assigned to the low-confidence group receive label ``-1``. All
+    other nodes receive the label of their largest membership value. For
+    clustering methods, the cluster with the lowest mean maximum-membership
+    confidence is treated as the low-confidence group.
     
     Parameters
     ----------
-    probabilities : ndarray of float, shape (N,K) or (N,)
-        2D probabilities reflect the confidence that each node n belongs to community k. 
-        1D probabilities reflect the confidence that a node is in one of two groups, typically a core and a periphery group.
-    method : str
-        One of "threshold," "gaussian_mixture," and "DBSCAN." Determines whether clustering algorithms are required to process probabilities or if thresholding is sufficient.
-    threshold : float
-        Value (between 0 and 1) below which a node is assumed to be in the core-like group.
-    verbose : bool
-        Controls the verbosity of the output. Default is False.
+    probabilities : ndarray of float, shape (N, K) or (N,)
+        Per-node membership values. For a two-dimensional input, each row
+        contains the memberships of one node. A one-dimensional input contains
+        one confidence value per node.
+    method : {"threshold", "gaussian_mixture", "DBSCAN"}, default="threshold"
+        Rule used to identify the low-confidence nodes.
+    threshold : float, default=0.8
+        Confidence below which a node is assigned to the low-confidence group.
+        This is also the fallback when DBSCAN clustering finds fewer than
+        two clusters.
+    verbose : bool, default=False
+        Whether to print the maximum membership values.
+    seed : int or None, default=42
+        Random seed used by Gaussian-mixture clustering.
     
     Returns
     -------
     ndarray of int, shape (N,)
-        Integer community assignment of the nodes reflecting a bipartition.
+        Hard community labels. Low-confidence nodes have label ``-1``.
+
+    Raises
+    ------
+    ValueError
+        If ``method`` is unsupported or ``probabilities`` has an invalid
+        shape.
     """
     from sklearn.cluster import DBSCAN
     from sklearn.mixture import GaussianMixture
 
-    assert method in ["threshold", "gaussian_mixture", "DBSCAN"]
+    if method not in {"threshold", "gaussian_mixture", "DBSCAN"}:
+        raise ValueError(
+            "method must be one of 'threshold', 'gaussian_mixture', or 'DBSCAN'."
+        )
+    values = np.asarray(probabilities, dtype=float)
+    if values.ndim not in {1, 2} or values.shape[0] == 0:
+        raise ValueError("probabilities must have shape (N,) or (N, K) with N > 0.")
 
-    if probabilities.ndim == 2:
-        p = np.max(probabilities, axis=1).reshape((-1, 1))
+    if values.ndim == 2:
+        p = np.max(values, axis=1).reshape((-1, 1))
+        partition = np.argmax(values, axis=1).astype(int)
     else:
-        p = probabilities.reshape((-1, 1))
-    scaled_probabilities = (probabilities - p.min()) / (p.max() - p.min() + 1e-12)
+        p = values.reshape((-1, 1))
+        partition = np.zeros(values.shape[0], dtype=int)
+    scaled_probabilities = (values - p.min()) / (p.max() - p.min() + 1e-12)
     scaled_probabilities[scaled_probabilities < 0] = 0
 
     if verbose:
         print("Probability values are:\n", p)
-    partition = np.zeros(shape=(probabilities.shape[0],))
 
     if method == "threshold":
-        for i in range(probabilities.shape[0]):
-            if np.max(probabilities[i]) < threshold:
-                partition[i] = -1
-            else:
-                partition[i] = np.argmax(probabilities[i])
+        low_confidence = p.reshape(-1) < threshold
     elif method == "gaussian_mixture":
-        gmm = GaussianMixture(n_components=2, random_state=42)
+        gmm = GaussianMixture(n_components=2, random_state=seed)
         labels_gmm = gmm.fit_predict(p)
-        core_cluster = np.argmin(gmm.means_)
+        low_cluster = int(np.argmin(gmm.means_.reshape(-1)))
         if verbose:
             print("Labels from GMM are:\n", labels_gmm)
-        for i in range(probabilities.shape[0]):
-            if labels_gmm[i] == core_cluster:
-                partition[i] = -1
-            else:
-                partition[i] = np.argmax(probabilities[i])
+        low_confidence = labels_gmm == low_cluster
     else:
         labels_dbscan = DBSCAN().fit_predict(
-            scaled_probabilities if (np.std(np.unique(p)) < 0.25) else probabilities
+            scaled_probabilities if (np.std(np.unique(p)) < 0.25) else values
         )
-        v, c = np.unique(labels_dbscan, return_counts=True)
-        lv = v[np.argmin(c)]
-        for i in range(probabilities.shape[0]):
-            if labels_dbscan[i] == lv:
-                partition[i] = -1
-            else:
-                partition[i] = np.argmax(probabilities[i])
+        clusters = np.unique(labels_dbscan)
+        if clusters.size < 2:
+            low_confidence = p.reshape(-1) < threshold
+        else:
+            confidence = p.reshape(-1)
+            low_cluster = min(
+                clusters,
+                key=lambda cluster: float(confidence[labels_dbscan == cluster].mean()),
+            )
+            low_confidence = labels_dbscan == low_cluster
+
+    partition[low_confidence] = -1
     return partition
 
 def best_girvan_newman_partition(G, max_levels=10):

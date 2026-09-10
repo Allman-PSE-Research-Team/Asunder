@@ -32,7 +32,10 @@ Pair and edge constraints
 ``worthy_edges``
    Edges allowed to cross communities in the NLBNP decomposition model.
    ``NonlinearBranchAndPrice`` accepts explicit pairs or derives them from
-   ``worthy_edge_attr`` and ``worthy_edge_value``.
+   ``worthy_edge_attr`` and ``worthy_edge_value``. At least one worthy edge is
+   required for every cardinality mode, and every supplied pair must be a
+   nonzero structural edge in the input graph. Missing, empty, and non-edge
+   specifications raise ``ValueError``.
 
 When ``worthy_edge_value`` is ``None``, a truthy edge-attribute value selects
 the edge. Otherwise, the attribute must equal the configured value.
@@ -85,14 +88,82 @@ put nonlinear nodes in the purported linear-only group, so the workflow raises
 be independently validated. Choose ``NonlinearBranchAndPrice`` when this
 structural shortcut is not valid.
 
-Generic branch-and-price input
+Generic nonlinear branch-and-price input
 ------------------------------
 
 ``NonlinearBranchAndPrice`` does not require the packaged case-study schema.
 It can operate directly on adjacency data plus explicit ``worthy_edges``,
-``must_link``, and ``cannot_link`` inputs. Optional custom initial-column,
-master, pricing, refinement, and additional-constraint configuration is passed
-through the reusable decomposition layer.
+``nonlinear_nodes``, ``must_link``, and ``cannot_link`` inputs. Nonlinear nodes
+can instead be derived from a NetworkX node attribute. Optional custom
+initial-column, master, pricing, refinement, and additional-constraint
+configuration is passed through the reusable decomposition layer.
+
+Cardinality modes
+^^^^^^^^^^^^^^^^^
+
+The default ``cardinality_method="reformulated"`` computes the exact maximum
+linear-only set. It forms connected components from unworthy edges and
+must-links, keeps every component containing no nonlinear node, and returns
+their union as ``eligible_nodes``. A Boolean ``y`` vector and its cardinality
+``K_max`` are included in result metadata. Anchor-based must-links join that
+union into one community and cannot-links separate it from ineligible nodes;
+automatic contraction then applies those exact relationships before column
+generation. Explicit ``contract_graph=False`` is available for diagnostics,
+but usually wastes work.
+
+An explicit cannot-link inside the maximum eligible set is infeasible, as is a
+cannot-link inside any component already joined by an unworthy edge or
+must-link. These conditions return a :class:`~asunder.types.DecompositionResult`
+with ``status="infeasible"``, a specific ``infeasible_reason``, and no final
+partition. Omitting the edge rule is an input error for every NLBNP method.
+
+``cardinality_method="confidence"`` and
+``cardinality_method="core_periphery"`` are heuristic alternatives. Both
+start their authoritative refinement from an integral column that already
+satisfies active pair and edge constraints. Confidence refinement merges all
+existing linear-only communities and adds low-confidence eligible components.
+Core-periphery refinement treats the detected periphery as the linear-only
+group, merges residual linear-only communities into it, and preserves the
+other assignments. Their method-specific arguments belong in
+``cardinality_params``.
+
+General column refinement is a separate Stage 1 concern.
+``refine_params`` is passed to :func:`asunder.run_csd_decomposition`, while
+``use_refined_column`` and ``refine_post_loop`` control its in-loop and
+post-loop calls. The post-loop callable receives a fractional co-association
+matrix and must support that input. Confidence or core-periphery cardinality
+refinement then runs as Stage 2 on the selected hard Stage 1 partition; it is
+never substituted into ``refine_params`` by the NLBNP wrapper.
+
+When ``final_master_solve`` is false, the wrapper uses stored column objective
+values to inspect the best candidate first and stops at the first partition
+that passes its independent pairwise, edge, and cardinality validation. A
+custom constraint enforced only by a custom master is outside that validator;
+use a final integer master solve or add equivalent application-level final
+validation when such a constraint must govern selection.
+
+Neither heuristic refinement is the same operation as
+``CorePeripheryPartition``. The latter is a solver-free shortcut that discards
+the prior partition, excludes the detected linear-only group from the original
+graph, and assigns its remaining connected components as the final independent
+communities.
+
+Large graphs and accelerators
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Asunder does not enable a GPU backend globally. If a compatible NetworkX GPU
+backend is installed and configured by the user, a custom NetworkX pricing
+callable may take advantage of it; no Asunder dependency or import change is
+required. A GPU-capable NetworkX Leiden implementation can likewise be supplied
+as a custom pricing subproblem. Backend availability, supported operations,
+and data-transfer behavior remain the responsibility of that callable.
+
+For large Gurobi runs, reduce the problem before tuning the solver: use exact
+contraction where valid, keep the initial column pool small, cap
+``max_iterations``, enable flat-pricing termination, and avoid
+``final_master_solve`` unless an integer master decision is needed. Heuristic
+pricing keeps repeated pricing work out of an ILP, but does not remove the
+restricted master or its Python-side column pool.
 
 Packaged case-study schema
 --------------------------

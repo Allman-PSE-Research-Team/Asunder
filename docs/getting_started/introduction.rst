@@ -55,7 +55,9 @@ Choose the highest-level workflow that fits
      - A one-dimensional label vector plus NLBNP structural metadata.
    * - ``NonlinearBranchAndPrice``
      - The NLBNP structural shortcut is insufficient and the packaged
-       column-generation workflow is needed.
+       column-generation workflow is needed. Its default exact cardinality
+       reformulation uses known worthy edges and nonlinear nodes; confidence
+       and core-periphery refinements are alternatives.
      - A :class:`~asunder.types.DecompositionResult` with label-aware metadata.
    * - ``run_csd_decomposition``
      - You need to supply or replace initial columns, the master problem,

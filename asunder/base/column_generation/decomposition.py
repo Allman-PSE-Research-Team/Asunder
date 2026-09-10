@@ -255,7 +255,11 @@ def CSD_decomposition(
             )
 
     # contract graph if necessary
-    if contract_graph and (must_link or additional_constraints.get("worthy_edges")):
+    edge_constraints_active = (
+        "worthy_edges" in additional_constraints
+        and additional_constraints["worthy_edges"] is not None
+    )
+    if contract_graph and (must_link or edge_constraints_active):
         original_balance_weights = np.asarray(
             additional_constraints.get("balance_weights", np.ones(A.shape[0], dtype=int))
         )
@@ -556,11 +560,11 @@ def CSD_decomposition(
                 in_loop_kwargs = dict(refine_kwargs)
                 if "shake_rounds" in inspect.signature(refine_func).parameters:
                     in_loop_kwargs["shake_rounds"] = 0
+                in_loop_kwargs.setdefault("seed", seed)
                 heuristic_col = refine_func(
                     A=A,
                     partition=z_sol,
                     **in_loop_kwargs,
-                    seed=seed
                 )
                 if heuristic_col is not None:
                     heuristic_col = validate_partition_matrix(
@@ -612,12 +616,13 @@ def CSD_decomposition(
         for lambda_, column in zip(lambda_sol, Z_star):
             wz += (lambda_ * column)
 
+        post_loop_kwargs = dict(refine_kwargs)
+        post_loop_kwargs.setdefault("seed", seed)
         heuristic_col = refine_func(
-                A=A,
-                partition=wz,
-                **refine_kwargs,
-                seed=seed
-            )
+            A=A,
+            partition=wz,
+            **post_loop_kwargs,
+        )
         if heuristic_col is not None:
             heuristic_col = validate_partition_matrix(
                 heuristic_col,

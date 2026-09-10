@@ -385,7 +385,9 @@ def contract_adj_matrix_new(
     A : ndarray, shape (n, n)
         Graph adjacency (assumed symmetric, no self-loops.)
     worthy_edges : set[tuple[int,int]] or None
-        The edges that can connect different communities.
+        Edges that can connect different communities. ``None`` disables
+        edge-induced contraction; an empty collection contracts every
+        structural edge component.
     must_link : iterable[tuple[int,int]] or None
         Extra links to force-merge nodes into the same component.
     keep_self_loops : bool
@@ -415,12 +417,12 @@ def contract_adj_matrix_new(
     G_ml = nx.Graph()
     G_ml.add_nodes_from(range(n))
 
-    if worthy_edges:
-        wset = set(worthy_edges)
+    if worthy_edges is not None:
+        wset = {tuple(sorted((int(i), int(j)))) for i, j in worthy_edges}
         for (i, j) in edges:
             if i == j:
                 continue
-            if (i, j) in wset or (j, i) in wset:
+            if tuple(sorted((int(i), int(j)))) in wset:
                 pass
             else:
                 # unworthy edges cannot connect items in different communities

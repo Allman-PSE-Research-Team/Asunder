@@ -6,13 +6,16 @@ import pytest
 
 import asunder.nlbnp.algorithms.refinement as refinement_module
 import asunder.nlbnp.workflow as workflow_module
+from asunder.base.algorithms.community import probability_to_integer_labels
 from asunder.nlbnp import (
     CorePeripheryPartition,
     NonlinearBranchAndPrice,
     run_nonlinear_branch_and_price,
 )
-from asunder.nlbnp.algorithms.refinement import refine_partition_with_cp
-from asunder.types import DecompositionResult
+from asunder.nlbnp.algorithms.refinement import (
+    refine_partition_linear_group,
+    refine_partition_with_cp,
+)
 
 
 def _fake_cp_result(labels, **metadata):
@@ -41,9 +44,10 @@ def test_nonlinear_branch_and_price_accepts_labeled_graph_constraints():
 
     result = NonlinearBranchAndPrice(
         G,
-        worthy_edges=[("a", "b")],
+        worthy_edges=[("a", "b"), ("b", "c"), ("c", "d")],
         must_link=[("a", "b")],
         cannot_link=[("a", "d")],
+        nonlinear_nodes=["a", "b"],
         master_fn=_master,
         subproblem_fn=_subproblem,
         use_refined_column=False,
@@ -55,29 +59,34 @@ def test_nonlinear_branch_and_price_accepts_labeled_graph_constraints():
     assert result.records
     assert result.final_partition.shape == (4, 4)
     assert result.metadata["label_node_map"] == {"a": 0, "b": 1, "c": 2, "d": 3}
-    assert result.metadata["worthy_edges"] == [(0, 1)]
-    assert result.metadata["must_link"] == [(0, 1)]
-    assert result.metadata["cannot_link"] == [(0, 3)]
-    initial_column = result.records[0].columns[0]
-    assert initial_column[0, 1] == 1
-    assert initial_column[0, 3] == 0
-    for i in range(initial_column.shape[0]):
-        for j in range(initial_column.shape[0]):
-            for k in range(initial_column.shape[0]):
-                if initial_column[i, j] and initial_column[j, k]:
-                    assert initial_column[i, k]
+    assert result.metadata["worthy_edges"] == [(0, 1), (1, 2), (2, 3)]
+    assert result.metadata["user_must_link"] == [(0, 1)]
+    assert result.metadata["user_cannot_link"] == [(0, 3)]
+    assert result.metadata["eligible_nodes"] == [2, 3]
+    assert result.metadata["contract_graph"] is True
+    partition = result.final_partition
+    assert partition[0, 1] == 1
+    assert partition[0, 3] == 0
+    for i in range(partition.shape[0]):
+        for j in range(partition.shape[0]):
+            for k in range(partition.shape[0]):
+                if partition[i, j] and partition[j, k]:
+                    assert partition[i, k]
     assert "community_map_labels" in result.metadata
 
 
 def test_nonlinear_branch_and_price_can_derive_worthy_edges_from_attribute():
     G = nx.Graph()
-    G.add_edge("x", "y", edge_kind="nonlinear")
-    G.add_edge("y", "z", edge_kind="linear")
+    G.add_node("x", node_kind="nonlinear")
+    G.add_edge("x", "y", edge_kind="integer")
+    G.add_edge("y", "z", edge_kind="continuous")
 
     result = run_nonlinear_branch_and_price(
         G,
         worthy_edge_attr="edge_kind",
-        worthy_edge_value="nonlinear",
+        worthy_edge_value="integer",
+        nonlinear_node_attr="node_kind",
+        nonlinear_node_value="nonlinear",
         master_fn=_master,
         subproblem_fn=_subproblem,
         use_refined_column=False,
@@ -102,6 +111,7 @@ def test_nonlinear_branch_and_price_accepts_adjacency_matrix():
     result = NonlinearBranchAndPrice(
         A,
         worthy_edges=[(1, 2)],
+        nonlinear_nodes=[0],
         master_fn=_master,
         subproblem_fn=_subproblem,
         use_refined_column=False,
@@ -125,7 +135,11 @@ def test_refine_partition_with_cp_merges_linear_periphery_and_preserves_core(mon
         lambda A, **kwargs: _fake_cp_result(core_labels, primary_fit=1.0),
     )
 
-    refined = refine_partition_with_cp(np.eye(4), partition)
+    refined = refine_partition_with_cp(
+        np.eye(4),
+        partition,
+        nonlinear_nodes=[0, 2],
+    )
 
     assert np.array_equal(
         refined,
@@ -140,38 +154,67 @@ def test_refine_partition_with_cp_merges_linear_periphery_and_preserves_core(mon
     )
 
 
-def test_nonlinear_branch_and_price_accepts_core_periphery_refinement_hook(monkeypatch):
-    captured = {}
+def test_confidence_refinement_merges_existing_groups_and_adds_low_confidence_nodes(
+    monkeypatch,
+):
+    partition = np.array([0, 0, 1, 2, 2])
+    probabilities = np.array(
+        [
+            [0.9, 0.1, 0.0],
+            [0.6, 0.4, 0.0],
+            [0.0, 0.9, 0.1],
+            [0.0, 0.1, 0.9],
+            [0.0, 0.1, 0.9],
+        ]
+    )
+    monkeypatch.setattr(
+        refinement_module,
+        "labels_to_probabilities",
+        lambda *args, **kwargs: SimpleNamespace(toarray=lambda: probabilities),
+    )
+    converted = {}
 
-    def fake_run(A, config, **kwargs):
-        captured["config"] = config
-        return DecompositionResult([], np.eye(A.shape[0], dtype=int), None)
+    def fake_probability_to_labels(values, **kwargs):
+        converted["values"] = values
+        converted["kwargs"] = kwargs
+        return np.array([0, -1, 1, 2, 2])
 
-    monkeypatch.setattr(workflow_module, "run_csd_decomposition", fake_run)
-    refine_params = {
-        "refine_func": refine_partition_with_cp,
-        "kwargs": {
-            "must_link": [(0, 1)],
-            "must_group": [0],
-            "cp_algorithm": "KL",
-        },
-    }
-
-    result = NonlinearBranchAndPrice(
-        np.eye(3),
-        refine_params=refine_params,
-        refine_post_loop=False,
-        max_iterations=5,
+    monkeypatch.setattr(
+        refinement_module,
+        "probability_to_integer_labels",
+        fake_probability_to_labels,
     )
 
-    cfg = captured["config"]
-    assert cfg.refine_params["refine_func"] is refine_partition_with_cp
-    assert cfg.refine_params["kwargs"]["must_link"] == [(0, 1)]
-    assert cfg.refine_params["kwargs"]["must_group"] == [0]
-    assert cfg.refine_params["kwargs"]["cp_algorithm"] == "KL"
-    assert cfg.refine_post_loop is False
-    assert cfg.max_iterations == 5
-    assert result.final_partition.shape == (3, 3)
+    refined = refine_partition_linear_group(
+        nx.to_numpy_array(nx.path_graph(5)),
+        partition,
+        nonlinear_nodes=[0],
+        threshold=0.8,
+    )
+
+    assert np.all(refined[1:, 1:] == 1)
+    assert np.all(refined[0, 1:] == 0)
+    assert converted["values"] is probabilities
+    assert converted["kwargs"]["method"] == "threshold"
+
+
+def test_reformulated_cardinality_reports_cannot_link_inside_maximum_set():
+    A = nx.to_numpy_array(nx.disjoint_union(nx.path_graph(2), nx.path_graph(2)))
+
+    result = NonlinearBranchAndPrice(
+        A,
+        worthy_edges=[(0, 1)],
+        nonlinear_nodes=[0, 1],
+        cannot_link=[(2, 3)],
+    )
+
+    assert result.final_partition is None
+    assert result.metadata["status"] == "infeasible"
+    assert (
+        result.metadata["infeasible_reason"]
+        == "cannot_link_inside_maximum_eligible_set"
+    )
+    assert result.metadata["eligible_nodes"] == [2, 3]
 
 
 def test_core_periphery_partition_merges_linear_periphery_and_splits_original_core(
@@ -308,21 +351,31 @@ def test_core_periphery_algorithms_preserve_grouping_blocks(algorithm):
     assert result.node_labels[1] == result.node_labels[2]
 
 
-def test_nonlinear_branch_and_price_refine_false_disables_refined_columns():
-    A = np.array([[0, 1], [1, 0]], dtype=float)
+@pytest.mark.parametrize(
+    "worthy_edges",
+    [None, (), ((0, 2),)],
+)
+def test_nonlinear_branch_and_price_requires_structural_worthy_edges(worthy_edges):
+    A = nx.to_numpy_array(nx.path_graph(3))
 
-    result = NonlinearBranchAndPrice(
-        A,
-        refine=False,
-        master_fn=_master,
-        subproblem_fn=_subproblem,
-        final_master_solve=False,
-        disable_tqdm=True,
-        verbose=-1,
-    )
+    with pytest.raises(ValueError, match="worthy structural edge|not nonzero structural"):
+        NonlinearBranchAndPrice(
+            A,
+            worthy_edges=worthy_edges,
+            nonlinear_nodes=[0],
+        )
 
-    assert result.records
-    assert result.final_partition.shape == (2, 2)
+
+def test_stage_one_refinement_flags_require_a_callable():
+    A = nx.to_numpy_array(nx.path_graph(2))
+
+    with pytest.raises(ValueError, match="requires refine_params"):
+        NonlinearBranchAndPrice(
+            A,
+            worthy_edges=[(0, 1)],
+            nonlinear_nodes=[0],
+            refine_post_loop=True,
+        )
 
 
 def test_core_periphery_partition_real_spectral_path():

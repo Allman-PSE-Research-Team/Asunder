@@ -27,7 +27,9 @@ Choose a workflow
        core-side communities without column generation.
    * - An NLBNP problem not captured by that structural shortcut
      - ``asunder.nlbnp.NonlinearBranchAndPrice``
-     - It packages the NLBNP column-generation and refinement workflow.
+     - It enforces the edge rule through column generation. The cardinality rule
+       is enforced through column generation only for the exact reformulated case;
+       confidence-based and core-periphery modes are structure-specific heuristics.
    * - Custom initial columns, master, pricing, or refinement
      - ``asunder.run_csd_decomposition``
      - It exposes reusable orchestration without imposing one application
