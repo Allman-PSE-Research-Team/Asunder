@@ -6,7 +6,6 @@ import pytest
 
 import asunder.nlbnp.algorithms.refinement as refinement_module
 import asunder.nlbnp.workflow as workflow_module
-from asunder.base.algorithms.community import probability_to_integer_labels
 from asunder.nlbnp import (
     CorePeripheryPartition,
     NonlinearBranchAndPrice,

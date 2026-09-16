@@ -6,6 +6,21 @@ from typing import Any
 
 import networkx as nx
 import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import connected_components
+
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
+    checked_to_dense,
+    choose_column_storage,
+    ensure_dense_working_set,
+    is_symmetric,
+    matrix_scalar,
+    normalize_adjacency,
+    structural_edge_pairs,
+)
+from asunder.types import MatrixLike
 
 
 def get_optimization_params_from_graph(n=None, graph_edges=None, G=None):
@@ -44,14 +59,14 @@ def get_optimization_params_from_graph(n=None, graph_edges=None, G=None):
 
     return adjacency_matrix, degree_matrix, m
 
-def group_nodes_by_community(z_matrix):
+def group_nodes_by_community(z_matrix: MatrixLike):
     """
     Extract community map and node groups from a partition matrix.
     
     Parameters
     ----------
-    z_matrix : ndarray of int, shape (N, N)
-        Partition mat.
+    z_matrix : numpy.ndarray or scipy.sparse.csr_matrix, shape (N, N)
+        Binary co-association matrix.
     
     Returns
     -------
@@ -61,20 +76,13 @@ def group_nodes_by_community(z_matrix):
     communities: list
         List of different communities
     """
+    labels = partition_matrix_to_vector(z_matrix)
     communities = []
     community_map = {}
-    n_community = 1
-    seen = set()
-    for var in range(z_matrix.shape[0]):
-        if var in seen:
-            continue
-        group = frozenset[Any](np.where(z_matrix[var] == 1)[0])
+    for n_community, label in enumerate(np.unique(labels), start=1):
+        group = frozenset[Any](np.flatnonzero(labels == label))
         communities.append(group)
-        for i in group:
-            if i not in community_map:
-                community_map[i] = n_community
-        seen |= group
-        n_community += 1
+        community_map.update({int(node): n_community for node in group})
     return community_map, communities
 
 def map_community_labels(community_map, label_map):
@@ -94,7 +102,13 @@ def map_community_labels(community_map, label_map):
         map from node label to community index
     """
     return {label_map[idx]: community for idx, community in community_map.items()}
-def partition_vector_to_2d_matrix(partition):
+def partition_vector_to_2d_matrix(
+    partition,
+    *,
+    storage="dense",
+    sparse_column_density_threshold=DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
+) -> MatrixLike:
     """
     Convert a 1D label vector to a binary co-association matrix.
     
@@ -102,31 +116,70 @@ def partition_vector_to_2d_matrix(partition):
     ----------
     partition : array of int, shape (n,)
         1D label vector.
+    storage : {"dense", "csr", "auto"}, default="dense"
+        Physical representation of the logical co-association matrix.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic selection uses CSR storage.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated package-created dense working set. ``None`` disables
+        the guard.
     
     Returns
     -------
-    z : ndarray of int, shape (n, n)
+    z : ndarray of bool or scipy.sparse.csr_matrix, shape (n, n)
         Binary co-association matrix.
     """
-    try:
-        z = (partition[:, None] == partition[None, :]).astype(int)
-    except Exception:
-        n = len(partition)
-        z = np.zeros((n, n), dtype=int)
+    if storage not in {"auto", "dense", "csr"}:
+        raise ValueError("storage must be 'auto', 'dense', or 'csr'.")
+    threshold = float(sparse_column_density_threshold)
+    if not np.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError("sparse_column_density_threshold must be between 0 and 1.")
 
-        for i in range(n):
-            for j in range(n):
-                if partition[i] == partition[j]:
-                    z[i, j] = 1
-    return z
+    labels = np.asarray(partition)
+    if labels.ndim != 1:
+        raise ValueError("partition must be a one-dimensional label vector.")
+    n_nodes = labels.size
+    if n_nodes:
+        unique_labels, counts = np.unique(labels, return_counts=True)
+        density = float(np.dot(counts, counts)) / float(n_nodes * n_nodes)
+    else:
+        unique_labels = np.empty(0, dtype=labels.dtype)
+        density = 0.0
+    resolved = storage
+    if storage == "auto":
+        resolved = "csr" if density <= threshold else "dense"
 
-def partition_matrix_to_vector(Z):
+    if resolved == "dense":
+        ensure_dense_working_set(
+            (n_nodes, n_nodes),
+            dtype=np.bool_,
+            max_dense_working_bytes=max_dense_working_bytes,
+            operation="dense partition construction",
+        )
+        return np.equal.outer(labels, labels)
+
+    row_parts = []
+    column_parts = []
+    for label in unique_labels:
+        members = np.flatnonzero(labels == label)
+        row_parts.append(np.repeat(members, members.size))
+        column_parts.append(np.tile(members, members.size))
+    if not row_parts:
+        return sparse.csr_matrix((0, 0), dtype=bool)
+    rows = np.concatenate(row_parts)
+    columns = np.concatenate(column_parts)
+    return sparse.csr_matrix(
+        (np.ones(rows.size, dtype=bool), (rows, columns)),
+        shape=(n_nodes, n_nodes),
+    )
+
+def partition_matrix_to_vector(Z: MatrixLike) -> np.ndarray:
     """
     Convert a symmetric 2D partition matrix Z into a 1D membership vector.
     
     Parameters
     ----------
-    Z : ndarray of int, shape (n, n)
+    Z : numpy.ndarray or scipy.sparse.spmatrix, shape (n, n)
         Binary co-association matrix.
     
     Returns
@@ -134,6 +187,14 @@ def partition_matrix_to_vector(Z):
     labels : array of int, shape (n,)
         1D label vector.
     """
+    if sparse.issparse(Z):
+        matrix = sparse.csr_matrix(Z, dtype=bool)
+        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+            raise ValueError("Z must be a square matrix.")
+        _, labels = connected_components(matrix, directed=False)
+        return labels.astype(int, copy=False)
+
+    Z = np.asarray(Z)
     N = Z.shape[0]
     labels = -np.ones(N, dtype=int)
     current_label = 0
@@ -176,14 +237,30 @@ def normalize_node_pairs(pairs, n_nodes, *, relation_name="node-pair", reject_se
     return sorted(normalized)
 
 
-def validate_partition_matrix(partition, n_nodes=None, *, name="partition", atol=1e-8):
+def validate_partition_matrix(
+    partition: MatrixLike,
+    n_nodes=None,
+    *,
+    name="partition",
+    atol=1e-8,
+    storage="preserve",
+    sparse_column_density_threshold=DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
+) -> MatrixLike:
     """Return a validated binary co-association matrix.
 
     Besides shape, symmetry, and unit-diagonal checks, this verifies that the
     matrix represents an equivalence relation.  The latter prevents malformed
     custom columns from silently entering a restricted master problem.
     """
-    matrix = np.asarray(partition)
+    if storage not in {"preserve", "auto", "dense", "csr"}:
+        raise ValueError("storage must be 'preserve', 'auto', 'dense', or 'csr'.")
+    input_sparse = sparse.issparse(partition)
+    matrix = (
+        sparse.csr_matrix(partition, copy=True)
+        if input_sparse
+        else np.asarray(partition)
+    )
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
         raise ValueError(f"{name} must be a square matrix.")
     if n_nodes is not None and matrix.shape != (int(n_nodes), int(n_nodes)):
@@ -191,42 +268,84 @@ def validate_partition_matrix(partition, n_nodes=None, *, name="partition", atol
             f"{name} must have shape {(int(n_nodes), int(n_nodes))}, "
             f"not {matrix.shape}."
         )
+    values = matrix.data if input_sparse else matrix
     try:
-        finite = np.all(np.isfinite(matrix))
+        finite = np.all(np.isfinite(values))
     except TypeError as exc:
         raise ValueError(f"{name} must contain numeric values.") from exc
     if not finite:
         raise ValueError(f"{name} contains NaN or infinity.")
-    if not np.allclose(matrix, matrix.T, atol=atol, rtol=0):
-        raise ValueError(f"{name} must be symmetric.")
-    if not np.allclose(np.diag(matrix), 1.0, atol=atol, rtol=0):
-        raise ValueError(f"{name} must have a unit diagonal.")
-    rounded = np.rint(matrix).astype(int)
-    if not np.allclose(matrix, rounded, atol=atol, rtol=0) or np.any(
-        (rounded != 0) & (rounded != 1)
-    ):
-        raise ValueError(f"{name} must be binary.")
-    labels = partition_matrix_to_vector(rounded)
-    canonical = partition_vector_to_2d_matrix(labels)
-    if not np.array_equal(rounded, canonical):
-        raise ValueError(f"{name} must define a transitive co-association relation.")
-    return rounded
+    if input_sparse:
+        matrix.sum_duplicates()
+        matrix.eliminate_zeros()
+        matrix.sort_indices()
+        rounded_data = np.rint(matrix.data)
+        if not np.allclose(matrix.data, rounded_data, atol=atol, rtol=0) or np.any(
+            (rounded_data != 0) & (rounded_data != 1)
+        ):
+            raise ValueError(f"{name} must be binary.")
+        matrix.data = rounded_data.astype(bool)
+        matrix.eliminate_zeros()
+        if (matrix != matrix.T).nnz:
+            raise ValueError(f"{name} must be symmetric.")
+        if not np.all(matrix.diagonal()):
+            raise ValueError(f"{name} must have a unit diagonal.")
+        labels = partition_matrix_to_vector(matrix)
+        counts = np.bincount(labels) if labels.size else np.empty(0, dtype=int)
+        if matrix.nnz != int(np.dot(counts, counts)):
+            raise ValueError(f"{name} must define a transitive co-association relation.")
+        canonical = matrix.astype(bool, copy=False)
+    else:
+        if not np.allclose(matrix, matrix.T, atol=atol, rtol=0):
+            raise ValueError(f"{name} must be symmetric.")
+        if not np.allclose(np.diag(matrix), 1.0, atol=atol, rtol=0):
+            raise ValueError(f"{name} must have a unit diagonal.")
+        rounded = np.rint(matrix)
+        if not np.allclose(matrix, rounded, atol=atol, rtol=0) or np.any(
+            (rounded != 0) & (rounded != 1)
+        ):
+            raise ValueError(f"{name} must be binary.")
+        canonical = rounded.astype(bool)
+        labels = partition_matrix_to_vector(canonical)
+        if not np.array_equal(canonical, np.equal.outer(labels, labels)):
+            raise ValueError(f"{name} must define a transitive co-association relation.")
+
+    if storage == "preserve":
+        return canonical
+    resolved = choose_column_storage(
+        canonical,
+        column_storage=storage,
+        sparse_column_density_threshold=sparse_column_density_threshold,
+    )
+    if resolved == "csr":
+        return sparse.csr_matrix(canonical, dtype=bool)
+    if sparse.issparse(canonical):
+        return checked_to_dense(
+            canonical,
+            dtype=bool,
+            max_dense_working_bytes=max_dense_working_bytes,
+            operation=f"dense storage for {name}",
+        )
+    return np.asarray(canonical, dtype=bool)
 
 
 def partition_satisfies_pairwise_constraints(
-    partition,
+    partition: MatrixLike,
     *,
     must_link=None,
     cannot_link=None,
     atol=1e-8,
 ):
     """Check hard must-link and cannot-link values in a partition matrix."""
-    matrix = np.asarray(partition)
     for source, target in must_link or []:
-        if not np.isclose(matrix[int(source), int(target)], 1.0, atol=atol, rtol=0):
+        if not np.isclose(
+            matrix_scalar(partition, source, target), 1.0, atol=atol, rtol=0
+        ):
             return False
     for source, target in cannot_link or []:
-        if not np.isclose(matrix[int(source), int(target)], 0.0, atol=atol, rtol=0):
+        if not np.isclose(
+            matrix_scalar(partition, source, target), 0.0, atol=atol, rtol=0
+        ):
             return False
     return True
 
@@ -291,7 +410,12 @@ def contract_node_pairs(
     return sorted(contracted)
 
 
-def contract_partition_matrix(partition, node2comp, *, atol=1e-8):
+def contract_partition_matrix(
+    partition: MatrixLike,
+    node2comp: np.ndarray,
+    *,
+    atol: float = 1e-8,
+) -> MatrixLike:
     """Convert a component-consistent partition to contracted dimensions.
 
     A warm-start partition is representable after contraction only when every
@@ -300,7 +424,7 @@ def contract_partition_matrix(partition, node2comp, *, atol=1e-8):
 
     Parameters
     ----------
-    partition : ndarray
+    partition : numpy.ndarray or scipy.sparse.spmatrix
         Original ``(N, N)`` or already-contracted ``(C, C)`` co-association
         matrix.
     node2comp : ndarray of int, shape (N,)
@@ -310,8 +434,9 @@ def contract_partition_matrix(partition, node2comp, *, atol=1e-8):
 
     Returns
     -------
-    ndarray
-        A copy of the partition with shape ``(C, C)``.
+    numpy.ndarray or scipy.sparse.csr_matrix
+        A copy of the partition with shape ``(C, C)``. Input storage is
+        preserved, with sparse input normalized to CSR.
 
     Raises
     ------
@@ -325,28 +450,34 @@ def contract_partition_matrix(partition, node2comp, *, atol=1e-8):
 
     n_nodes = mapping.size
     n_components = int(mapping.max()) + 1 if n_nodes else 0
-    matrix = np.asarray(partition)
+    input_sparse = sparse.issparse(partition)
+    matrix = validate_partition_matrix(
+        partition,
+        name="Warm-start partition",
+        atol=atol,
+    )
     if matrix.shape == (n_components, n_components):
         contracted = matrix.copy()
     elif matrix.shape == (n_nodes, n_nodes):
-        contracted = np.empty(
-            (n_components, n_components),
-            dtype=matrix.dtype,
-        )
         component_nodes = [
             np.flatnonzero(mapping == component)
             for component in range(n_components)
         ]
-        for source, source_nodes in enumerate(component_nodes):
-            for target, target_nodes in enumerate(component_nodes):
-                block = matrix[np.ix_(source_nodes, target_nodes)]
-                representative = block.flat[0]
-                if not np.allclose(block, representative, atol=atol, rtol=0):
-                    raise ValueError(
-                        "Warm-start partition is not constant across "
-                        f"contracted components {source} and {target}."
-                    )
-                contracted[source, target] = representative
+        labels = partition_matrix_to_vector(matrix)
+        component_labels = np.empty(n_components, dtype=int)
+        for component, nodes in enumerate(component_nodes):
+            node_labels = labels[nodes]
+            if np.any(node_labels != node_labels[0]):
+                raise ValueError(
+                    "Warm-start partition is not constant across "
+                    f"contracted component {component}."
+                )
+            component_labels[component] = node_labels[0]
+        contracted = partition_vector_to_2d_matrix(
+            component_labels,
+            storage="csr" if input_sparse else "dense",
+            max_dense_working_bytes=None,
+        )
     else:
         raise ValueError(
             "Warm-start partition must have shape "
@@ -354,35 +485,23 @@ def contract_partition_matrix(partition, node2comp, *, atol=1e-8):
             f"not {matrix.shape}."
         )
 
-    if not np.allclose(contracted, contracted.T, atol=atol, rtol=0):
-        raise ValueError("Warm-start partition must be symmetric.")
-    if not np.allclose(
-        np.diag(contracted),
-        np.ones(n_components),
-        atol=atol,
-        rtol=0,
-    ):
-        raise ValueError(
-            "Warm-start partition must keep every contracted component "
-            "together and have a unit diagonal."
-        )
     return contracted
 
 
 def contract_adj_matrix_new(
-    A,
+    A: MatrixLike,
     worthy_edges=None,
     must_link=None,
     keep_self_loops=True,
     degree_preserving=True,   # if True -> diag = 2 * intra_sum, else diag = intra_sum
-):
+) -> tuple[MatrixLike, np.ndarray]:
     """
     Contract A according to connected components induced by rule-graph (G_ml),
     and optionally keep self-loops to encode intra-block connectivity strength.
 
     Parameters
     ----------
-    A : ndarray, shape (n, n)
+    A : numpy.ndarray or scipy.sparse.spmatrix, shape (n, n)
         Graph adjacency (assumed symmetric, no self-loops.)
     worthy_edges : set[tuple[int,int]] or None
         Edges that can connect different communities. ``None`` disables
@@ -398,22 +517,24 @@ def contract_adj_matrix_new(
 
     Returns
     -------
-    A_sup : ndarray, shape (k, k)
-        Contracted adjacency.
+    A_sup : numpy.ndarray or scipy.sparse.csr_matrix, shape (k, k)
+        Contracted adjacency. Sparse input produces CSR output.
     node2comp : np.ndarray[int]
         Mapping from original node to supernode id.
     """
-    A = np.asarray(A)
+    input_sparse = sparse.issparse(A)
+    A = normalize_adjacency(A)
     if A.ndim != 2 or A.shape[0] != A.shape[1]:
         raise ValueError("A must be a square matrix.")
-    if not np.all(np.isfinite(A)):
+    finite_values = A.data if input_sparse else A
+    if not np.all(np.isfinite(finite_values)):
         raise ValueError("A must contain only finite values.")
-    if not np.allclose(A, A.T, atol=1e-10, rtol=0):
+    if not is_symmetric(A, atol=1e-10):
         raise ValueError("A must be symmetric.")
     n = A.shape[0]
 
     # build the merge graph G_ml that defines which nodes are contracted
-    edges = np.argwhere(np.triu(A) != 0).tolist()
+    edges = structural_edge_pairs(A)
     G_ml = nx.Graph()
     G_ml.add_nodes_from(range(n))
 
@@ -446,38 +567,54 @@ def contract_adj_matrix_new(
     for cid, nodes in enumerate(comp2nodes):
         node2comp[nodes] = cid
 
-    membership = np.zeros((n, num_super), dtype=float)
-    membership[np.arange(n), node2comp] = 1.0
+    if input_sparse:
+        membership = sparse.csr_matrix(
+            (np.ones(n), (np.arange(n), node2comp)),
+            shape=(n, num_super),
+        )
+    else:
+        membership = np.zeros((n, num_super), dtype=float)
+        membership[np.arange(n), node2comp] = 1.0
     # P.T @ A @ P exactly preserves every component's summed strength,
     # including pre-existing diagonal mass.  Reconstructing from the upper
     # triangle would incorrectly double original self-loops.
     A_sup = membership.T @ A @ membership
+    if input_sparse:
+        A_sup = sparse.csr_matrix(A_sup)
     if not keep_self_loops:
-        np.fill_diagonal(A_sup, 0)
+        if input_sparse:
+            A_sup.setdiag(0)
+            A_sup.eliminate_zeros()
+        else:
+            np.fill_diagonal(A_sup, 0)
     elif not degree_preserving:
-        original_diagonal = np.diag(A)
+        original_diagonal = A.diagonal() if input_sparse else np.diag(A)
         diagonal_mass = np.bincount(
             node2comp,
             weights=original_diagonal,
             minlength=num_super,
         )
-        current = np.diag(A_sup).copy()
-        np.fill_diagonal(A_sup, 0.5 * (current + diagonal_mass))
+        current = A_sup.diagonal().copy() if input_sparse else np.diag(A_sup).copy()
+        if input_sparse:
+            A_sup.setdiag(0.5 * (current + diagonal_mass))
+            A_sup.eliminate_zeros()
+        else:
+            np.fill_diagonal(A_sup, 0.5 * (current + diagonal_mass))
 
     return (A_sup, node2comp)
 
 def expand_z_matrix(
-        z,
-        node2comp,
-        dim=2
-):
+    z: MatrixLike | np.ndarray | None,
+    node2comp: np.ndarray | None,
+    dim: int = 2,
+) -> MatrixLike | np.ndarray | None:
     """
     Expand a supernode-level partition back to original node dimension.
     
     Parameters
     ----------
-    z : np.ndarray[int]
-        contracted 1D label vector or binary co-association matrix.
+    z : numpy.ndarray, scipy.sparse.csr_matrix, or None
+        Contracted 1D label vector or binary co-association matrix.
     node2comp : np.ndarray[int]
         Mapping from original node to supernode id.
     dim : int
@@ -485,29 +622,33 @@ def expand_z_matrix(
     
     Returns
     -------
-    z_full : np.ndarray[int]
-        Expanded 1D label vector or binary co-association matrix.
+    z_full : numpy.ndarray, scipy.sparse.csr_matrix, or None
+        Expanded 1D label vector or binary co-association matrix. Sparse
+        matrix input produces CSR output.
     """
     # returns z if node2comp or z is empty.
     if node2comp is None or z is None:
         return z
     n = len(node2comp)
     if dim == 2:
-        comp_idx = np.array([node2comp[i] for i in range(n)])  # shape = (n,)
-        z_full = z[np.ix_(comp_idx, comp_idx)]  # shape = (n, n)
+        comp_idx = np.asarray(node2comp, dtype=int)
+        if sparse.issparse(z):
+            z_full = sparse.csr_matrix(z)[comp_idx, :][:, comp_idx]
+        else:
+            z_full = z[np.ix_(comp_idx, comp_idx)]  # shape = (n, n)
     elif dim ==  1:
         z_full = np.array([z[node2comp[i]] for i in range(n)])
     return z_full
 
-def z_hamming_upper(Z1: np.ndarray, Z2: np.ndarray) -> float:
+def z_hamming_upper(Z1: MatrixLike, Z2: MatrixLike) -> float:
     """
     Compute Hamming distance on strict upper-triangle partition entries.
     
     Parameters
     ----------
-    Z1 : np.ndarray
+    Z1 : numpy.ndarray or scipy.sparse.spmatrix
         Binary co-association partition matrix.
-    Z2 : np.ndarray
+    Z2 : numpy.ndarray or scipy.sparse.spmatrix
         Binary co-association partition matrix.
     
     Returns
@@ -516,20 +657,34 @@ def z_hamming_upper(Z1: np.ndarray, Z2: np.ndarray) -> float:
         Computed hamming distance.
     """
     # TODO: for a cheaper test (when N is large), sample a fixed set of upper-tri pairs once and reuse it.
+    if Z1.shape != Z2.shape or len(Z1.shape) != 2 or Z1.shape[0] != Z1.shape[1]:
+        raise ValueError("Partition matrices must be square and have equal shapes.")
     n = Z1.shape[0]
+    pairs = n * (n - 1) // 2
+    if pairs == 0:
+        return 0.0
+    if sparse.issparse(Z1) or sparse.issparse(Z2):
+        left = sparse.csr_matrix(Z1, dtype=bool)
+        right = sparse.csr_matrix(Z2, dtype=bool)
+        mismatches = (left != right).nnz // 2
+        return float(mismatches / pairs)
     iu = np.triu_indices(n, k=1)
-    return float(np.mean(Z1[iu] != Z2[iu]))
+    return float(np.mean(np.asarray(Z1)[iu] != np.asarray(Z2)[iu]))
 
-def sufficiently_different(Z_new: np.ndarray, Z_pool: list, dist_min: float) -> bool:
+def sufficiently_different(
+    Z_new: MatrixLike,
+    Z_pool: list[MatrixLike],
+    dist_min: float,
+) -> bool:
     """
     Check whether a candidate partition differs sufficiently from a pool.
     
     Parameters
     ----------
-    Z_new : np.ndarray
+    Z_new : numpy.ndarray or scipy.sparse.spmatrix
         Candidate partition.
-    Z_pool : list
-        Pool of existing partitions.
+    Z_pool : list[numpy.ndarray or scipy.sparse.spmatrix]
+        Pool of existing partitions; representations may be mixed.
     dist_min : float
         Distance threshold.
     
@@ -561,4 +716,4 @@ def proportions_to_partition(r: np.ndarray, threshold: float = 0.5) -> np.ndarra
         Binary co-association matrix.
     """
     labels = (np.asarray(r) > threshold).astype(int)
-    return np.equal.outer(labels, labels).astype(int)
+    return np.equal.outer(labels, labels)

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
+
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
+)
 
 
 @dataclass
@@ -13,8 +18,9 @@ class CSDDecompositionConfig:
     
     Attributes
     ----------
-    columns : list[ndarray of int] or None
-        Existing columns. This parameter is typically active during Branch and Price.
+    columns : list[numpy.ndarray or scipy.sparse.csr_matrix] or None
+        Existing binary co-association columns. This parameter is typically
+        active during branch-and-price.
     f_stars : list[float] or None
         Objective values of the existing columns. 
         This parameter is typically active during Branch and Price.
@@ -61,6 +67,16 @@ class CSDDecompositionConfig:
     resolution : float
         Modularity resolution parameter. Pricing algorithms that do not
         implement non-default resolution reject values other than ``1``.
+    column_storage : {"auto", "dense", "csr"}
+        Physical storage policy for binary co-association columns.
+    sparse_column_density_threshold : float
+        Maximum measured density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None
+        Maximum operation-specific estimate for package-created dense work
+        arrays. Sparse-compatible operations retain CSR; dense-only boundaries
+        raise ``MemoryError`` when the estimate is exceeded. ``None`` disables
+        the guard, and existing dense caller input is not rejected merely
+        because of its size.
     seed : int or None
         Random seed value.
     ifc_params : dict[str, callable or dict or int]
@@ -111,3 +127,6 @@ class CSDDecompositionConfig:
     tolerance: float = 1e-10
     verbose: int | bool = 1
     resolution: float = 1.0
+    column_storage: Literal["auto", "dense", "csr"] = "auto"
+    sparse_column_density_threshold: float = DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES

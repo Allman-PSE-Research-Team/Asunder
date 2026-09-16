@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 import networkx as nx
 import numpy as np
+from scipy import sparse
 
 from asunder.base.algorithms.core_periphery import (
     CorePeripheryTarget,
@@ -27,6 +28,13 @@ from asunder.base.utils.graph import (
     normalize_node_pairs,
     partition_satisfies_pairwise_constraints,
     validate_partition_matrix,
+)
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
+    checked_to_dense,
+    matrix_storage,
+    normalize_adjacency,
 )
 from asunder.base.utils.partition_generation import make_partitions_random_links_only
 from asunder.config import CSDDecompositionConfig
@@ -47,7 +55,7 @@ from asunder.nlbnp.algorithms.refinement import (
     refine_partition_with_cp,
 )
 from asunder.orchestrator import run_csd_decomposition
-from asunder.types import DecompositionResult, MasterProblemFn, SubproblemFn
+from asunder.types import DecompositionResult, MasterProblemFn, MatrixLike, SubproblemFn
 
 _CUSTOM_HEURISTIC_ALGOS = {"spectral", "full_louvain", "RCCS"}
 _CARDINALITY_METHODS = {"reformulated", "confidence", "core_periphery"}
@@ -57,13 +65,19 @@ def _items_or_empty(items: Sequence[Any] | None) -> list[Any]:
     return [] if items is None else list(items)
 
 
-def _coerce_graph_input(graph: nx.Graph | np.ndarray) -> tuple[np.ndarray, list[Hashable], nx.Graph | None]:
+def _coerce_graph_input(graph):
     if isinstance(graph, nx.Graph):
         node_labels = list(graph.nodes())
-        return nx.to_numpy_array(graph, nodelist=node_labels), node_labels, graph
+        adjacency = nx.to_scipy_sparse_array(
+            graph,
+            nodelist=node_labels,
+            format="csr",
+            dtype=float,
+        )
+        return sparse.csr_matrix(adjacency), node_labels, graph
 
-    A = np.asarray(graph, dtype=float)
-    if A.ndim != 2 or A.shape[0] != A.shape[1]:
+    A = normalize_adjacency(graph, dtype=float)
+    if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
         raise ValueError("graph must be a networkx.Graph or a square adjacency matrix.")
     return A, list(range(A.shape[0])), None
 
@@ -167,12 +181,12 @@ def _infeasible_result(reason: str, **metadata: Any) -> DecompositionResult:
 
 
 def _expanded_candidate(
-    partition: np.ndarray,
+    partition: MatrixLike,
     *,
     n_nodes: int,
     node2comp: np.ndarray | None,
-) -> np.ndarray | None:
-    matrix = np.asarray(partition)
+) -> MatrixLike | None:
+    matrix = partition
     if matrix.shape == (n_nodes, n_nodes):
         return matrix
     if node2comp is None:
@@ -185,13 +199,13 @@ def _expanded_candidate(
 
 def _select_hard_partition(
     result: DecompositionResult,
-    A: np.ndarray,
+    A: MatrixLike,
     *,
     must_link: Sequence[tuple[int, int]],
     cannot_link: Sequence[tuple[int, int]],
     worthy_edges: Sequence[tuple[int, int]],
     resolution: float,
-) -> tuple[np.ndarray | None, str | None, float | None]:
+) -> tuple[MatrixLike | None, str | None, float | None]:
     """Select the best available integral column satisfying NLBNP rules.
 
     A partition selected by the final integer master is authoritative. Without
@@ -203,7 +217,7 @@ def _select_hard_partition(
     ----------
     result : DecompositionResult
         Result returned by the Stage 1 decomposition.
-    A : ndarray of float, shape (N, N)
+    A : numpy.ndarray or scipy.sparse.csr_matrix, shape (N, N)
         Original adjacency matrix.
     must_link, cannot_link : sequence of tuple of int
         Active pairwise constraints.
@@ -214,7 +228,7 @@ def _select_hard_partition(
 
     Returns
     -------
-    partition : ndarray of int, shape (N, N), or None
+    partition : numpy.ndarray or scipy.sparse.csr_matrix, shape (N, N), or None
         Selected hard partition, or ``None`` when no candidate is feasible.
     source : str or None
         Description of how the partition was selected.
@@ -230,7 +244,7 @@ def _select_hard_partition(
         else np.asarray(node2comp_value, dtype=int)
     )
 
-    def validated(partition: np.ndarray | None) -> np.ndarray | None:
+    def validated(partition: MatrixLike | None) -> MatrixLike | None:
         if partition is None:
             return None
         expanded = _expanded_candidate(
@@ -269,7 +283,7 @@ def _select_hard_partition(
             selected_source,
             compute_f_star(
                 A,
-                A.sum(axis=1),
+                np.asarray(A.sum(axis=1)).reshape(-1),
                 float(A.sum()),
                 selected,
                 gamma=resolution,
@@ -304,7 +318,7 @@ def _select_hard_partition(
                 continue
             score = compute_f_star(
                 A,
-                A.sum(axis=1),
+                np.asarray(A.sum(axis=1)).reshape(-1),
                 float(A.sum()),
                 candidate,
                 gamma=resolution,
@@ -326,7 +340,7 @@ def _select_hard_partition(
         selected_source or "decomposition",
         compute_f_star(
             A,
-            A.sum(axis=1),
+            np.asarray(A.sum(axis=1)).reshape(-1),
             float(A.sum()),
             selected,
             gamma=resolution,
@@ -351,7 +365,7 @@ def _result_identity_metadata(
 
 
 def run_nonlinear_branch_and_price(
-    graph: nx.Graph | np.ndarray,
+    graph: nx.Graph | MatrixLike,
     *,
     worthy_edges: Sequence[tuple[Hashable, Hashable]] | None = None,
     worthy_edge_attr: str | None = None,
@@ -380,6 +394,9 @@ def run_nonlinear_branch_and_price(
     contract_graph: bool | None = None,
     max_iterations: int | None = None,
     tolerance: float = 1e-8,
+    column_storage: Literal["auto", "dense", "csr"] = "auto",
+    sparse_column_density_threshold: float = DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
     disable_tqdm: bool = False,
     verbose: int | bool = -1,
     additional_constraints: dict[str, Any] | None = None,
@@ -393,7 +410,7 @@ def run_nonlinear_branch_and_price(
 
     Parameters
     ----------
-    graph : networkx.Graph or ndarray
+    graph : networkx.Graph, ndarray, or scipy.sparse.spmatrix
         Input graph or square adjacency matrix.
     worthy_edges : sequence of tuple, optional
         Nonempty edge pairs that should be treated as worthy edges. For ``networkx``
@@ -419,15 +436,16 @@ def run_nonlinear_branch_and_price(
         Attribute value selected by ``nonlinear_node_attr``.
     cardinality_method : {"reformulated", "confidence", "core_periphery"}
         How the one-linear-only-community rule is enforced.
-        ``"reformulated"``:
+
+        ``"reformulated"``
             Computes the exact maximum eligible set and reduces it to pairwise
-        constraints. 
-        ``"confidence"``:
+            constraints.
+        ``"confidence"``
             Clusters assignment confidence scores.
         ``"core_periphery"``
-            Detects the linear-only side structurally. The latter two refine 
-            a hard feasible generated column after column generation and 
-            are heuristic.
+            Detects the linear-only side structurally. The latter two refine
+            a hard feasible generated column after column generation and are
+            heuristic.
     cardinality_params : dict, optional
         Extra keyword arguments for the selected confidence or core-periphery
         refiner. Ignored by ``"reformulated"``.
@@ -492,6 +510,16 @@ def run_nonlinear_branch_and_price(
         Maximum column-generation iterations.
     tolerance : float
         Reduced-cost stopping tolerance.
+    column_storage : {"auto", "dense", "csr"}, default="auto"
+        Storage policy for binary co-association columns.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum measured density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum operation-specific estimate for package-created dense work
+        arrays. Sparse-compatible operations retain CSR; dense-only boundaries
+        raise ``MemoryError`` when the estimate is exceeded. ``None`` disables
+        the guard, and existing dense caller input is not rejected merely
+        because of its size.
     disable_tqdm : bool
         Disable the progress bar.
     verbose : int or bool
@@ -732,6 +760,9 @@ def run_nonlinear_branch_and_price(
     cfg.max_iterations = max_iterations
     cfg.disable_tqdm = disable_tqdm
     cfg.tolerance = tolerance
+    cfg.column_storage = column_storage
+    cfg.sparse_column_density_threshold = sparse_column_density_threshold
+    cfg.max_dense_working_bytes = max_dense_working_bytes
     cfg.verbose = verbose
 
     start = time.perf_counter()
@@ -824,6 +855,7 @@ def run_nonlinear_branch_and_price(
                     "must_link": required_links,
                     "cannot_link": user_cannot_link,
                     "seed": seed,
+                    "max_dense_working_bytes": max_dense_working_bytes,
                 }
                 refiner_kwargs.update(cardinality_kwargs)
                 final_partition = refine_partition_with_cp(
@@ -835,6 +867,12 @@ def run_nonlinear_branch_and_price(
             final_partition = None
             result.metadata["cardinality_refinement_error"] = str(exc)
         final_source = f"{cardinality_method}_cardinality_refinement"
+        if cardinality_method == "core_periphery" and sparse.issparse(A):
+            events = list(result.metadata.get("dense_boundary_events", ()))
+            event = "cardinality_refinement:core_periphery"
+            if event not in events:
+                events.append(event)
+            result.metadata["dense_boundary_events"] = tuple(events)
 
     expected_nodes = feasibility.eligible_nodes if feasibility is not None else None
     try:
@@ -845,6 +883,9 @@ def run_nonlinear_branch_and_price(
                 final_partition,
                 A.shape[0],
                 name="NLBNP final partition",
+                storage=column_storage,
+                sparse_column_density_threshold=sparse_column_density_threshold,
+                max_dense_working_bytes=max_dense_working_bytes,
             )
         )
     except ValueError:
@@ -879,13 +920,14 @@ def run_nonlinear_branch_and_price(
 
     result.final_partition = final_partition
     result.metadata["status"] = "ok"
+    result.metadata["final_partition_storage"] = matrix_storage(final_partition)
     result.metadata["final_partition_source"] = final_source
     result.metadata["final_partition_score"] = (
         score
         if final_partition is base_partition
         else compute_f_star(
             A,
-            A.sum(axis=1),
+            np.asarray(A.sum(axis=1)).reshape(-1),
             float(A.sum()),
             final_partition,
             gamma=resolution,
@@ -906,7 +948,7 @@ def run_nonlinear_branch_and_price(
 
 
 def CorePeripheryPartition(
-    graph: nx.Graph | np.ndarray,
+    graph: nx.Graph | MatrixLike,
     *,
     must_link: Sequence[tuple[Hashable, Hashable]] | None = None,
     must_link_edge_attr: str | None = None,
@@ -921,6 +963,7 @@ def CorePeripheryPartition(
     threshold: float = 0.8,
     seed: int | None = 42,
     verbose: bool = False,
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
     Apply the NLBNP linear-only-group structural shortcut.
@@ -936,7 +979,7 @@ def CorePeripheryPartition(
 
     Parameters
     ----------
-    graph : networkx.Graph or ndarray
+    graph : networkx.Graph, ndarray, or scipy.sparse.spmatrix
         Input graph or square adjacency matrix.
     must_link : sequence of tuple, optional
         Node pairs that must share a core-periphery block and final community.
@@ -968,6 +1011,9 @@ def CorePeripheryPartition(
         Random seed.
     verbose : bool
         Controls probability conversion output.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum operation-specific dense working-set estimate used by
+        core-periphery detection. ``None`` disables the guard.
 
     Returns
     -------
@@ -1004,8 +1050,14 @@ def CorePeripheryPartition(
         name="must_group",
     )
 
-    cp_result = _detect_core_periphery(
+    detection_adjacency = checked_to_dense(
         A,
+        working_arrays=4.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="CorePeripheryPartition detection",
+    )
+    cp_result = _detect_core_periphery(
+        detection_adjacency,
         must_link=must_link_idx,
         must_group=must_group_idx,
         algorithm=cp_algorithm,
@@ -1058,6 +1110,9 @@ def CorePeripheryPartition(
             for community in communities
         ],
         "n_communities": int(np.unique(community_labels).size),
+        "dense_boundary_events": (
+            ("core_periphery_detection",) if sparse.issparse(A) else ()
+        ),
     }
     return community_labels, metadata
 

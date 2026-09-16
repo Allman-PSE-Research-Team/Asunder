@@ -8,6 +8,7 @@ import networkx as nx
 import numpy as np
 
 from .graph import partition_vector_to_2d_matrix
+from .matrix import checked_to_dense
 
 
 def _build_components_links_only(
@@ -376,6 +377,9 @@ def make_partitions_links_only(
     seed: int | None = 42,
     nodes=None,
     max_K_increase: int = 50,
+    column_storage: str = "dense",
+    sparse_column_density_threshold: float = 0.20,
+    max_dense_working_bytes: int | None = 512 * 1024**2,
 ):
     """
     Generates partly ordered feasible partitions subject to only pairwise link constraints.
@@ -400,6 +404,12 @@ def make_partitions_links_only(
         Maximum allowed increase above the requested `K`` when additional
         partitions are needed to satisfy the cannot-link structure. If
         ``0``, the routine enforces the requested ``K`` exactly.
+    column_storage : {"auto", "dense", "csr"}, default="dense"
+        Physical storage used for returned partition matrices.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set for the spectral ordering.
     
     Returns
     -------
@@ -435,7 +445,12 @@ def make_partitions_links_only(
             return None
 
         g, meta = out
-        Z = partition_vector_to_2d_matrix(g)  # defined elsewhere
+        Z = partition_vector_to_2d_matrix(
+            g,
+            storage=column_storage,
+            sparse_column_density_threshold=sparse_column_density_threshold,
+            max_dense_working_bytes=max_dense_working_bytes,
+        )
         return Z, {"name": name, "order_labels": order_labels, "g": g, **meta}
 
     cols = []
@@ -445,7 +460,12 @@ def make_partitions_links_only(
     if N <= 1:
         f = np.zeros(N)
     else:
-        L = nx.laplacian_matrix(G, nodelist=nodes).toarray()
+        L = checked_to_dense(
+            nx.laplacian_matrix(G, nodelist=nodes),
+            working_arrays=3.0,
+            max_dense_working_bytes=max_dense_working_bytes,
+            operation="spectral initial-column ordering",
+        )
         w, v = np.linalg.eigh(L)
         f = v[:, 1]
     order = [nodes[i] for i in np.argsort(f)]
@@ -534,6 +554,9 @@ def make_partitions_random_links_only(
     return_Z: bool = True,
     max_K_increase: int = 50,
     n_parts: int = 10,
+    column_storage: str = "dense",
+    sparse_column_density_threshold: float = 0.20,
+    max_dense_working_bytes: int | None = 512 * 1024**2,
 ):
     """
     Generate random feasible partitions subject only to pairwise link constraints.
@@ -561,6 +584,12 @@ def make_partitions_random_links_only(
         ``0``, the routine enforces the requested ``K`` exactly.
     n_parts : int, optional
         Maximum number of feasible partitions to generate.
+    column_storage : {"auto", "dense", "csr"}, default="dense"
+        Physical storage used for returned partition matrices.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set for partition construction.
     
     Returns
     -------
@@ -578,7 +607,14 @@ def make_partitions_random_links_only(
     cannot_link = [] if cannot_link is None else list(cannot_link)
 
     if N == 0:
-        out = [partition_vector_to_2d_matrix(np.zeros(0, dtype=int))] if return_Z else []
+        out = [
+            partition_vector_to_2d_matrix(
+                np.zeros(0, dtype=int),
+                storage=column_storage,
+                sparse_column_density_threshold=sparse_column_density_threshold,
+                max_dense_working_bytes=max_dense_working_bytes,
+            )
+        ] if return_Z else []
         return out
 
     comp = _build_components_links_only(N, must_link, cannot_link)
@@ -672,7 +708,15 @@ def make_partitions_random_links_only(
                     break
 
     if return_Z:
-        return [partition_vector_to_2d_matrix(g) for _, g, _ in parts_g[:n_parts]]
+        return [
+            partition_vector_to_2d_matrix(
+                g,
+                storage=column_storage,
+                sparse_column_density_threshold=sparse_column_density_threshold,
+                max_dense_working_bytes=max_dense_working_bytes,
+            )
+            for _, g, _ in parts_g[:n_parts]
+        ]
 
     return [
         {"name": name, "g": g, "K_used": K_used}
@@ -680,7 +724,11 @@ def make_partitions_random_links_only(
     ]
 def make_simple_partition(
     N: int,
-    cannot_link: Sequence[tuple[int, int]] | None = None, seed=42
+    cannot_link: Sequence[tuple[int, int]] | None = None,
+    seed=42,
+    column_storage: str = "dense",
+    sparse_column_density_threshold: float = 0.20,
+    max_dense_working_bytes: int | None = 512 * 1024**2,
 ):
     """
     Create one transitive partition satisfying the cannot-link pairs.
@@ -691,6 +739,14 @@ def make_simple_partition(
         Number of nodes.
     cannot_link : Sequence[tuple[int, int]] | None
         List of nodes that cannot be linked.
+    seed : int or None, default=42
+        Random seed.
+    column_storage : {"auto", "dense", "csr"}, default="dense"
+        Physical storage used for the returned partition matrix.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set for partition construction.
     
     Returns
     -------
@@ -702,4 +758,7 @@ def make_simple_partition(
         cannot_link=cannot_link,
         seed=seed,
         n_parts=1,
+        column_storage=column_storage,
+        sparse_column_density_threshold=sparse_column_density_threshold,
+        max_dense_working_bytes=max_dense_working_bytes,
     )

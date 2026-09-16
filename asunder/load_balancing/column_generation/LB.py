@@ -440,6 +440,7 @@ def LoadBalancer(
         use_refined_column=bool(refine and use_refined_column),
         refine_post_loop=bool(refine and refine_post_loop),
         final_master_solve=final_master_solve,
+        column_storage="dense",
         max_iterations=max_iterations, tolerance=1e-8, verbose=verbose,
     )
     if algorithm == "qmetis":
@@ -489,7 +490,7 @@ def LoadBalancer(
 
     elapsed = time.perf_counter() - start
     z = result.final_partition
-    community_map, _ = group_nodes_by_community(np.array(z))
+    community_map, _ = group_nodes_by_community(z)
     community_map_labels = map_community_labels(community_map, node_label_map)
     community_balance_weights = {}
     for index, community in community_map.items():

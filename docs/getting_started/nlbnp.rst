@@ -6,6 +6,11 @@ constraint-interaction graph. ``CorePeripheryPartition`` is a structural
 shortcut for the NLBNP pattern described below, not a general-purpose
 core-periphery partitioning workflow.
 
+NetworkX input is converted to CSR adjacency by default. The logical partition
+result remains ``N x N`` but may also use CSR storage. See
+:doc:`../reference/matrix_storage` before converting a large result to a dense
+array.
+
 .. list-table:: NLBNP entry points
    :header-rows: 1
    :widths: 31 43 26

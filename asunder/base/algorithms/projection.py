@@ -10,8 +10,13 @@ from asunder.base.utils.graph import (
     partition_matrix_to_vector,
     partition_vector_to_2d_matrix,
 )
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    checked_to_dense,
+)
 from asunder.base.utils.partition_generation import _build_components_links_only
 from asunder.solvers import get_default_solver
+from asunder.types import MatrixLike
 
 
 def _validate_pairs(
@@ -85,11 +90,12 @@ def _partition_from_component_matrix(
 
 
 def project_partition_pairwise_ilp(
-    wz: np.ndarray,
+    wz: MatrixLike,
     *,
     must_link: Sequence[Tuple[int, int]] = (),
     cannot_link: Sequence[Tuple[int, int]] = (),
     solver=None,
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
     """
     Project ``wz`` onto the nearest partition satisfying pairwise constraints.
@@ -101,14 +107,18 @@ def project_partition_pairwise_ilp(
 
     Parameters
     ----------
-    wz : ndarray
-        Input partition vector or square co-association matrix.
+    wz : numpy.ndarray or scipy.sparse.csr_matrix
+        Input partition vector or square co-association matrix. Sparse input
+        crosses a guarded dense projection boundary.
     must_link : sequence of tuple[int, int]
         Node pairs that must belong to the same block.
     cannot_link : sequence of tuple[int, int]
         Node pairs that must belong to different blocks.
     solver : Any
         Optional Pyomo solver. If omitted, Asunder's default solver is used.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum operation-specific dense working-set estimate for sparse input
+        conversion.
 
     Returns
     -------
@@ -132,7 +142,13 @@ def project_partition_pairwise_ilp(
     except Exception:
         return None
 
-    wz = np.asarray(wz, dtype=float)
+    wz = checked_to_dense(
+        wz,
+        dtype=float,
+        working_arrays=3.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="pairwise feasibility projection",
+    )
     if wz.ndim == 1:
         wz = partition_vector_to_2d_matrix(wz)
     if wz.ndim != 2 or wz.shape[0] != wz.shape[1]:

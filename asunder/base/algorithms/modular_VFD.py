@@ -17,6 +17,11 @@ from asunder.base.algorithms.vfd_constraints import (
 )
 from asunder.base.branch_and_price.symmetry_detection import weighted_constraint_orbits
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    checked_to_dense,
+)
+from asunder.types import MatrixLike
 
 
 class _Feas:
@@ -3000,8 +3005,8 @@ def modular_very_fortunate_descent(
 
 
 def refine_partition_modular_vfd(
-    A: np.ndarray,
-    partition: np.ndarray,
+    A: MatrixLike,
+    partition: MatrixLike,
     *,
     a: Optional[np.ndarray] = None,
     m: Optional[float] = None,
@@ -3018,16 +3023,47 @@ def refine_partition_modular_vfd(
     component_members: Optional[Sequence[Sequence[Any]]] = None,
     constraint_repair_steps: Optional[int] = None,
     seed: Optional[int] = 42,
+    max_dense_working_bytes: Optional[int] = DEFAULT_MAX_DENSE_WORKING_BYTES,
     **kwargs: Any,
 ) -> Optional[np.ndarray]:
     """Adapt :func:`modular_very_fortunate_descent` to CSD refinement hooks.
 
     The decomposition calls refiners with ``A`` and ``partition`` and expects
     only a partition matrix in return.  This adapter supplies degree and graph
-    volume defaults and unwraps ModularVFD's diagnostic metadata.
+    volume defaults and unwraps ModularVFD's diagnostic metadata. Sparse input
+    is accepted through a guarded dense boundary because ModularVFD's current
+    search kernel uses several dense work arrays.
+
+    Parameters
+    ----------
+    A : ndarray or scipy.sparse.spmatrix, shape (N, N)
+        Adjacency matrix.
+    partition : ndarray or scipy.sparse.spmatrix, shape (N, N)
+        Initial hard or fractional co-association matrix.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum operation-specific dense working-set estimate for sparse
+        conversion. ``None`` disables the guard.
+
+    Returns
+    -------
+    ndarray or None
+        Refined hard co-association matrix, or ``None`` when no feasible
+        refinement is found.
     """
-    adjacency = np.asarray(A, dtype=float)
-    candidate = np.asarray(partition)
+    adjacency = checked_to_dense(
+        A,
+        dtype=float,
+        working_arrays=6.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="ModularVFD refinement",
+    )
+    candidate = checked_to_dense(
+        partition,
+        dtype=float,
+        working_arrays=6.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="ModularVFD refinement partition",
+    )
     if candidate.ndim == 1:
         candidate = partition_vector_to_2d_matrix(candidate)
     strengths = adjacency.sum(axis=1) if a is None else np.asarray(a, dtype=float)

@@ -32,6 +32,12 @@ problem. Use
 :func:`~asunder.base.utils.graph.validate_partition_matrix` in standalone
 extensions and tests.
 
+The physical object may be a dense Boolean ``numpy.ndarray`` or a Boolean
+``scipy.sparse.csr_matrix``. ``A`` may likewise be dense or CSR. Custom
+callables receive the configured representation; Asunder does not silently
+densify input for an unknown callable. Use :data:`asunder.MatrixLike` in type
+annotations and see :doc:`../matrix_storage` for selection and memory limits.
+
 Initial feasible column generator
 ---------------------------------
 
@@ -57,14 +63,16 @@ This minimal generator returns one all-in-one partition:
 
    import numpy as np
 
+   from asunder import MatrixLike
+
    def initial_columns(
        N: int,
        *,
        seed: int | None = None,
        **kwargs: Any,
-   ) -> list[np.ndarray]:
+   ) -> list[MatrixLike]:
        del seed, kwargs
-       return [np.ones((N, N), dtype=int)]
+       return [np.ones((N, N), dtype=bool)]
 
 The generator is responsible for satisfying every hard constraint applicable
 to initial columns. An all-in-one partition is therefore only a minimal
@@ -81,11 +89,13 @@ A master callable has this effective interface:
 
    import numpy as np
 
+   from asunder import MatrixLike
+
    def master_problem(
-       A: np.ndarray,
+       A: MatrixLike,
        a: np.ndarray,
        m: float,
-       Z_star: list[np.ndarray],
+       Z_star: list[MatrixLike],
        f_stars: list[float],
        *,
        extract_dual: bool = False,
@@ -133,8 +143,10 @@ then returns ``(sub_obj_val, z_sol)``. ``sub_obj_val`` is the reduced cost and
 
    import numpy as np
 
+   from asunder import MatrixLike
+
    def pricing_problem(
-       A: np.ndarray,
+       A: MatrixLike,
        a: np.ndarray,
        m: float,
        duals: dict[str, Any],
@@ -142,10 +154,10 @@ then returns ``(sub_obj_val, z_sol)``. ``sub_obj_val`` is the reduced cost and
        gamma: float = 1.0,
        seed: int | None = None,
        **kwargs: Any,
-   ) -> tuple[float, np.ndarray]:
+   ) -> tuple[float, MatrixLike]:
        del a, m, duals, gamma, seed, kwargs
        # Zero reduced cost tells the loop that no improving column was found.
-       return 0.0, np.eye(A.shape[0], dtype=int)
+       return 0.0, np.eye(A.shape[0], dtype=bool)
 
 Custom pricing must calculate reduced cost under the same objective and
 resolution convention as the master. A positive value above ``tolerance``
@@ -161,17 +173,16 @@ valid refined matrix or ``None`` when no refinement should be added.
 
    from typing import Any
 
-   import numpy as np
-
+   from asunder import MatrixLike
    from asunder.base.utils import validate_partition_matrix
 
    def refine_partition(
-       A: np.ndarray,
-       partition: np.ndarray,
+       A: MatrixLike,
+       partition: MatrixLike,
        *,
        seed: int | None = None,
        **kwargs: Any,
-   ) -> np.ndarray | None:
+   ) -> MatrixLike | None:
        del seed, kwargs
        return validate_partition_matrix(partition, A.shape[0])
 

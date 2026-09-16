@@ -5,6 +5,7 @@ from typing import Dict, Tuple
 
 import networkx as nx
 import numpy as np
+from scipy import sparse
 from sklearn.metrics import (
     adjusted_rand_score,
     mutual_info_score,
@@ -13,6 +14,7 @@ from sklearn.metrics import (
 
 from asunder.base.column_generation.master import compute_f_star
 from asunder.base.utils.graph import partition_matrix_to_vector
+from asunder.types import MatrixLike
 
 
 def _relabel_consecutive(labels: np.ndarray) -> np.ndarray:
@@ -166,21 +168,28 @@ def _mutual_information(cont: np.ndarray, *, log_base: float = 2.0) -> float:
     log = np.log(pij[mask] / (pi @ pj)[mask]) / np.log(log_base)
     return float(np.sum(pij[mask] * log))
 
-def optimality_gap(A, a, m, z_gt, z_sol, tol=1e-10):
+def optimality_gap(
+    A: MatrixLike,
+    a: np.ndarray,
+    m: float,
+    z_gt: MatrixLike,
+    z_sol: MatrixLike,
+    tol: float = 1e-10,
+) -> float:
     """
     Compute relative optimality gap (percent) between reference and candidate.
     
     Parameters
     ----------
-    A : np.ndarray of int | float, shape (N, N)
+    A : numpy.ndarray or scipy.sparse.csr_matrix, shape (N, N)
         Adjacency / weight matrix.
     a : np.ndarray of int | float, shape (N,)
         Degree-like vector; defaults to row sums of the symmetrized adjacency.
     m : float
         Twice the total weight in the graph.
-    z_gt : ndarray of int, shape (N, N)
+    z_gt : numpy.ndarray or scipy.sparse.csr_matrix, shape (N, N)
         Reference solution, typically the ground-truth or best-known solution.
-    z_sol : ndarray of int, shape (N, N)
+    z_sol : numpy.ndarray or scipy.sparse.csr_matrix, shape (N, N)
         Candidate solution being evaluated.
     tol : float
         Small positive constant added to the denominator to avoid division by
@@ -379,17 +388,19 @@ def vi_sklearn(labels_gt, labels_sol, log_base=2.0) -> float:
     return float(H(labels_gt) + H(labels_sol) - 2.0 * mi)
 
 def permuted_accuracy(
-    z_gt: np.ndarray, z_sol: np.ndarray
+    z_gt: MatrixLike,
+    z_sol: MatrixLike,
 ) -> Tuple[float, Dict[int, int]]:
     """
     Maximum fraction of correctly classified nodes under label permutation.
     
     Parameters
     ----------
-    z_gt : np.ndarray of int
-        Ground truth partition (1D / 2D).
-    z_sol : np.ndarray of int
-        Predicted partition (1D / 2D).
+    z_gt : numpy.ndarray or scipy.sparse.csr_matrix
+        Ground-truth partition as a 1D label vector or 2D co-association
+        matrix. Sparse input must be a 2D matrix.
+    z_sol : numpy.ndarray or scipy.sparse.csr_matrix
+        Predicted partition in the same accepted forms as ``z_gt``.
     
     Returns
     -------
@@ -397,8 +408,16 @@ def permuted_accuracy(
         Accuracy score and label mapping from ground truth to solution.
     """
     # Accept either label vectors or partition matrices.
-    gt = partition_matrix_to_vector(z_gt) if np.asarray(z_gt).ndim == 2 else np.asarray(z_gt)
-    sol = partition_matrix_to_vector(z_sol) if np.asarray(z_sol).ndim == 2 else np.asarray(z_sol)
+    gt = (
+        partition_matrix_to_vector(z_gt)
+        if sparse.issparse(z_gt) or np.asarray(z_gt).ndim == 2
+        else np.asarray(z_gt)
+    )
+    sol = (
+        partition_matrix_to_vector(z_sol)
+        if sparse.issparse(z_sol) or np.asarray(z_sol).ndim == 2
+        else np.asarray(z_sol)
+    )
     cont = _contingency(gt, sol)
     kg, ks = cont.shape
     n = int(cont.sum())

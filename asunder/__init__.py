@@ -6,7 +6,7 @@ from asunder.base.column_generation.subproblem import solve_subproblem
 from asunder.config import CSDDecompositionConfig
 from asunder.orchestrator import CSDDecomposition, run_csd_decomposition
 from asunder.solvers import create_solver
-from asunder.types import DecompositionResult, IterationRecord
+from asunder.types import DecompositionResult, IterationRecord, MatrixLike
 
 __version__ = "0.3.0"
 
@@ -36,6 +36,7 @@ __all__ = [
     "CSDDecompositionConfig",
     "DecompositionResult",
     "IterationRecord",
+    "MatrixLike",
     "create_solver",
     "run_csd_decomposition",
     "run_evaluation",

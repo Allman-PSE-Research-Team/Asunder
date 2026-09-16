@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from scipy import sparse
 
 from asunder.base.column_generation.master import compute_f_star
 from asunder.base.utils.graph import (
@@ -9,7 +10,10 @@ from asunder.base.utils.graph import (
     expand_z_matrix,
     partition_matrix_to_vector,
     partition_vector_to_2d_matrix,
+    validate_partition_matrix,
+    z_hamming_upper,
 )
+from asunder.base.utils.matrix import checked_to_dense
 
 
 def test_partition_vector_roundtrip():
@@ -19,6 +23,45 @@ def test_partition_vector_roundtrip():
     got = partition_matrix_to_vector(z)
     assert got.shape == labels.shape
     assert np.all(z == partition_vector_to_2d_matrix(got))
+
+
+def test_sparse_partition_storage_roundtrip_and_objective_equivalence():
+    labels = np.arange(8)
+    dense = partition_vector_to_2d_matrix(labels, storage="dense")
+    csr = partition_vector_to_2d_matrix(labels, storage="auto")
+
+    assert dense.dtype == np.bool_
+    assert dense.astype(np.int64).nbytes == 8 * dense.nbytes
+    assert sparse.isspmatrix_csr(csr)
+    assert sparse.isspmatrix_csr(validate_partition_matrix(csr))
+    assert np.array_equal(partition_matrix_to_vector(csr), labels)
+    assert z_hamming_upper(dense, csr) == 0.0
+
+    adjacency = sparse.csr_matrix(
+        np.equal.outer(np.arange(8), np.roll(np.arange(8), 1)).astype(float)
+    )
+    adjacency = adjacency + adjacency.T
+    strengths = np.asarray(adjacency.sum(axis=1)).reshape(-1)
+    assert compute_f_star(adjacency, strengths, float(strengths.sum()), csr) == pytest.approx(
+        compute_f_star(adjacency.toarray(), strengths, float(strengths.sum()), dense)
+    )
+
+    malformed = sparse.eye(3, format="lil", dtype=bool)
+    malformed[0, 1] = malformed[1, 0] = True
+    malformed[1, 2] = malformed[2, 1] = True
+    with pytest.raises(ValueError, match="transitive"):
+        validate_partition_matrix(malformed.tocsr())
+
+
+def test_checked_dense_conversion_uses_working_set_cap():
+    matrix = sparse.eye(10, format="csr")
+    with pytest.raises(MemoryError, match="estimated.*working set"):
+        checked_to_dense(
+            matrix,
+            working_arrays=2,
+            max_dense_working_bytes=100,
+            operation="test conversion",
+        )
 
 
 def test_contract_and_expand_shape():

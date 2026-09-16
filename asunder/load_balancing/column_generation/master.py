@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from asunder.base.column_generation.master import _require_pyomo
+from asunder.base.utils.matrix import matrix_scalar
 from asunder.load_balancing.utils.balance import resolve_balance_bounds
 from asunder.solvers import get_default_solver
 
@@ -149,7 +150,9 @@ def solve_master_problem(
             """
             Enforce a cannot-link pair in the master problem.
             """
-            return sum(mdl.lmbd[c] * Z_star[c][i, j] for c in mdl.C) == 0
+            return sum(
+                mdl.lmbd[c] * matrix_scalar(Z_star[c], i, j) for c in mdl.C
+            ) == 0
 
         model.CannotLink = Constraint(cannot_link_pairs, rule=cannot_link_rule)
     else:
@@ -162,7 +165,9 @@ def solve_master_problem(
             """
             Enforce a must-link pair in the master problem.
             """
-            return sum(mdl.lmbd[c] * Z_star[c][i, j] for c in mdl.C) == 1
+            return sum(
+                mdl.lmbd[c] * matrix_scalar(Z_star[c], i, j) for c in mdl.C
+            ) == 1
 
         model.MustLink = Constraint(must_link_pairs, rule=must_link_rule)
     else:
@@ -174,7 +179,9 @@ def solve_master_problem(
             rule=lambda m, i: R_min
             <= sum(
                 sum(
-                    m.lmbd[c] * Z_star[c][i, j] * float(balance_weights[j])
+                    m.lmbd[c]
+                    * matrix_scalar(Z_star[c], i, j)
+                    * float(balance_weights[j])
                     for c in m.C
                 )
                 for j in m.I
@@ -184,7 +191,9 @@ def solve_master_problem(
         model.Rmax = Constraint(
             model.I, rule=lambda m, i: R_max >= sum(
                 sum(
-                    m.lmbd[c] * Z_star[c][i, j] * float(balance_weights[j])
+                    m.lmbd[c]
+                    * matrix_scalar(Z_star[c], i, j)
+                    * float(balance_weights[j])
                     for c in m.C
                 )
                 for j in m.I

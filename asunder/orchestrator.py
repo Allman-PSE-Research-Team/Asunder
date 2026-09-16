@@ -14,11 +14,18 @@ from asunder.base.utils.graph import (
     partition_satisfies_pairwise_constraints,
     validate_partition_matrix,
 )
+from asunder.base.utils.matrix import matrix_storage
 from asunder.config import CSDDecompositionConfig
-from asunder.types import DecompositionResult, IterationRecord, MasterProblemFn, SubproblemFn
+from asunder.types import (
+    DecompositionResult,
+    IterationRecord,
+    MasterProblemFn,
+    MatrixLike,
+    SubproblemFn,
+)
 
 
-def _one_hot_master_partition(item: dict[str, Any]) -> np.ndarray | None:
+def _one_hot_master_partition(item: dict[str, Any]) -> MatrixLike | None:
     """Recover an integral selected column from a master record, if present."""
     lambda_sol = item.get("lambda_sol")
     columns = item.get("columns") or []
@@ -32,7 +39,7 @@ def _one_hot_master_partition(item: dict[str, Any]) -> np.ndarray | None:
         return None
     if np.any(np.delete(values, selected) > 1e-7):
         return None
-    partition = np.asarray(columns[selected], dtype=int)
+    partition = columns[selected].copy()
     node2comp = item.get("node2comp")
     if node2comp is not None:
         from asunder.base.utils.graph import expand_z_matrix
@@ -42,13 +49,13 @@ def _one_hot_master_partition(item: dict[str, Any]) -> np.ndarray | None:
 
 
 def _validated_final_candidate(
-    partition: np.ndarray,
+    partition: MatrixLike,
     *,
     n_nodes: int,
     must_link,
     cannot_link,
     additional_constraints,
-) -> np.ndarray | None:
+) -> MatrixLike | None:
     """Validate structural, pairwise, and load-balancing constraints."""
     try:
         candidate = validate_partition_matrix(
@@ -88,7 +95,7 @@ def _select_final_partition(
     must_link,
     cannot_link,
     additional_constraints,
-) -> tuple[np.ndarray | None, str | None]:
+) -> tuple[MatrixLike | None, str | None]:
     """Select only a genuine integral solution, never a pricing candidate."""
     solution_sources = {
         "contracted_trivial",
@@ -98,7 +105,7 @@ def _select_final_partition(
     for item in reversed(raw):
         if item.get("partition_source") in solution_sources and item.get("z_sol") is not None:
             candidate = _validated_final_candidate(
-                np.asarray(item["z_sol"]),
+                item["z_sol"],
                 n_nodes=n_nodes,
                 must_link=must_link,
                 cannot_link=cannot_link,
@@ -145,14 +152,15 @@ class CSDDecomposition:
         self.master_fn = master_fn
         self.subproblem_fn = subproblem_fn
 
-    def run(self, A: np.ndarray, a: np.ndarray | None = None, m: float | None = None, **overrides: Any) -> DecompositionResult:
+    def run(self, A: MatrixLike, a: np.ndarray | None = None, m: float | None = None, **overrides: Any) -> DecompositionResult:
         """
         Execute decomposition and return typed iteration records.
         
         Parameters
         ----------
-        A : np.ndarray of int | float, shape (N, N)
-            Adjacency / weight matrix.
+        A : numpy.ndarray or scipy.sparse.csr_matrix, shape (N, N)
+            Adjacency or weight matrix. Sparse input is normalized to CSR and
+            preserved through sparse-compatible stages.
         a : np.ndarray of int | float, shape (N,)
             Degree-like vector; defaults to row sums of the symmetrized adjacency.
         m : float
@@ -166,7 +174,7 @@ class CSDDecomposition:
             Computed decomposition result object.
         """
         if a is None:
-            a = A.sum(axis=1)
+            a = np.asarray(A.sum(axis=1)).reshape(-1)
         if m is None:
             m = float(np.sum(a))
         cfg = asdict(self.config)
@@ -195,6 +203,7 @@ class CSDDecomposition:
                     "f_stars",
                     "node2comp",
                     "partition_source",
+                    "storage_metadata",
                 }
             }
             records.append(
@@ -224,6 +233,11 @@ class CSDDecomposition:
             "final_partition_source": final_partition_source,
             "status": "ok" if final_partition is not None else "no_integral_partition",
         }
+        if raw:
+            metadata.update(raw[-1].get("storage_metadata", {}))
+        metadata["final_partition_storage"] = (
+            None if final_partition is None else matrix_storage(final_partition)
+        )
         if node2comp is not None:
             metadata["node2comp"] = node2comp
         return DecompositionResult(
@@ -235,7 +249,7 @@ class CSDDecomposition:
 
 
 def run_csd_decomposition(
-    A: np.ndarray,
+    A: MatrixLike,
     a: np.ndarray | None = None,
     m: float | None = None,
     config: CSDDecompositionConfig | None = None,
@@ -248,8 +262,9 @@ def run_csd_decomposition(
     
     Parameters
     ----------
-    A : np.ndarray of int | float, shape (N, N)
-        Adjacency / weight matrix.
+    A : numpy.ndarray or scipy.sparse.csr_matrix, shape (N, N)
+        Adjacency or weight matrix. Sparse input is normalized to CSR and
+        preserved through sparse-compatible stages.
     a : np.ndarray of int | float, shape (N,)
         Degree-like vector; defaults to row sums of the symmetrized adjacency.
     m : float

@@ -11,7 +11,7 @@ Prerequisites
 
 - Install Asunder and configure a Pyomo-compatible solver as described in
   :doc:`installation`.
-- Represent the graph as a square NumPy adjacency matrix.
+- Represent the graph as a square NumPy or SciPy sparse adjacency matrix.
 - Decide how to generate at least one feasible starting partition.
 
 The four replaceable pieces
@@ -121,6 +121,11 @@ generator arguments. ``algo`` and ``package`` select the pricing backend.
 ``refine_post_loop`` controls the final pass. Complete callable signatures and
 matrix requirements are documented in
 :doc:`../reference/development/special_topics`.
+
+For large sparse graphs, ``column_storage="auto"`` stores low-density hard
+columns as CSR and dense columns as Boolean arrays. See
+:doc:`../reference/matrix_storage` for memory controls and custom-callable
+requirements.
 
 Custom constraints
 ------------------

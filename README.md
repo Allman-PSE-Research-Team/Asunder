@@ -109,9 +109,10 @@ print("modularity:", result.metadata["modularity"])
 
 The numeric community labels are arbitrary; what matters is which nodes share
 a label. `result.final_partition` is an `N x N` binary co-membership matrix in
-the graph's node iteration order. Entry `[i, j]` is one when nodes `i` and `j`
-belong to the same community. The label-aware metadata maps that matrix back to
-the original NetworkX node labels.
+the graph's node iteration order. It may be a dense Boolean array or a SciPy
+CSR matrix, while retaining that same logical shape. Entry `[i, j]` is one when
+nodes `i` and `j` belong to the same community. The label-aware metadata maps
+that matrix back to the original NetworkX node labels.
 
 Common controls include:
 
@@ -196,6 +197,12 @@ guide](https://asunder.readthedocs.io/en/latest/reference/development/extending_
 shows how to implement them. A ModularVFD constraint governs ModularVFD
 refinement only unless the same rule is also enforced in initial-column
 generation, pricing, the master formulation, warm starts, and final validation.
+
+For large sparse inputs, reusable decomposition and NLBNP preserve CSR through
+preprocessing and compatible pricing. Hard columns use dense Boolean or CSR
+Boolean storage according to measured density. Dense-only backends are guarded
+by a configurable estimated working-set limit; see the [matrix-storage
+reference](https://asunder.readthedocs.io/en/latest/reference/matrix_storage.html).
 
 ## Documentation and examples
 

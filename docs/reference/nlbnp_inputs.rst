@@ -89,7 +89,7 @@ be independently validated. Choose ``NonlinearBranchAndPrice`` when this
 structural shortcut is not valid.
 
 Generic nonlinear branch-and-price input
-------------------------------
+----------------------------------------
 
 ``NonlinearBranchAndPrice`` does not require the packaged case-study schema.
 It can operate directly on adjacency data plus explicit ``worthy_edges``,

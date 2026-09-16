@@ -5,6 +5,7 @@ Reference
    :maxdepth: 2
 
    qmetis
+   matrix_storage
    nlbnp_inputs
    development/index
    citation

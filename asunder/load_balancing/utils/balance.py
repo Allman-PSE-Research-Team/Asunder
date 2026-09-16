@@ -128,7 +128,7 @@ def partition_satisfies_balance_constraints(
     balance_weights=None,
 ) -> bool:
     """Return whether a partition has exactly ``K`` weight-balanced groups."""
-    matrix = np.asarray(partition)
+    matrix = partition
     n_nodes = matrix.shape[0]
     try:
         K = int(K)

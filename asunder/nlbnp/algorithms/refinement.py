@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy import sparse
 
 from asunder.base.algorithms.community import (
     labels_to_probabilities,
@@ -13,6 +14,10 @@ from asunder.base.utils.graph import (
     partition_vector_to_2d_matrix,
     validate_partition_matrix,
 )
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    checked_to_dense,
+)
 from asunder.nlbnp.algorithms.core_periphery import (
     _detect_core_periphery,
     _nlbnp_linear_only_mask,
@@ -21,9 +26,13 @@ from asunder.nlbnp.algorithms.linear_group import (
     merge_linear_only_communities,
     required_together_components,
 )
+from asunder.types import MatrixLike
 
 
 def _hard_partition_labels(partition, n_nodes: int) -> tuple[np.ndarray, np.ndarray]:
+    if sparse.issparse(partition):
+        matrix = validate_partition_matrix(partition, n_nodes, name="partition")
+        return partition_matrix_to_vector(matrix), matrix
     values = np.asarray(partition)
     if values.ndim == 2:
         matrix = validate_partition_matrix(values, n_nodes, name="partition")
@@ -35,8 +44,8 @@ def _hard_partition_labels(partition, n_nodes: int) -> tuple[np.ndarray, np.ndar
 
 
 def refine_partition_linear_group(
-    A,
-    partition,
+    A: MatrixLike,
+    partition: MatrixLike,
     *,
     nonlinear_nodes=None,
     worthy_edges=None,
@@ -58,10 +67,11 @@ def refine_partition_linear_group(
 
     Parameters
     ----------
-    A : ndarray of float, shape (N, N)
+    A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Graph adjacency/weight matrix.
-    partition : ndarray of int, shape (N,) or (N, N)
-        Predicted community labels or a 2D partition matrix.
+    partition : numpy.ndarray or scipy.sparse.spmatrix, shape (N,) or (N, N)
+        Predicted community labels or a 2D co-association matrix. Sparse input
+        must be two-dimensional.
     nonlinear_nodes : sequence of int or None
         Designated nonlinear nodes. When omitted, place 
         low-confidence nodes in one new group without identifying
@@ -88,7 +98,7 @@ def refine_partition_linear_group(
         Refined partition, or ``None`` when no feasible linear-only group can
         be formed.
     """
-    matrix = np.asarray(A)
+    matrix = A
     labels, hard_partition = _hard_partition_labels(partition, matrix.shape[0])
     probabilities = labels_to_probabilities(A, labels, p=p).toarray()
     proposed_labels = probability_to_integer_labels(
@@ -123,8 +133,8 @@ def refine_partition_linear_group(
 
 
 def refine_partition_with_cp(
-    A,
-    partition,
+    A: MatrixLike,
+    partition: MatrixLike,
     *,
     must_link=None,
     nonlinear_nodes=None,
@@ -136,6 +146,7 @@ def refine_partition_with_cp(
     threshold=0.8,
     verbose=False,
     seed=42,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ):
     """
     Refine a partition by detecting and merging the linear-only periphery.
@@ -147,10 +158,12 @@ def refine_partition_with_cp(
 
     Parameters
     ----------
-    A : ndarray of float, shape (N, N)
-        Graph adjacency/weight matrix.
-    partition : ndarray of int, shape (N,) or (N, N)
-        Predicted community labels or a 2D partition matrix.
+    A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
+        Graph adjacency or weight matrix. Sparse input crosses a guarded dense
+        core-periphery boundary.
+    partition : numpy.ndarray or scipy.sparse.spmatrix, shape (N,) or (N, N)
+        Predicted community labels or a 2D co-association matrix. Sparse input
+        must be two-dimensional.
     must_link : list[tuple[int, int]] or None
         Node pairs constrained to one core-periphery block.
     nonlinear_nodes : list[int] | None
@@ -174,6 +187,9 @@ def refine_partition_with_cp(
         Controls the verbosity of the output.
     seed : int | None
         Random seed value.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum operation-specific dense working-set estimate at the
+        core-periphery boundary. ``None`` disables the guard.
 
     Returns
     -------
@@ -183,11 +199,18 @@ def refine_partition_with_cp(
     """
     partition_labels, hard_partition = _hard_partition_labels(
         partition,
-        np.asarray(A).shape[0],
+        A.shape[0],
+    )
+
+    dense_adjacency = checked_to_dense(
+        A,
+        working_arrays=4.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="core-periphery cardinality refinement",
     )
 
     cp_result = _detect_core_periphery(
-        A,
+        dense_adjacency,
         must_link=must_link,
         must_group=nonlinear_nodes,
         algorithm=cp_algorithm,

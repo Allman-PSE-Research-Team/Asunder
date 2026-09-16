@@ -14,6 +14,13 @@ from asunder.base.utils.graph import (
     partition_vector_to_2d_matrix,
     validate_partition_matrix,
 )
+from asunder.base.utils.matrix import (
+    is_symmetric,
+    matrix_scalar,
+    normalize_adjacency,
+    structural_edge_pairs,
+)
+from asunder.types import MatrixLike
 
 
 def _validate_node_indices(nodes: Sequence[int] | None, n_nodes: int, *, name: str) -> tuple[int, ...]:
@@ -24,12 +31,12 @@ def _validate_node_indices(nodes: Sequence[int] | None, n_nodes: int, *, name: s
     return normalized
 
 
-def structural_edges(A: np.ndarray) -> tuple[tuple[int, int], ...]:
+def structural_edges(A: MatrixLike) -> tuple[tuple[int, int], ...]:
     """Return nonzero, off-diagonal undirected edges in deterministic order.
 
     Parameters
     ----------
-    A : ndarray of float, shape (N, N)
+    A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Symmetric adjacency matrix.
 
     Returns
@@ -43,24 +50,23 @@ def structural_edges(A: np.ndarray) -> tuple[tuple[int, int], ...]:
         If ``A`` is not square and symmetric.
     """
 
-    matrix = np.asarray(A)
+    matrix = normalize_adjacency(A)
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
         raise ValueError("A must be a square adjacency matrix.")
-    if not np.allclose(matrix, matrix.T, atol=1e-10, rtol=0):
+    if not is_symmetric(matrix, atol=1e-10):
         raise ValueError("A must be symmetric.")
-    rows, columns = np.nonzero(np.triu(matrix, k=1))
-    return tuple((int(i), int(j)) for i, j in zip(rows, columns))
+    return structural_edge_pairs(matrix)
 
 
 def unworthy_edges(
-    A: np.ndarray,
+    A: MatrixLike,
     worthy_edges: Sequence[tuple[int, int]],
 ) -> tuple[tuple[int, int], ...]:
     """Return structural edges not explicitly allowed to cross communities.
 
     Parameters
     ----------
-    A : ndarray of float, shape (N, N)
+    A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Symmetric adjacency matrix.
     worthy_edges : sequence of tuple of int
         Nonempty structural edges allowed to cross communities.
@@ -78,7 +84,7 @@ def unworthy_edges(
     """
 
     structural = structural_edges(A)
-    n_nodes = np.asarray(A).shape[0]
+    n_nodes = A.shape[0]
     worthy = tuple(
         normalize_node_pairs(
             worthy_edges, n_nodes, relation_name="worthy-edge", reject_self=True
@@ -124,14 +130,14 @@ def _components_from_edges(
 
 
 def required_together_components(
-    A: np.ndarray,
+    A: MatrixLike,
     *,
     worthy_edges: Sequence[tuple[int, int]] | None = None,
     must_link: Sequence[tuple[int, int]] | None = None,
 ) -> tuple[tuple[int, ...], ...]:
     """Build components induced by active edge rules and explicit must-links."""
 
-    n_nodes = np.asarray(A).shape[0]
+    n_nodes = A.shape[0]
     links = normalize_node_pairs(
         must_link,
         n_nodes,
@@ -163,7 +169,7 @@ class LinearGroupFeasibility:
 
 
 def compute_max_feasible_linear_group(
-    A: np.ndarray,
+    A: MatrixLike,
     *,
     worthy_edges: Sequence[tuple[int, int]],
     nonlinear_nodes: Sequence[int],
@@ -179,7 +185,7 @@ def compute_max_feasible_linear_group(
 
     Parameters
     ----------
-    A : ndarray of float, shape (N, N)
+    A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Symmetric constraint-graph adjacency matrix.
     worthy_edges : sequence of tuple
         Nonempty structural edges allowed to cross final communities.
@@ -197,7 +203,7 @@ def compute_max_feasible_linear_group(
         structured infeasible decomposition result.
     """
 
-    matrix = np.asarray(A)
+    matrix = normalize_adjacency(A)
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
         raise ValueError("A must be a square adjacency matrix.")
     n_nodes = matrix.shape[0]
@@ -272,7 +278,7 @@ def compute_max_feasible_linear_group(
 
 
 def linear_only_communities(
-    partition: np.ndarray,
+    partition: MatrixLike,
     nonlinear_nodes: Sequence[int],
 ) -> tuple[tuple[int, ...], ...]:
     """Return nonempty communities containing no designated nonlinear node."""
@@ -295,20 +301,22 @@ def linear_only_communities(
 
 
 def partition_satisfies_edge_constraints(
-    A: np.ndarray,
-    partition: np.ndarray,
+    A: MatrixLike,
+    partition: MatrixLike,
     worthy_edges: Sequence[tuple[int, int]] | None,
 ) -> bool:
     """Check every active unworthy-edge co-assignment constraint."""
 
     if worthy_edges is None:
         return True
-    matrix = np.asarray(partition)
-    return all(matrix[source, target] == 1 for source, target in unworthy_edges(A, worthy_edges))
+    return all(
+        matrix_scalar(partition, source, target) == 1
+        for source, target in unworthy_edges(A, worthy_edges)
+    )
 
 
 def partition_satisfies_nlbnp_cardinality(
-    partition: np.ndarray,
+    partition: MatrixLike,
     nonlinear_nodes: Sequence[int],
     *,
     expected_nodes: Sequence[int] | None = None,
@@ -322,7 +330,7 @@ def partition_satisfies_nlbnp_cardinality(
 
 
 def merge_linear_only_communities(
-    partition: np.ndarray,
+    partition: MatrixLike,
     nonlinear_nodes: Sequence[int],
     *,
     additional_nodes: Sequence[int] | None = None,

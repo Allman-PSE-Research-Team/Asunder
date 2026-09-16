@@ -6,6 +6,7 @@ import inspect
 from collections import deque
 
 import numpy as np
+from scipy import sparse
 from tqdm.auto import tqdm
 
 from asunder.base.column_generation.master import compute_f_star
@@ -19,6 +20,83 @@ from asunder.base.utils.graph import (
     sufficiently_different,
     validate_partition_matrix,
 )
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
+    checked_to_dense,
+    estimate_dense_working_bytes,
+    is_symmetric,
+    matrix_density,
+    matrix_storage,
+    normalize_adjacency,
+    validate_storage_options,
+)
+
+
+def _weighted_column_sum(
+    weights,
+    columns,
+    *,
+    sparse_column_density_threshold,
+    max_dense_working_bytes,
+):
+    """Build a fractional co-association matrix without accidental densification."""
+    active = [
+        (float(weight), column)
+        for weight, column in zip(weights, columns)
+        if not np.isclose(float(weight), 0.0)
+    ]
+    shape = columns[0].shape
+    if not active:
+        return sparse.csr_matrix(shape, dtype=float)
+
+    required = estimate_dense_working_bytes(
+        shape,
+        dtype=float,
+        working_arrays=2.0,
+    )
+    dense_allowed = (
+        max_dense_working_bytes is None
+        or required <= int(max_dense_working_bytes)
+    )
+    all_sparse = all(sparse.issparse(column) for _, column in active)
+    if all_sparse or not dense_allowed:
+        result = sparse.csr_matrix(shape, dtype=float)
+        for weight, column in active:
+            values = (
+                column
+                if sparse.issparse(column)
+                else sparse.csr_matrix(np.asarray(column))
+            )
+            result = result + weight * values
+        result.eliminate_zeros()
+        if (
+            not dense_allowed
+            or matrix_density(result) <= sparse_column_density_threshold
+        ):
+            return result
+        return checked_to_dense(
+            result,
+            dtype=float,
+            working_arrays=2.0,
+            max_dense_working_bytes=max_dense_working_bytes,
+            operation="dense post-loop fractional co-association assembly",
+        )
+
+    from asunder.base.utils.matrix import ensure_dense_working_set
+
+    ensure_dense_working_set(
+        shape,
+        dtype=float,
+        working_arrays=2.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="dense post-loop fractional co-association assembly",
+    )
+    result = np.zeros(shape, dtype=float)
+    for weight, column in active:
+        values = column.toarray() if sparse.issparse(column) else np.asarray(column)
+        result += weight * values
+    return result
 
 
 def CSD_decomposition(
@@ -45,14 +123,17 @@ def CSD_decomposition(
     tolerance=1e-10, verbose=False,
     subproblem_params: dict | None = None,
     resolution=1.0,
+    column_storage="auto",
+    sparse_column_density_threshold=DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
 
     Parameters
     ----------
-    A : np.ndarray of int | float, shape (N, N)
-        Adjacency / weight matrix.
+    A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
+        Adjacency or weight matrix. Sparse input is normalized to CSR.
     a : np.ndarray of int | float, shape (N,)
         Degree-like vector; defaults to row sums of the symmetrized adjacency.
     m : float
@@ -61,10 +142,11 @@ def CSD_decomposition(
         Master problem function (Handles ILP and LP versions).
     sp_function : callable
         Pricing subproblem which can be implemented as a ILP or a heuristic (custom / third-party) subproblem.
-    columns : list[ndarray of int] or None
-        Existing columns. This parameter is typically active during Branch and
-        Price. With ``contract_graph=True``, original-dimension columns must
-        respect every contracted component and are converted automatically.
+    columns : list[numpy.ndarray or scipy.sparse.spmatrix] or None
+        Existing binary co-association columns. This parameter is typically
+        active during branch-and-price. With ``contract_graph=True``,
+        original-dimension columns must respect every contracted component and
+        are converted automatically. Sparse columns are normalized to CSR.
     f_stars : list[float] or None
         Objective values of the existing columns. This parameter is typically
         active during Branch and Price. Scores are recomputed on the contracted
@@ -111,6 +193,16 @@ def CSD_decomposition(
     resolution : float, default=1.0
         Modularity resolution parameter. It is applied consistently when
         pricing and scoring columns.
+    column_storage : {"auto", "dense", "csr"}, default="auto"
+        Physical storage policy for binary co-association columns.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum measured density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum operation-specific estimate for package-created dense work
+        arrays. Sparse-compatible operations retain CSR; dense-only boundaries
+        raise ``MemoryError`` when the estimate is exceeded. ``None`` disables
+        the guard, and existing dense caller input is not rejected merely
+        because of its size.
     seed : int or None
         Random seed value.
     ifc_params : dict[str, callable or dict or int]
@@ -144,6 +236,7 @@ def CSD_decomposition(
         Column-generation iteration records. Each dictionary may include
         ``lambda_sol``, dual terms, ``master_obj_val``, ``z_sol``,
         ``sub_obj_val``, ``columns``, ``f_stars``, and ``heuristic_col``.
+        Partition matrices may be dense Boolean arrays or Boolean CSR matrices.
 
         When graph contraction is active, public ``z_sol`` values are expanded
         to original-node dimensions. ``columns`` and ``heuristic_col`` remain
@@ -151,15 +244,33 @@ def CSD_decomposition(
         contracted columns. Each record also contains ``node2comp``, mapping
         original node indices to contracted component indices.
     """
-    A = np.asarray(A, dtype=float)
+    validate_storage_options(
+        column_storage,
+        sparse_column_density_threshold,
+        max_dense_working_bytes,
+    )
+    input_adjacency_storage = matrix_storage(A)
+    A = normalize_adjacency(A, dtype=float)
     a = np.asarray(a, dtype=float).reshape(-1)
+    dense_boundary_events = []
+
+    def normalize_column(candidate, *, name):
+        return validate_partition_matrix(
+            candidate,
+            A.shape[0],
+            name=name,
+            storage=column_storage,
+            sparse_column_density_threshold=sparse_column_density_threshold,
+            max_dense_working_bytes=max_dense_working_bytes,
+        )
     if A.ndim != 2 or A.shape[0] != A.shape[1]:
         raise ValueError("A must be a square matrix.")
     if a.shape != (A.shape[0],):
         raise ValueError(f"a must have shape {(A.shape[0],)}.")
-    if not np.all(np.isfinite(A)) or not np.all(np.isfinite(a)):
+    adjacency_values = A.data if sparse.issparse(A) else A
+    if not np.all(np.isfinite(adjacency_values)) or not np.all(np.isfinite(a)):
         raise ValueError("A and a must contain only finite values.")
-    if not np.allclose(A, A.T, atol=1e-10, rtol=0):
+    if not is_symmetric(A, atol=1e-10):
         raise ValueError("A must be symmetric for undirected decomposition.")
     m = float(m)
     if not np.isfinite(m) or m <= 0:
@@ -201,6 +312,10 @@ def CSD_decomposition(
         refine_signature = inspect.signature(refine_func)
         if "gamma" in refine_signature.parameters:
             refine_kwargs.setdefault("gamma", resolution)
+        if "max_dense_working_bytes" in refine_signature.parameters:
+            refine_kwargs.setdefault(
+                "max_dense_working_bytes", max_dense_working_bytes
+            )
 
     if use_refined_column and not callable(refine_func):
         raise ValueError(
@@ -272,8 +387,8 @@ def CSD_decomposition(
         ):
             raise ValueError("balance_weights must contain positive integers.")
         A, node2comp = contract_adj_matrix_new(A, additional_constraints.get("worthy_edges"), must_link)
-        a = A.sum(axis=0)
-        m = np.sum(a)
+        a = np.asarray(A.sum(axis=0)).reshape(-1)
+        m = float(np.sum(a))
         additional_constraints["worthy_edges"] = None
         component_balance_weights = np.bincount(
             node2comp,
@@ -295,7 +410,11 @@ def CSD_decomposition(
         if "G" in generator_args:
             import networkx as nx
 
-            generator_args["G"] = nx.from_numpy_array(A)
+            generator_args["G"] = (
+                nx.from_scipy_sparse_array(A)
+                if sparse.issparse(A)
+                else nx.from_numpy_array(A)
+            )
             generator_args["nodes"] = list(range(A.shape[0]))
         if "cannot_link" in generator_args:
             generator_args["cannot_link"] = contract_node_pairs(
@@ -340,8 +459,11 @@ def CSD_decomposition(
 
         if columns is not None and len(columns) > 0:
             columns = [
-                contract_partition_matrix(column, node2comp)
-                for column in columns
+                normalize_column(
+                    contract_partition_matrix(column, node2comp),
+                    name=f"contracted warm-start column {index}",
+                )
+                for index, column in enumerate(columns)
             ]
             # Recompute scores so the column pool and contracted objective
             # cannot retain mismatched original-graph bookkeeping.
@@ -365,7 +487,12 @@ def CSD_decomposition(
                     lower, upper = bounds
                 if not (float(lower) <= total_weight <= float(upper)):
                     return None
-            coarse_partition = np.ones((1, 1), dtype=int)
+            coarse_partition = validate_partition_matrix(
+                np.ones((1, 1), dtype=bool),
+                storage=column_storage,
+                sparse_column_density_threshold=sparse_column_density_threshold,
+                max_dense_working_bytes=max_dense_working_bytes,
+            )
             score = (
                 compute_f_star(A, a, m, coarse_partition, gamma=resolution)
                 if m > 0
@@ -381,6 +508,19 @@ def CSD_decomposition(
                 "f_stars": [score],
                 "node2comp": node2comp.copy(),
                 "partition_source": "contracted_trivial",
+                "storage_metadata": {
+                    "input_adjacency_storage": input_adjacency_storage,
+                    "working_adjacency_storage": matrix_storage(A),
+                    "column_storage": column_storage,
+                    "sparse_column_density_threshold": float(
+                        sparse_column_density_threshold
+                    ),
+                    "max_dense_working_bytes": max_dense_working_bytes,
+                    "column_storage_counts": {
+                        matrix_storage(coarse_partition): 1,
+                    },
+                    "dense_boundary_events": (),
+                },
             }]
     else:
         node2comp = None
@@ -398,17 +538,23 @@ def CSD_decomposition(
         if ifc_params["num"] < 1:
             raise ValueError("ifc_params['num'] must be at least 1.")
 
+        generator_signature = inspect.signature(ifc_params["generator"])
+        generator_options = {
+            "column_storage": column_storage,
+            "sparse_column_density_threshold": sparse_column_density_threshold,
+            "max_dense_working_bytes": max_dense_working_bytes,
+        }
+        for option, value in generator_options.items():
+            if option in generator_signature.parameters:
+                ifc_params["args"].setdefault(option, value)
+
     # deque to track flat pricing for termination
     SUB_OBJS = deque(maxlen=stopping_window)
 
     if (columns is not None and f_stars is not None) and len(columns) > 0:
         # initialize from parameters
         Z_star = [
-            validate_partition_matrix(
-                column,
-                A.shape[0],
-                name=f"warm-start column {index}",
-            )
+            normalize_column(column, name=f"warm-start column {index}")
             for index, column in enumerate(columns)
         ]
         if resolution != 1.0:
@@ -431,10 +577,8 @@ def CSD_decomposition(
 
         # initialize columns and their scores
         if ifc_params["num"] == 1:
-            initial_z = validate_partition_matrix(
-                feasible_columns[0],
-                A.shape[0],
-                name="initial feasible column 0",
+            initial_z = normalize_column(
+                feasible_columns[0], name="initial feasible column 0"
             )
             f_star_initial = compute_f_star(
                 A, a, m, initial_z, gamma=resolution
@@ -443,10 +587,8 @@ def CSD_decomposition(
             f_stars = [f_star_initial]
         else:
             Z_star = [
-                validate_partition_matrix(
-                    column,
-                    A.shape[0],
-                    name=f"initial feasible column {index}",
+                normalize_column(
+                    column, name=f"initial feasible column {index}"
                 )
                 for index, column in enumerate(feasible_columns[:ifc_params["num"]])
             ]
@@ -484,6 +626,15 @@ def CSD_decomposition(
             if master_obj_val is None:
                 return None
 
+            if sparse.issparse(A) and any(
+                isinstance(dual, np.ndarray) and dual.ndim in {1, 2}
+                for dual in duals.values()
+                if dual is not None
+            ):
+                event = "pricing:dense_duals"
+                if event not in dense_boundary_events:
+                    dense_boundary_events.append(event)
+
             if verbose != -1:
                 print(duals)
 
@@ -497,6 +648,9 @@ def CSD_decomposition(
                 "gamma": resolution,
                 "verbose": verbose,
                 "seed": seed,
+                "column_storage": column_storage,
+                "sparse_column_density_threshold": sparse_column_density_threshold,
+                "max_dense_working_bytes": max_dense_working_bytes,
             }
             signature = inspect.signature(sp_function)
             accepts_extra = any(
@@ -521,11 +675,15 @@ def CSD_decomposition(
                 duals,
                 **pricing_kwargs,
             )
-            z_sol = validate_partition_matrix(
-                z_sol,
-                A.shape[0],
-                name="pricing column",
-            )
+            pricing_name = getattr(sp_function, "__name__", "")
+            if sparse.issparse(A) and (
+                pricing_name == "custom_heuristic_subproblem"
+                or (pricing_name == "heuristic_subproblem" and algo == "signed_louvain")
+            ):
+                event = f"pricing:{algo}"
+                if event not in dense_boundary_events:
+                    dense_boundary_events.append(event)
+            z_sol = normalize_column(z_sol, name="pricing column")
 
             results.append({
                 "lambda_sol": lambda_sol,
@@ -566,11 +724,18 @@ def CSD_decomposition(
                     partition=z_sol,
                     **in_loop_kwargs,
                 )
+                if sparse.issparse(A) or sparse.issparse(z_sol):
+                    refiner_name = getattr(refine_func, "__name__", "")
+                    if refiner_name in {
+                        "refine_partition_modular_vfd",
+                        "refine_partition_with_cp",
+                    }:
+                        event = f"refinement:{refiner_name}"
+                        if event not in dense_boundary_events:
+                            dense_boundary_events.append(event)
                 if heuristic_col is not None:
-                    heuristic_col = validate_partition_matrix(
-                        heuristic_col,
-                        A.shape[0],
-                        name="in-loop refinement column",
+                    heuristic_col = normalize_column(
+                        heuristic_col, name="in-loop refinement column"
                     )
                     if not partition_satisfies_pairwise_constraints(
                         heuristic_col,
@@ -612,9 +777,12 @@ def CSD_decomposition(
     if refine_post_loop and callable(refine_func):
         if not disable_tqdm:
             print("Running post-loop refinement...")
-        wz = np.zeros_like(Z_star[0]).astype(np.float64)
-        for lambda_, column in zip(lambda_sol, Z_star):
-            wz += (lambda_ * column)
+        wz = _weighted_column_sum(
+            lambda_sol,
+            Z_star,
+            sparse_column_density_threshold=sparse_column_density_threshold,
+            max_dense_working_bytes=max_dense_working_bytes,
+        )
 
         post_loop_kwargs = dict(refine_kwargs)
         post_loop_kwargs.setdefault("seed", seed)
@@ -623,11 +791,18 @@ def CSD_decomposition(
             partition=wz,
             **post_loop_kwargs,
         )
+        if sparse.issparse(A) or sparse.issparse(wz):
+            refiner_name = getattr(refine_func, "__name__", "")
+            if refiner_name in {
+                "refine_partition_modular_vfd",
+                "refine_partition_with_cp",
+            }:
+                event = f"refinement:{refiner_name}"
+                if event not in dense_boundary_events:
+                    dense_boundary_events.append(event)
         if heuristic_col is not None:
-            heuristic_col = validate_partition_matrix(
-                heuristic_col,
-                A.shape[0],
-                name="post-loop refinement column",
+            heuristic_col = normalize_column(
+                heuristic_col, name="post-loop refinement column"
             )
             if not partition_satisfies_pairwise_constraints(
                 heuristic_col,
@@ -695,4 +870,19 @@ def CSD_decomposition(
     if node2comp is not None:
         for record in results:
             record["node2comp"] = node2comp.copy()
+    if results:
+        counts = {"dense": 0, "csr": 0}
+        for column in Z_star:
+            counts[matrix_storage(column)] += 1
+        results[-1]["storage_metadata"] = {
+            "input_adjacency_storage": input_adjacency_storage,
+            "working_adjacency_storage": matrix_storage(A),
+            "column_storage": column_storage,
+            "sparse_column_density_threshold": float(
+                sparse_column_density_threshold
+            ),
+            "max_dense_working_bytes": max_dense_working_bytes,
+            "column_storage_counts": counts,
+            "dense_boundary_events": tuple(dense_boundary_events),
+        }
     return results
