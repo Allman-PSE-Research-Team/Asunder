@@ -41,6 +41,52 @@ annotations and see :doc:`../matrix_storage` for selection and memory limits.
 Initial feasible column generator
 ---------------------------------
 
+Only the pairwise constraints ``must_link`` and ``cannot_link`` are owned by
+the main decomposition.
+These two keys are rejected in ``ifc_params['args']``,
+``refine_params['kwargs']``, and ``subproblem_params``, including identical
+duplicates. Master worthy-edge rules are also translated into must-links for
+initial generators and refiners.
+
+Non-pairwise parameters such as ``K``, ``R``, ``R_bounds``,
+``use_K_constraint``, and custom ``constraints`` belong in
+the relevant hook arguments. Master settings go in ``additional_constraints``
+and do not automatically populate these hook arguments. Top-level workflows
+such as ``LoadBalancer`` supply convenient matching defaults; direct CSD users
+configure their selected master and hooks explicitly.
+
+Node weights are shared problem data, not a constraint selection. Set
+``node_weights`` on ``CSDDecompositionConfig`` or ``run_csd_decomposition``
+with one finite real value per input row. Omitted weights default to ones.
+The master, generator, pricing routine, and refiner receive this vector when
+they declare ``node_weights`` or its existing ``balance_weights`` alias.
+Consumers keep their own restrictions (for example, LB requires positive
+integer loads). This does not change adjacency weights or the modularity
+degree vector ``a``.
+Both VFD implementations also require positive integer weights, even with
+ModularVFD's built-in balance constraint disabled. No automatic scaling takes
+place. See :doc:`../load_balancing` for choosing integer units and preserving
+explicit load bounds.
+
+For compatibility, ``additional_constraints['balance_weights']`` can supply
+the shared vector when the main ``node_weights`` is omitted. Explicit weight
+arguments in hook options must match that shared vector; ``None`` inherits it.
+Use distinct names for additional application-specific vectors, such as
+``memory_requirements``. These remain caller-controlled.
+
+Hooks must explicitly declare pairwise parameters to receive them; an opaque
+``**kwargs`` alone does not request automatic injection. Pricing receives
+pairwise constraints through master duals. After contraction, internal
+must-links are already enforced and cannot-links refer to components. Shared
+node weights are summed once per component and forwarded consistently to all
+compatible hooks, including when the original weights were implicitly ones.
+Other custom constraint data remains the hook's responsibility; use
+``component_members`` when predicates need original-node provenance.
+
+When contraction leaves one component, CSD prints a feasibility note explaining
+that the returned matrix is not a certificate that custom constraints
+were checked.
+
 Configure an initial generator through:
 
 .. code-block:: python

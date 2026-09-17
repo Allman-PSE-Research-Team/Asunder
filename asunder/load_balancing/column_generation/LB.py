@@ -1,3 +1,4 @@
+import inspect
 import time
 
 import networkx as nx
@@ -247,6 +248,8 @@ def LoadBalancer(
     node_weight_attr : str or None
         Positive integer node attribute used for weighted load balancing.
         Missing values default to one. If omitted, every node has unit load.
+        Fractional loads are not scaled automatically. Choose integer units
+        and scale explicit ``R_bounds`` and other load thresholds consistently.
     contract_graph : bool
         Contract must-link components before column generation while
         preserving their summed balance weights.
@@ -254,7 +257,10 @@ def LoadBalancer(
         Master switch for LB VFD refinement.
     refine_params : dict or None
         Optional custom refinement hook configuration. By default the
-        independent load-balancing VFD adapter is used.
+        independent load-balancing VFD adapter is used. Pairwise keys in
+        ``kwargs`` are rejected. This wrapper supplies balance defaults to
+        declared hook parameters; explicit non-pairwise kwargs are preserved.
+        Standard weights must match the weights selected by ``node_weight_attr``.
     use_refined_column : bool
         Whether to run and add refinement columns inside the main loop.
     refine_post_loop : bool
@@ -308,6 +314,8 @@ def LoadBalancer(
         if not np.all(raw_weights == np.rint(raw_weights)):
             raise ValueError(
                 f"Node attribute {node_weight_attr!r} must contain integer weights."
+                " Scale weights and explicit R_bounds to common integer units "
+                "before calling; node weights are not scaled automatically."
             )
         balance_weights = np.rint(raw_weights).astype(int)
 
@@ -333,10 +341,7 @@ def LoadBalancer(
     ifc_params = {
         "num": 1,
         "args": {
-            "must_link": must_link,
-            "cannot_link": cannot_link,
             "R_bounds": R_bounds,
-            "node_weights": balance_weights,
             "max_K_increase": 0,
         }
     }
@@ -356,9 +361,6 @@ def LoadBalancer(
                 K=K,
                 R=R,
                 R_bounds=R_bounds,
-                balance_weights=balance_weights,
-                must_link=must_link,
-                cannot_link=cannot_link,
                 gamma=resolution,
                 clustering_seeds=(seed,),
                 w_coassoc=0.0,
@@ -368,6 +370,7 @@ def LoadBalancer(
         # Illustrative ModularVFD replacement (intentionally inactive).  This is
         # equivalent to the LB adapter above when both searches receive the same
         # seed/defaults and ModularVFD's optional balance constraint is enabled.
+        # CSD supplies pairwise settings and shared node weights.
         # from asunder.base.algorithms.modular_VFD import refine_partition_modular_vfd
         # resolved_refine_params = {
         #     "refine_func": refine_partition_modular_vfd,
@@ -375,9 +378,6 @@ def LoadBalancer(
         #         K=K,
         #         R=R,
         #         R_bounds=R_bounds,
-        #         balance_weights=balance_weights,
-        #         must_link=must_link,
-        #         cannot_link=cannot_link,
         #         gamma=resolution,
         #         use_K_constraint=True,
         #         candidate_Ks=None,
@@ -398,6 +398,16 @@ def LoadBalancer(
         # }
     else:
         resolved_refine_params = dict(refine_params)
+        resolved_refine_params["kwargs"] = dict(refine_params.get("kwargs") or {})
+        refiner = resolved_refine_params.get("refine_func")
+        if callable(refiner):
+            parameters = inspect.signature(refiner).parameters
+            for name, value in {
+                "K": K, "R": R, "R_bounds": R_bounds,
+                "use_K_constraint": True,
+            }.items():
+                if name in parameters:
+                    resolved_refine_params["kwargs"].setdefault(name, value)
     if not refine:
         resolved_refine_params = {}
 
@@ -406,7 +416,6 @@ def LoadBalancer(
         "R": R,
         "K": K,
         "R_bounds": R_bounds,
-        "balance_weights": balance_weights,
     }
 
     start = time.perf_counter()
@@ -418,11 +427,10 @@ def LoadBalancer(
             "R": R,
             "R_bounds": R_bounds,
         }
-        if node_weight_attr is not None:
-            subproblem_params["balance_weights"] = balance_weights
 
     config = CSDDecompositionConfig(
         must_link=must_link, cannot_link=cannot_link,
+        node_weights=balance_weights,
         additional_constraints=additional_constraints,
         algo=algorithm,
         package=package,

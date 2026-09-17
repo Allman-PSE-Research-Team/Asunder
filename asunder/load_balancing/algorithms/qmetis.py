@@ -638,6 +638,8 @@ def run_qmetis(
         Modularity resolution :math:`\\gamma`.
     node_weights : sequence of int or None
         Positive integer balance weight for each matrix row.
+        Unlike edge weights, these are not quantized automatically. Scale
+        fractional loads and explicit load bounds to common integer units.
     **metis_options : Any
         Additional options forwarded to QMETIS.
 
@@ -675,7 +677,11 @@ def run_qmetis(
         if not np.all(np.isfinite(weights)) or np.any(weights <= 0):
             raise ValueError("node_weights must contain finite positive values.")
         if not np.all(weights == np.rint(weights)):
-            raise ValueError("node_weights must contain integer values.")
+            raise ValueError(
+                "node_weights must contain integer values. Scale weights and "
+                "explicit load bounds to common integer units before calling; "
+                "only edge weights are quantized automatically."
+            )
         internal_weight_attr = "__asunder_balance_weight"
         nx.set_node_attributes(
             graph,

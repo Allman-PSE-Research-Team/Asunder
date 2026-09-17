@@ -100,8 +100,14 @@ contain one finite positive integer per row. Graph-level node attributes also
 must be finite positive integers; a missing selected attribute defaults to
 one.
 
-Use another pricing backend when node loads cannot be represented as positive
-integers or when ignored diagonal mass makes QMETIS a poor search heuristic.
+Automatic quantization applies only to edge weights, not node loads. Convert
+fractional loads and explicit load bounds to common integer units yourself;
+see :doc:`load_balancing` for scaling and weighted K/R semantics. Changing only
+the pricing backend does not remove the integer-load requirement of the
+built-in LB/VFD workflow.
+
+Use another pricing backend when ignored diagonal mass makes QMETIS a poor
+search heuristic.
 
 Failure and fallback behavior
 -----------------------------

@@ -114,6 +114,10 @@ def qmetis_pricing_subproblem(
         Width of the permitted community-size range.
     R_bounds : tuple[int or None, int or None] or None
         Optional explicit lower and upper community-size bounds.
+    balance_weights : numpy.ndarray or None
+        Positive integer load per node; defaults to one. Fractional node
+        weights are not quantized like edge weights. Scale loads and explicit
+        bounds consistently before calling.
     gamma : float, default=1.0
         Modularity resolution passed to QMETIS and exact reduced-cost
         evaluation.
@@ -159,7 +163,11 @@ def qmetis_pricing_subproblem(
         if not np.all(np.isfinite(raw_weights)) or np.any(raw_weights <= 0):
             raise ValueError("balance_weights must contain finite positive values.")
         if not np.all(raw_weights == np.rint(raw_weights)):
-            raise ValueError("balance_weights must contain integer values.")
+            raise ValueError(
+                "balance_weights must contain integer values. Scale weights "
+                "and explicit R_bounds to common integer units before calling; "
+                "node weights are not scaled automatically."
+            )
         node_weights = np.rint(raw_weights).astype(int)
     total_balance_weight = int(node_weights.sum())
     _, R_max = resolve_balance_bounds(total_balance_weight, K, R, R_bounds)

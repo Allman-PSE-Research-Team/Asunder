@@ -518,10 +518,12 @@ def run_nonlinear_branch_and_price(
     ifc_params : dict or None
         Initial feasible column generator configuration. Defaults to
         one deterministic DSATUR-colored pairwise-feasible partition.
+        ``must_link`` and ``cannot_link`` must not be repeated in ``args``.
     refine_params : dict or None
         Optional Stage 1 column-refinement configuration passed unchanged to
         :func:`run_csd_decomposition`. It is independent of cardinality
-        enforcement. Supply ``refine_func`` and optional ``kwargs``.
+        enforcement. Supply ``refine_func`` and optional ``kwargs``;
+        only ``must_link`` and ``cannot_link`` are rejected in ``kwargs``.
     prob_method : str
         Probability-to-label method passed to the default linear-group
         refinement function.
@@ -718,11 +720,6 @@ def run_nonlinear_branch_and_price(
         A.shape[0],
         relation_name="must-link",
     )
-    initial_must_link = normalize_node_pairs(
-        [*active_must_link, *required_links],
-        A.shape[0],
-        relation_name="initial-column must-link",
-    )
 
     resolved_contract_graph = (
         cardinality_method == "reformulated"
@@ -737,8 +734,6 @@ def run_nonlinear_branch_and_price(
             "num": 1,
             "args": {
                 "N": A.shape[0],
-                "must_link": initial_must_link,
-                "cannot_link": active_cannot_link,
                 "n_parts": 1,
             },
         }

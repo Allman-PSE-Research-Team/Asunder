@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Literal, Optional
 
+from numpy.typing import ArrayLike
+
 from asunder.base.utils.matrix import (
     DEFAULT_MAX_DENSE_WORKING_BYTES,
     DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
@@ -28,12 +30,17 @@ class CSDDecompositionConfig:
         List of node pairs that must be together.
     cannot_link : list[tuple[int, int]]
         List of node pairs that must not be together.
+    node_weights : array-like of float, shape (N,), optional
+        Shared finite real node weights, defaulting to unit weights. Hooks
+        declaring ``node_weights`` or ``balance_weights`` receive the same
+        vector, summed by component after contraction. Consumer-specific
+        restrictions still apply; this does not reweight the adjacency.
     additional_constraints : dict[str, Any]
         Constraints beyond must- and cannot-links. For example, worthy edges (edges that can connect communities), community size, and balance constraints.
     contract_graph : bool
         Whether must-links are handled through graph contraction. Compatible
         cannot-links, initial-column constraints, warm starts, refinement
-        constraints, and load-balance weights are mapped to contracted
+        constraints, and shared node weights are mapped to contracted
         components automatically.
     stopping_window : int
         Maximum number of allowed stagnant CG iterations. After this, CG is terminated.
@@ -82,12 +89,18 @@ class CSDDecompositionConfig:
     seed : int or None
         Random seed value.
     ifc_params : dict[str, callable or dict or int]
-        Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments.
+        Initial-column generator, column count, and search arguments.
+        Only ``must_link`` and ``cannot_link`` are rejected in ``args``.
+        Repeated standard weight arguments must match ``node_weights``.
     refine_params : dict[str, callable or dict]
-        Refinement function and its corresponding arguments.
+        Refinement function and arguments. Only ``must_link`` and
+        ``cannot_link`` are rejected in ``kwargs``; non-pairwise constraints
+        and search settings remain configurable here. Standard weight
+        arguments must match ``node_weights``.
     subproblem_params : dict[str, Any]
         Keyword arguments supplied only to the selected pricing/subproblem
-        callable.
+        callable, excluding ``must_link`` and ``cannot_link``.
+        Standard weight arguments must match ``node_weights``.
     use_refined_column : bool
         Boolean that determines whether refined columns are used in the main column generation loop or not.
     refine_post_loop : bool
@@ -132,3 +145,4 @@ class CSDDecompositionConfig:
     column_storage: Literal["auto", "dense", "csr"] = "auto"
     sparse_column_density_threshold: float = DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD
     max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES
+    node_weights: ArrayLike | None = None

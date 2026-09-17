@@ -106,7 +106,11 @@ def project_partition_ilp(
         if not np.all(np.isfinite(raw_weights)) or np.any(raw_weights <= 0):
             raise ValueError("balance_weights must contain finite positive values.")
         if not np.all(raw_weights == np.rint(raw_weights)):
-            raise ValueError("balance_weights must contain integer values.")
+            raise ValueError(
+                "balance_weights must contain integer values. Scale weights "
+                "and explicit R_bounds to common integer units before calling; "
+                "node weights are not scaled automatically."
+            )
         node_weights = np.rint(raw_weights).astype(int)
     total_balance_weight = int(node_weights.sum())
 

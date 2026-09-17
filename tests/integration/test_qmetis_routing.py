@@ -47,11 +47,13 @@ def test_load_balancer_routes_qmetis_without_public_backend_parameters(monkeypat
     )
 
     assert captured["subproblem_fn"] is qmetis_pricing_subproblem
-    assert captured["config"].subproblem_params == {
+    pricing_params = captured["config"].subproblem_params
+    assert {key: pricing_params[key] for key in ("K", "R", "R_bounds")} == {
         "K": 2,
         "R": 0,
         "R_bounds": None,
     }
+    assert np.array_equal(captured["config"].node_weights, np.ones(4))
     assert np.array_equal(result.final_partition, partition)
     assert captured["config"].resolution == 1.25
     assert result.metadata["resolution"] == 1.25

@@ -14,31 +14,39 @@ def resolve_balance_bounds(
     R: int,
     R_bounds: tuple[int | None, int | None] | None = None,
 ) -> tuple[int, int]:
-    """Resolve and validate load-balancing community-size bounds.
+    """Resolve and validate integer community-load bounds.
 
     Parameters
     ----------
-    n_nodes : int
-        Number of graph nodes.
+    n_nodes : int or float
+        Total node weight, which must be integer-valued. Equals the node
+        count for unit weights; contraction preserves this total.
     K : int
         Number of requested communities.
     R : int
-        Width of the default permitted size range.
+        Width of the default permitted load range, in node-weight units.
     R_bounds : tuple[int or None, int or None] or None
-        Optional explicit lower and upper bounds. A missing endpoint is
-        replaced by one or ``n_nodes``, respectively.
+        Optional explicit integer lower and upper load bounds, in node-weight
+        units. A missing endpoint is replaced by one or ``n_nodes``, respectively.
 
     Returns
     -------
     lower : int
-        Inclusive minimum community size.
+        Inclusive minimum community load.
     upper : int
-        Inclusive maximum community size, capped at ``n_nodes``.
+        Inclusive maximum community load, capped at ``n_nodes``.
 
     Raises
     ------
     ValueError
         If node, community, range, or bound values are inconsistent.
+
+    Notes
+    -----
+    Default bounds use half-up rounding about ``n_nodes / K``. Consequently,
+    scaling both the weights and ``R`` need not scale the derived bounds
+    exactly. To preserve existing bounds, scale explicit ``R_bounds`` instead.
+    Node weights and bounds are never scaled automatically.
     """
 
     # Below, we respect the range parameter: R_max = R_min + R
@@ -49,7 +57,10 @@ def resolve_balance_bounds(
     # We, however, do not anticipate such issues as a graph that big should only be looked at from afar.
 
     if not float(n_nodes).is_integer():
-        raise ValueError("The total balance weight must be an integer.")
+        raise ValueError(
+            "The total balance weight must be an integer. Scale node weights "
+            "and explicit R_bounds to common integer units before calling."
+        )
     n_nodes = int(n_nodes)
     if n_nodes < 0:
         raise ValueError("n_nodes must be nonnegative.")

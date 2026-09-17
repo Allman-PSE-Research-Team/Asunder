@@ -50,6 +50,15 @@ Before writing a custom constraint, use the built-in arguments when they fit:
   either ``R`` or ``R_bounds``; and
 - pass ``balance_weights`` when balance means load rather than node count.
 
+When using ModularVFD through ``run_csd_decomposition``, supply these shared
+weights as the main ``node_weights`` instead. The decomposition forwards them
+to the adapter's ``balance_weights`` parameter and sums them over contracted
+components. Application-specific additional vectors remain part of your custom
+constraint data.
+ModularVFD requires positive integer weights even when balance is disabled;
+there is no automatic fractional-weight scaling. See
+:doc:`../load_balancing` for explicit conversion of weights and load bounds.
+
 First complete example
 ----------------------
 

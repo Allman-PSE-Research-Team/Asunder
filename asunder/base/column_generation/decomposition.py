@@ -109,6 +109,8 @@ def CSD_decomposition(
     column_storage="auto",
     sparse_column_density_threshold=DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
     max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
+    *,
+    node_weights=None,
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
@@ -138,8 +140,20 @@ def CSD_decomposition(
         List of node pairs that must be together.
     cannot_link : list[tuple[int, int]]
         List of node pairs that must not be together.
+    node_weights : array-like of float, shape (N,), optional
+        Shared finite real node weights, defaulting to one per input node.
+        Compatible hooks receive these as ``node_weights`` or
+        ``balance_weights``. Contraction sums weights within each component;
+        adjacency, degree vector ``a``, and modularity are not reweighted.
+        Individual hooks may impose additional restrictions, such as positive
+        integer loads. ``balance_weights`` also supplies this
+        vector when ``node_weights`` is omitted. Repeated weight arguments
+        must agree; application-specific vectors need distinct argument names.
     additional_constraints : dict[str, Any]
-        Constraints beyond must- and cannot-links. For example, worthy edges (edges that can connect communities), community size, and balance constraints.
+        Additional settings passed to the master, such as worthy edges or
+        balance bounds. Non-pairwise hook settings must also be supplied in
+        the corresponding generator, refinement, or subproblem arguments.
+        Shared node weights are propagated separately.
     contract_graph : bool
         Whether must-links are handled by graph contraction. Cannot-links and
         initial-column constraints are mapped to component indices; a
@@ -191,11 +205,17 @@ def CSD_decomposition(
     seed : int or None
         Random seed value.
     ifc_params : dict[str, callable or dict or int]
-        Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments (excluding seed values).
+        Initial-column generator, column count, and arguments. Only
+        ``must_link`` and ``cannot_link`` are reserved and injected into
+        declared hook parameters. Standard weight arguments must match
+        ``node_weights``; other settings remain caller-controlled.
     refine_params : dict[str, callable or dict]
-        Refinement function and its corresponding arguments (excluding seed values).
+        Refinement function and arguments. Pairwise constraints belong to the
+        main workflow, not ``kwargs``. Balance settings, custom constraints,
+        provenance, and search settings are allowed in ``kwargs``.
     subproblem_params : dict[str, Any] or None
-        Additional keyword arguments passed to the pricing/subproblem callable.
+        Pricing arguments, including non-pairwise constraint settings.
+        Pairwise constraints enter through master duals, not these arguments.
     use_refined_column : bool
         Whether to run refinement and add its columns inside the main column
         generation loop.
@@ -228,6 +248,9 @@ def CSD_decomposition(
         in contracted component dimensions, and ``f_stars`` score those
         contracted columns. Each record also contains ``node2comp``, mapping
         original node indices to contracted component indices.
+
+        If contraction leaves one component, the unique candidate is returned
+        without calling the master, pricing, or refinement hooks.
     """
     validate_storage_options(
         column_storage,
@@ -324,6 +347,19 @@ def CSD_decomposition(
     subproblem_params = (
         {} if subproblem_params is None else dict(subproblem_params)
     )
+    owned_constraint_keys = {"must_link", "cannot_link"}
+    for name, options in (
+        ("ifc_params['args']", ifc_params["args"]),
+        ("refine_params['kwargs']", refine_kwargs),
+        ("subproblem_params", subproblem_params),
+    ):
+        forbidden = owned_constraint_keys.intersection(options)
+        if forbidden:
+            raise ValueError(
+                f"{name} cannot contain workflow-owned pairwise constraints: "
+                f"{', '.join(sorted(forbidden))}. Set must_link/cannot_link "
+                "on the main workflow instead."
+            )
 
     # validate warm start when necessary
     columns = [] if columns is None else list(columns)
@@ -342,6 +378,40 @@ def CSD_decomposition(
     additional_constraints = (
         {} if additional_constraints is None else dict(additional_constraints)
     )
+    # normalize node weights
+    if node_weights is None:
+        node_weights = additional_constraints.get("node_weights")
+    if node_weights is None:
+        node_weights = additional_constraints.get("balance_weights")
+    node_weights = (
+        np.ones(A.shape[0], dtype=float) if node_weights is None
+        else np.asarray(node_weights, dtype=float)
+    )
+    if node_weights.shape != (A.shape[0],) or not np.all(np.isfinite(node_weights)):
+        raise ValueError("node_weights must contain one finite real value per input node.")
+
+    weight_options = (
+        ("additional_constraints", mp_function, additional_constraints),
+        ("ifc_params['args']", ifc_params.get("generator"), ifc_params["args"]),
+        ("refine_params['kwargs']", refine_func, refine_kwargs),
+        ("subproblem_params", sp_function, subproblem_params),
+    )
+    for name, hook, options in weight_options:
+        parameters = inspect.signature(hook).parameters if callable(hook) else {}
+        for key in ("node_weights", "balance_weights"):
+            if key not in options and key not in parameters:
+                continue
+            supplied = options.get(key)
+            if supplied is not None and not np.array_equal(
+                np.asarray(supplied, dtype=float), node_weights
+            ):
+                raise ValueError(
+                    f"{name}['{key}'] must match the main node_weights. "
+                    "Use a distinct argument name for application-specific weights."
+                )
+            options[key] = node_weights
+    if additional_constraints.get("LB"):
+        additional_constraints["balance_weights"] = node_weights
     refinement_must_link = list(must_link)
     worthy_edges = additional_constraints.get("worthy_edges")
     if worthy_edges is not None:
@@ -349,29 +419,18 @@ def CSD_decomposition(
         refinement_must_link = sorted(set(refinement_must_link).union(
             pair for pair in structural_edge_pairs(A) if pair not in worthy
         ))
-    subproblem_signature = inspect.signature(sp_function)
-    if (
-        "balance_weights" in subproblem_signature.parameters
-        and "balance_weights" in additional_constraints
+    # Only pairwise constraints are owned by CSD. Pricing receives these via
+    # master duals; generators and refiners receive their declared arguments.
+    for hook, options in (
+        (ifc_params.get("generator"), ifc_params["args"]),
+        (refine_func, refine_kwargs),
     ):
-        subproblem_params.setdefault(
-            "balance_weights",
-            additional_constraints["balance_weights"],
-        )
-    if callable(refine_func):
-        if "must_link" in refine_signature.parameters:
-            refine_kwargs["must_link"] = normalize_node_pairs(
-                [*refinement_must_link, *(refine_kwargs.get("must_link") or ())],
-                A.shape[0],
-                relation_name="refinement must-link",
-            )
-        if "cannot_link" in refine_signature.parameters:
-            refine_kwargs.setdefault("cannot_link", cannot_link)
-        if "balance_weights" in refine_signature.parameters and "balance_weights" in additional_constraints:
-            refine_kwargs.setdefault(
-                "balance_weights",
-                additional_constraints["balance_weights"],
-            )
+        if callable(hook):
+            parameters = inspect.signature(hook).parameters
+            if "must_link" in parameters:
+                options["must_link"] = list(refinement_must_link)
+            if "cannot_link" in parameters:
+                options["cannot_link"] = list(cannot_link)
 
     # contract graph if necessary
     edge_constraints_active = (
@@ -379,31 +438,23 @@ def CSD_decomposition(
         and additional_constraints["worthy_edges"] is not None
     )
     if contract_graph and (must_link or edge_constraints_active):
-        original_balance_weights = np.asarray(
-            additional_constraints.get("balance_weights", np.ones(A.shape[0], dtype=int))
-        )
-        if original_balance_weights.shape != (A.shape[0],):
-            raise ValueError("balance_weights must contain one value per original node.")
-        if (
-            not np.all(np.isfinite(original_balance_weights))
-            or np.any(original_balance_weights <= 0)
-            or not np.all(original_balance_weights == np.rint(original_balance_weights))
-        ):
-            raise ValueError("balance_weights must contain positive integers.")
         A, node2comp = contract_adj_matrix_new(
             A, additional_constraints.get("worthy_edges"), must_link,
             max_dense_working_bytes=max_dense_working_bytes,
         )
         a = np.asarray(A.sum(axis=0)).reshape(-1)
         m = float(np.sum(a))
-        additional_constraints["worthy_edges"] = None
-        component_balance_weights = np.bincount(
+        if edge_constraints_active:
+            additional_constraints["worthy_edges"] = None
+        node_weights = np.bincount(
             node2comp,
-            weights=original_balance_weights,
+            weights=node_weights,
             minlength=A.shape[0],
         )
-        if additional_constraints.get("LB") or "balance_weights" in additional_constraints:
-            additional_constraints["balance_weights"] = component_balance_weights
+        for _, _, options in weight_options:
+            for key in ("node_weights", "balance_weights"):
+                if key in options:
+                    options[key] = node_weights
         cannot_link = contract_node_pairs(
             cannot_link,
             node2comp,
@@ -432,17 +483,19 @@ def CSD_decomposition(
             )
         if "must_link" in generator_args:
             generator_args["must_link"] = []
-        if "node_weights" in generator_args:
-            generator_args["node_weights"] = component_balance_weights
 
         if "cannot_link" in refine_kwargs:
             refine_kwargs["cannot_link"] = cannot_link
         if "must_link" in refine_kwargs:
             refine_kwargs["must_link"] = []
-        if "balance_weights" in refine_kwargs:
-            refine_kwargs["balance_weights"] = component_balance_weights
-        if "node_weights" in refine_kwargs:
-            refine_kwargs["node_weights"] = component_balance_weights
+        for options in (generator_args, refine_kwargs, subproblem_params):
+            hook_edges = options.get("worthy_edges")
+            if (
+                edge_constraints_active and hook_edges is not None
+                and {tuple(sorted(edge)) for edge in hook_edges} == worthy
+            ):
+                # This identical edge rule is already enforced by contraction.
+                options["worthy_edges"] = None
         if callable(refine_func) and "component_members" in refine_signature.parameters:
             supplied_members = refine_kwargs.get("component_members")
             if supplied_members is None:
@@ -461,8 +514,6 @@ def CSD_decomposition(
             refine_kwargs["component_members"] = tuple(
                 tuple(members) for members in contracted_members
             )
-        if "balance_weights" in subproblem_params:
-            subproblem_params["balance_weights"] = component_balance_weights
 
         if columns is not None and len(columns) > 0:
             columns = [
@@ -484,7 +535,7 @@ def CSD_decomposition(
                 requested_k = int(additional_constraints.get("K", 1))
                 if requested_k != 1:
                     return None
-                total_weight = float(component_balance_weights[0])
+                total_weight = float(node_weights[0])
                 bounds = additional_constraints.get("R_bounds")
                 if bounds is None:
                     width = int(additional_constraints.get("R", 0))
@@ -504,6 +555,13 @@ def CSD_decomposition(
                 compute_f_star(A, a, m, coarse_partition, gamma=resolution)
                 if m > 0
                 else 0.0
+            )
+
+            print(
+                "The graph contracted to one component. Only inexpensive "
+                "built-in checks were performed; the configured master, "
+                "pricing, and column-refinement hooks were skipped. "
+                "Custom feasibility was not checked."
             )
             return [{
                 "lambda_sol": [1.0],

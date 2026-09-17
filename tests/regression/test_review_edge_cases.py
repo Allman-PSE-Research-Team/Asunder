@@ -214,7 +214,7 @@ def test_contracted_decomposition_maps_cannot_links_for_initial_columns():
         ifc_params={
             "generator": make_simple_partition,
             "num": 1,
-            "args": {"N": 4, "cannot_link": [(0, 3)]},
+            "args": {"N": 4},
         },
         final_master_solve=False,
         max_iterations=1,
@@ -343,17 +343,17 @@ def test_load_balancing_contraction_propagates_component_weights():
         master,
         pricing,
         must_link=[(0, 1)],
+        node_weights=[1, 2, 3],
         additional_constraints={
             "LB": True,
             "K": 2,
             "R": 1,
-            "balance_weights": np.ones(3, dtype=int),
         },
         contract_graph=True,
         ifc_params={
             "generator": generator,
             "num": 1,
-            "args": {"N": 3, "node_weights": np.ones(3, dtype=int)},
+            "args": {"N": 3},
         },
         final_master_solve=False,
         max_iterations=1,
@@ -361,9 +361,9 @@ def test_load_balancing_contraction_propagates_component_weights():
         verbose=-1,
     )
 
-    assert np.array_equal(captured["generator_weights"], np.array([2.0, 1.0]))
-    assert np.array_equal(captured["master_weights"], np.array([2.0, 1.0]))
-    assert np.array_equal(captured["pricing_weights"], np.array([2.0, 1.0]))
+    assert np.array_equal(captured["generator_weights"], np.array([3.0, 3.0]))
+    assert np.array_equal(captured["master_weights"], np.array([3.0, 3.0]))
+    assert np.array_equal(captured["pricing_weights"], np.array([3.0, 3.0]))
     assert out[-1]["node2comp"].tolist() == [0, 0, 1]
 
 

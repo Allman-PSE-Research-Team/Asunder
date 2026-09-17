@@ -262,9 +262,12 @@ def _assert_real_decomposition_quality(A, labels_gt, results):
 
 def _tracked_package_refine(counter):
     """Track refinement"""
-    def _refine(A, partition, **kwargs):
+    def _refine(A, partition, *, must_link=(), cannot_link=(), **kwargs):
         counter["count"] += 1
-        return refine_partition_linear_group(A=A, partition=partition, **kwargs)
+        return refine_partition_linear_group(
+            A=A, partition=partition, must_link=must_link,
+            cannot_link=cannot_link, **kwargs,
+        )
 
     return _refine
 

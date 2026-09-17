@@ -87,8 +87,8 @@ def _validated_final_candidate(
 
         if not partition_satisfies_balance_constraints(
             candidate,
-            K=constraints.get("K"),
-            R=constraints.get("R", 0),
+            K=constraints.get("K", 2),
+            R=constraints.get("R", 1),
             R_bounds=constraints.get("R_bounds"),
             balance_weights=constraints.get("balance_weights"),
         ):
@@ -187,7 +187,9 @@ class CSDDecomposition:
         m : float
             Twice the total weight in the graph.
         **overrides : Any
-            Additional keyword arguments.
+            Configuration overrides, including shared ``node_weights`` in
+            input-row order. Weights default to ones and are summed on
+            contraction before being passed to compatible hooks.
         
         Returns
         -------
@@ -241,13 +243,17 @@ class CSDDecomposition:
                 )
             )
         final = records[-1] if records else None
+        final_constraints = dict(cfg.get("additional_constraints") or {})
+        if final_constraints.get("LB") and cfg.get("node_weights") is not None:
+            # Final partitions are expanded: validate with original-node weights.
+            final_constraints["balance_weights"] = cfg["node_weights"]
         final_partition, final_partition_source = _select_final_partition(
             raw,
             A=A,
             n_nodes=A.shape[0],
             must_link=cfg.get("must_link"),
             cannot_link=cfg.get("cannot_link"),
-            additional_constraints=cfg.get("additional_constraints"),
+            additional_constraints=final_constraints,
             max_dense_working_bytes=cfg["max_dense_working_bytes"],
         )
         metadata = {
@@ -299,7 +305,11 @@ def run_csd_decomposition(
     subproblem_fn : SubproblemFn
         Subproblem function.
     **kwargs : Any
-        Additional keyword arguments.
+        Configuration overrides. Supply shared ``node_weights`` here or in
+        ``config``, with one finite real value per input row. Compatible hooks
+        receive these weights, summed by component after contraction. Omitted
+        weights default to ones; application-specific vectors can still be
+        supplied under distinct names in hook arguments.
     
     Returns
     -------

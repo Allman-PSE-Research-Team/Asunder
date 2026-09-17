@@ -64,8 +64,6 @@ Run a minimal decomposition
            "args": {
                "N": A.shape[0],
                "K": 2,
-               "must_link": must_link,
-               "cannot_link": cannot_link,
                "max_K_increase": 0,
                "n_parts": 1,
            },
@@ -121,6 +119,29 @@ generator arguments. ``algo`` and ``package`` select the pricing backend.
 ``refine_post_loop`` controls the final pass. Complete callable signatures and
 matrix requirements are documented in
 :doc:`../reference/development/special_topics`.
+
+Configure ``must_link`` and ``cannot_link`` once on the main workflow.
+Repeating these two keys in generator arguments, refinement kwargs, or pricing
+parameters raises ``ValueError``. Generators and refiners receive the resolved
+pairwise constraints through their declared parameters. Master worthy-edge
+rules contribute their implied must-links too.
+
+Supply shared node weights once with ``node_weights=[...]`` on the config or
+``run_csd_decomposition``. They default to ones and are summed when nodes are
+contracted. Compatible hooks receive the same vector through ``node_weights``
+or ``balance_weights``; repeated standard weight arguments must agree. The
+vector does not change adjacency weights or the modularity objective.
+Built-in LB/VFD algorithms require positive integer weights; generic CSD can
+forward finite real weights to custom hooks. See
+:doc:`../reference/load_balancing` for explicit scaling and weighted ``K/R``
+semantics.
+
+Non-pairwise settings, including balance bounds and custom constraints,
+remain configurable through each hook's arguments. ``additional_constraints``
+supplies master settings; CSD does not copy balance settings from the master
+into the hooks. Top-level workflows such as ``LoadBalancer`` configure those
+hooks for you. Additional application-specific weight vectors belong in hook
+arguments under distinct names. Search settings remain configurable as before.
 
 For large sparse graphs, ``column_storage="auto"`` stores low-density hard
 columns as CSR and dense columns as Boolean arrays. See

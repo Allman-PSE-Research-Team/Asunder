@@ -103,6 +103,12 @@ Balance controls
    * - ``resolution=1.25``
      - Change the modularity resolution used by pricing and scoring.
 
+``R`` and ``R_bounds`` are measured in the same units as node weights, not
+percentages. Fractional loads must be converted explicitly to positive integer
+units together with their bounds; Asunder does not scale them automatically.
+See :doc:`../reference/load_balancing` for the weighted K/R formula and why
+explicit bounds are safest when changing units.
+
 Search and runtime controls
 ---------------------------
 
@@ -124,6 +130,10 @@ definitions. It raises ``RuntimeError`` if the search finishes without an
 integral feasible partition. In that case, check the pairwise constraints and
 bounds first, then consider a larger search budget or
 ``projection_repair=True`` when an appropriate solver is available.
+
+If contraction leaves one component, a feasibility note is printed out explaining
+that the returned matrix is not a certificate that custom constraints
+were checked.
 
 Next steps
 ----------

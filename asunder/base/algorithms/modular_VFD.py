@@ -261,7 +261,11 @@ def _build_components(
         if not np.all(np.isfinite(raw_weights)):
             raise ValueError("node_weights must contain only finite values.")
         if np.any(raw_weights <= 0) or not np.all(raw_weights == np.rint(raw_weights)):
-            raise ValueError("node_weights must contain positive integers.")
+            raise ValueError(
+                "node_weights must contain positive integers. Scale weights "
+                "and explicit R_bounds to common integer units before calling; "
+                "node weights are not scaled automatically."
+            )
         weights = np.rint(raw_weights).astype(int)
 
     for relation_name, pairs, reject_self in (
@@ -715,16 +719,16 @@ def _ensure_at_least_K_blocks(
 
 def _range_bounds_from_KR(N: int, K: int, R: int) -> Tuple[int, int]:
     """
-    Compute lower and upper block-size bounds from ``(N, K, R)``.
+    Compute lower and upper community-load bounds from ``(N, K, R)``.
 
     Parameters
     ----------
     N : int
-        Number of nodes.
+        Total node weight, or the node count when every weight is one.
     K : int
         Number of partitions.
     R : int
-        Allowed size range width.
+        Allowed load range width, in the same integer units as node weights.
 
     Returns
     -------
@@ -1133,7 +1137,10 @@ def modular_very_fortunate_descent(
         supplied, these replace the bounds derived from ``K`` and ``R``.
     balance_weights : sequence of int or None, default=None
         Positive integer node weights used by balance constraints. Unit
-        weights are used by default.
+        weights are used by default. The integer requirement also applies
+        when ``use_K_constraint=False`` because component weights are exposed
+        to custom constraints. Fractional weights are not scaled automatically;
+        scale weights and explicit load bounds to common integer units.
     gamma : float, default=1.0
         Modularity resolution used by the refinement objective.
     constraints : sequence of VFDConstraint, default=()

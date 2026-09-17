@@ -120,7 +120,9 @@ def very_fortunate_descent(
         If True, build a fallback co-association proxy from orbits when needed.
     balance_weights : sequence of int or None, default=None
         Positive integer node weights used to enforce community load bounds.
-        Unit weights are used by default.
+        Unit weights are used by default. Fractional weights are not scaled
+        automatically; scale weights and explicit ``R_bounds`` to common
+        integer units before calling.
     gamma : float, default=1.0
         Resolution parameter used by the modularity objective.
 
