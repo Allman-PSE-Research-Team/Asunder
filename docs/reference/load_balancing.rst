@@ -24,6 +24,13 @@ under distinct hook argument names.
 The K/R rule
 -------------
 
+Load balancing primarily enforces community-load bounds (``R_bounds``), which 
+reduce to community-size bounds for unit node weights. Supplying ``K`` and ``R`` 
+conveniently derives these bounds. The workflow attempts to match ``K`` where 
+possible, but prioritizes maximizing modularity within the provided bounds.
+As such, it does not guarantee exactly ``K`` communities when better modularity 
+can be obtained with a different ``K``.
+
 Let :math:`W=\sum_i w_i` be total node weight. ``K`` is the requested number of
 communities; ``R`` is an absolute load-window width in the same units as the
 weights, not a percentage. Without explicit ``R_bounds``, the rule is:

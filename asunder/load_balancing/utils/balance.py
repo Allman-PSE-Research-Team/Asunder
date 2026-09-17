@@ -138,7 +138,7 @@ def partition_satisfies_balance_constraints(
     R_bounds: tuple[int | None, int | None] | None = None,
     balance_weights=None,
 ) -> bool:
-    """Return whether a partition has exactly ``K`` weight-balanced groups."""
+    """Return whether a partition satisfies the balance constraints."""
     matrix = partition
     n_nodes = matrix.shape[0]
     try:
@@ -159,10 +159,7 @@ def partition_satisfies_balance_constraints(
         ):
             return False
     labels = partition_matrix_to_vector(matrix)
-    communities = np.unique(labels)
-    if communities.size != K:
-        return False
-    loads = np.bincount(labels, weights=weights, minlength=K)
+    loads = np.bincount(labels, weights=weights)
     try:
         lower, upper = resolve_balance_bounds(
             float(np.sum(weights)),

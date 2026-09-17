@@ -200,14 +200,17 @@ def LoadBalancer(
         For a selected cluster count, the lower and upper bounds are computed from the corresponding
         balanced range rule.
     K : int
-        Number of communities.
+        Number of communities. Load balancing primarily enforces community-load bounds (``R_bounds``), which reduce to community-size bounds
+        for unit node weights. Supplying ``K`` with ``R`` conveniently derives these bounds. The workflow attempts to match ``K`` where 
+        possible, but does not aim to guarantee exactly ``K``.
     resolution : float, default=1.0
         Modularity resolution parameter used by pricing and column scoring.
         Algorithms that cannot apply non-default resolution reject it.
     R_bounds : tuple[int, int] | None
         Minimum and maximum total node weight per community.
     algo : str
-        Name of heuristic subproblem used to replace the ILP subproblem. Third-party algorithms combine adjacency and dual information into a unified input while custom algorithms treat adjacency and duals as separate inputs. Supported third-party algorithms are listed under the ``package`` parameter.
+        Name of heuristic subproblem used to replace the ILP subproblem. Third-party algorithms combine adjacency and dual information into a 
+        unified input while custom algorithms treat adjacency and duals as separate inputs. Supported third-party algorithms are listed under the ``package`` parameter.
         Available custom algorithm options include:
 
         ``"spectral"``:

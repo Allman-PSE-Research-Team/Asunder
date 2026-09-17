@@ -83,6 +83,11 @@ Understand the result
 Balance controls
 ----------------
 
+Load balancing primarily enforces community-load bounds (``R_bounds``), which 
+reduce to community-size bounds for unit node weights. Supplying ``K`` and ``R`` 
+conveniently derives these bounds. The workflow attempts to match ``K`` where 
+possible, but does not guarantee exactly ``K`` communities.
+
 .. list-table:: Common options
    :header-rows: 1
    :widths: 25 75
