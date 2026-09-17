@@ -300,6 +300,24 @@ def test_contracted_single_component_short_circuits_pricing():
     assert np.array_equal(out[0]["columns"][0], np.ones((1, 1), dtype=int))
     assert out[0]["lambda_sol"] == [1.0]
 
+    # Tiny contracted work must not conceal the original-size allocation.
+    original = csr_matrix(nx.to_numpy_array(nx.path_graph(16)))
+    kwargs = dict(
+        must_link=[(0, node) for node in range(1, 16)],
+        contract_graph=True, disable_tqdm=True, verbose=-1,
+    )
+    with pytest.raises(MemoryError, match="original-size partition expansion"):
+        CSD_decomposition(
+            original, np.asarray(original.sum(axis=1)).ravel(), float(original.sum()),
+            unexpected_call, unexpected_call, max_dense_working_bytes=80, **kwargs,
+        )
+    for cap in (512, None):
+        expanded = CSD_decomposition(
+            original, np.asarray(original.sum(axis=1)).ravel(), float(original.sum()),
+            unexpected_call, unexpected_call, max_dense_working_bytes=cap, **kwargs,
+        )
+        assert np.array_equal(expanded[-1]["z_sol"], np.ones((16, 16), dtype=bool))
+
 
 def test_load_balancing_contraction_propagates_component_weights():
     """Contracted load balancing counts original node mass, not supernodes."""

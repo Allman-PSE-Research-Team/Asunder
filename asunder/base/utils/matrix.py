@@ -66,14 +66,10 @@ def choose_column_storage(
     column_storage: ColumnStorage,
     sparse_column_density_threshold: float,
 ) -> Literal["dense", "csr"]:
-    """Resolve automatic column storage from measured density."""
+    """Resolve storage for an existing column, preserving its format in auto mode."""
     if column_storage != "auto":
         return column_storage
-    return (
-        "csr"
-        if matrix_density(matrix) <= float(sparse_column_density_threshold)
-        else "dense"
-    )
+    return matrix_storage(matrix)
 
 
 def estimate_dense_working_bytes(
@@ -109,12 +105,36 @@ def ensure_dense_working_set(
     working_arrays: float = 1.0,
     max_dense_working_bytes: int | None,
     operation: str,
+    extra_bytes: int = 0,
 ) -> int:
     """Reject a package-created dense workspace that exceeds its byte cap.
 
-    Returns the estimated byte count so callers may record it in metadata.
+    Parameters
+    ----------
+    shape : tuple of int
+        Shape of one dense array.
+    dtype : numpy dtype, optional
+        Array element type.
+    working_arrays : float, default=1.0
+        Estimated number of simultaneous arrays of this shape and dtype.
+    max_dense_working_bytes : int or None
+        Maximum estimate in bytes; ``None`` disables the guard.
+    operation : str
+        Human-readable operation name included in errors.
+    extra_bytes : int, default=0
+        Additional scratch space with a different shape or dtype.
+
+    Returns
+    -------
+    int
+        Estimated working-set bytes.
+
+    Raises
+    ------
+    MemoryError
+        If the estimate exceeds the configured cap.
     """
-    required = estimate_dense_working_bytes(
+    required = int(extra_bytes) + estimate_dense_working_bytes(
         shape,
         dtype=dtype,
         working_arrays=working_arrays,
@@ -128,7 +148,8 @@ def ensure_dense_working_set(
         raise MemoryError(
             f"{operation} requires an estimated {required_mib:.1f} MiB dense "
             f"working set, exceeding max_dense_working_bytes={limit_mib:.1f} "
-            "MiB. Select a sparse-compatible backend, raise the limit, or set "
+            f"MiB. Set max_dense_working_bytes>={required}, select a "
+            "sparse-compatible backend, or set "
             "max_dense_working_bytes=None to disable the guard."
         )
     return required
@@ -142,15 +163,47 @@ def checked_to_dense(
     max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
     operation: str = "dense matrix conversion",
 ):
-    """Convert a sparse matrix after checking the estimated working set.
+    """Convert a matrix after checking the estimated dense working set.
 
-    Existing dense inputs are returned as NumPy arrays without applying the
-    cap merely because of their current size. The guard protects the new dense
-    allocation required when the input is sparse; callers separately guard
-    any additional dense workspace they create.
+    Matching-dtype dense inputs need no conversion allocation. A
+    ``working_arrays`` estimate greater than one also describes downstream
+    workspace and is checked for dense inputs. Sparse values are cast before
+    densification so only the destination dense array is allocated.
+
+    Parameters
+    ----------
+    matrix : numpy.ndarray or scipy.sparse.spmatrix
+        Array to convert.
+    dtype : numpy dtype, optional
+        Output element type; defaults to float64.
+    working_arrays : float, default=1.0
+        Estimated simultaneous dense arrays, including downstream workspace.
+    max_dense_working_bytes : int or None, default=536870912
+        Estimated allocation limit; ``None`` disables the guard.
+    operation : str, default="dense matrix conversion"
+        Description used in allocation errors.
+
+    Returns
+    -------
+    numpy.ndarray
+        Dense values. Matching-dtype dense input is returned without copying.
+
+    Raises
+    ------
+    MemoryError
+        If conversion or additional workspaces exceed the configured cap.
     """
     if not sparse.issparse(matrix):
-        return np.asarray(matrix, dtype=dtype)
+        values = np.asarray(matrix)
+        if values.dtype != np.dtype(dtype) or working_arrays > 1:
+            ensure_dense_working_set(
+                values.shape,
+                dtype=dtype,
+                working_arrays=working_arrays,
+                max_dense_working_bytes=max_dense_working_bytes,
+                operation=operation,
+            )
+        return np.asarray(values, dtype=dtype)
     ensure_dense_working_set(
         matrix.shape,
         dtype=dtype,
@@ -158,7 +211,7 @@ def checked_to_dense(
         max_dense_working_bytes=max_dense_working_bytes,
         operation=operation,
     )
-    return matrix.toarray().astype(dtype, copy=False)
+    return matrix.astype(dtype, copy=False).toarray()
 
 
 def normalize_adjacency(A, *, dtype=np.float64):
@@ -183,7 +236,9 @@ def is_symmetric(matrix, *, atol: float = 1e-10) -> bool:
         difference = sparse.csr_matrix(matrix - matrix.T)
         difference.eliminate_zeros()
         return difference.nnz == 0 or bool(np.max(np.abs(difference.data)) <= atol)
-    return bool(np.allclose(matrix, np.asarray(matrix).T, atol=atol, rtol=0))
+    values = np.asarray(matrix)
+    return all(np.allclose(row, values[:, index], atol=atol, rtol=0) for index, row in enumerate(values))
+    # return bool(np.allclose(matrix, np.asarray(matrix).T, atol=atol, rtol=0)) # May be better for small/medium arrays.
 
 
 def structural_edge_pairs(A) -> tuple[tuple[int, int], ...]:
@@ -197,5 +252,9 @@ def structural_edge_pairs(A) -> tuple[tuple[int, int], ...]:
                 if value != 0
             )
         )
-    rows, columns = np.nonzero(np.triu(np.asarray(A), k=1))
-    return tuple((int(row), int(column)) for row, column in zip(rows, columns))
+    values = np.asarray(A)
+    return tuple(
+        (row, row + 1 + int(offset))
+        for row in range(values.shape[0])
+        for offset in np.flatnonzero(values[row, row + 1:])
+    )

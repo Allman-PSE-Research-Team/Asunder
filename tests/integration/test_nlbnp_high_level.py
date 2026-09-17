@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import networkx as nx
 import numpy as np
 import pytest
+from scipy import sparse
 
 import asunder.nlbnp.algorithms.refinement as refinement_module
 import asunder.nlbnp.workflow as workflow_module
@@ -97,7 +98,7 @@ def test_nonlinear_branch_and_price_can_derive_worthy_edges_from_attribute():
     assert result.metadata["worthy_edges"] == [(0, 1)]
 
 
-def test_nonlinear_branch_and_price_accepts_adjacency_matrix():
+def test_nonlinear_branch_and_price_accepts_adjacency_matrix(monkeypatch):
     A = np.array(
         [
             [0, 1, 0],
@@ -107,17 +108,40 @@ def test_nonlinear_branch_and_price_accepts_adjacency_matrix():
         dtype=float,
     )
 
-    result = NonlinearBranchAndPrice(
-        A,
-        worthy_edges=[(1, 2)],
-        nonlinear_nodes=[0],
-        master_fn=_master,
-        subproblem_fn=_subproblem,
-        use_refined_column=False,
-        final_master_solve=False,
-        disable_tqdm=True,
-        verbose=-1,
-    )
+    original_conversion = workflow_module.checked_to_dense
+    conversion_caps = []
+
+    def capture_conversion(matrix, **kwargs):
+        conversion_caps.append(kwargs["max_dense_working_bytes"])
+        return original_conversion(matrix, **kwargs)
+
+    monkeypatch.setattr(workflow_module, "checked_to_dense", capture_conversion)
+    for cap in (1024, None):
+        result = NonlinearBranchAndPrice(
+            A.astype(np.uint8),
+            worthy_edges=[(1, 2)],
+            nonlinear_nodes=[0],
+            master_fn=_master,
+            subproblem_fn=_subproblem,
+            use_refined_column=False,
+            final_master_solve=False,
+            disable_tqdm=True,
+            verbose=-1,
+            max_dense_working_bytes=cap,
+        )
+        assert conversion_caps[-1] == cap
+
+    for entrypoint in (NonlinearBranchAndPrice, CorePeripheryPartition):
+        for dtype in (bool, np.uint8, np.float32):
+            with pytest.raises(MemoryError, match="NLBNP adjacency dtype normalization"):
+                entrypoint(A.astype(dtype), max_dense_working_bytes=1)
+
+    normalized, _, _ = workflow_module._coerce_graph_input(A, max_dense_working_bytes=1)
+    assert normalized is A
+    for graph in (sparse.csr_matrix(A), nx.from_numpy_array(A)):
+        normalized, _, _ = workflow_module._coerce_graph_input(graph, max_dense_working_bytes=1)
+        assert sparse.isspmatrix_csr(normalized)
+        assert np.array_equal(normalized.toarray(), A)
 
     assert result.final_partition.shape == (3, 3)
     assert result.metadata["node_label_map"] == {0: 0, 1: 1, 2: 2}

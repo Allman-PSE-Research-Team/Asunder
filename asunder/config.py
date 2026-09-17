@@ -68,9 +68,11 @@ class CSDDecompositionConfig:
         Modularity resolution parameter. Pricing algorithms that do not
         implement non-default resolution reject values other than ``1``.
     column_storage : {"auto", "dense", "csr"}
-        Physical storage policy for binary co-association columns.
+        Physical storage policy for binary co-association columns. Automatic mode
+        preserves supplied dense/CSR representations, including mixed pools.
     sparse_column_density_threshold : float
-        Maximum measured density at which automatic storage uses CSR.
+        Maximum density for newly constructed automatic CSR columns; CSR must
+        also have a smaller estimated footprint than dense Boolean storage.
     max_dense_working_bytes : int or None
         Maximum operation-specific estimate for package-created dense work
         arrays. Sparse-compatible operations retain CSR; dense-only boundaries

@@ -1,5 +1,6 @@
 import networkx as nx
 import numpy as np
+import pytest
 
 from asunder import CSDDecompositionConfig, refine_partition_modular_vfd, run_csd_decomposition
 from asunder.base.algorithms.modular_VFD import modular_very_fortunate_descent
@@ -186,7 +187,18 @@ def test_zero_k_increase_never_silently_changes_requested_community_count():
     assert columns == []
 
 
-def test_modular_vfd_adapter_supports_weights_constraints_and_resolution():
+@pytest.mark.parametrize("cap", [4096, None])
+def test_modular_vfd_adapter_supports_weights_constraints_and_resolution(cap, monkeypatch):
+    from asunder.base.algorithms import modular_VFD as vfd_module
+
+    constructor = vfd_module.partition_vector_to_2d_matrix
+    observed_caps = []
+
+    def capture_cap(labels, **options):
+        observed_caps.append(options.get("max_dense_working_bytes", "missing"))
+        return constructor(labels, **options)
+
+    monkeypatch.setattr(vfd_module, "partition_vector_to_2d_matrix", capture_cap)
     A = nx.to_numpy_array(nx.cycle_graph(4), dtype=float)
     weights = np.array([3, 1, 2, 2])
     kwargs = dict(
@@ -206,6 +218,7 @@ def test_modular_vfd_adapter_supports_weights_constraints_and_resolution():
         wz_is_C_node=True,
         tabu_max_steps=0,
         shake_rounds=0,
+        max_dense_working_bytes=cap,
     )
     direct = modular_very_fortunate_descent(wz=np.eye(4), **kwargs)
     adapted = refine_partition_modular_vfd(partition=np.eye(4), **kwargs)
@@ -219,6 +232,9 @@ def test_modular_vfd_adapter_supports_weights_constraints_and_resolution():
     assert z[0, 2] == 0
     assert np.all((z @ weights) == 4)
     assert np.array_equal(adapted, z)
+    assert observed_caps and all(value == cap for value in observed_caps)
+    with pytest.raises(MemoryError):
+        refine_partition_modular_vfd(partition=np.eye(4), **{**kwargs, "max_dense_working_bytes": 1})
 
 
 def test_contracted_refinement_preserves_identity_based_component_provenance():

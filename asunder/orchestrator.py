@@ -14,7 +14,11 @@ from asunder.base.utils.graph import (
     partition_satisfies_pairwise_constraints,
     validate_partition_matrix,
 )
-from asunder.base.utils.matrix import matrix_storage
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    matrix_storage,
+    structural_edge_pairs,
+)
 from asunder.config import CSDDecompositionConfig
 from asunder.types import (
     DecompositionResult,
@@ -25,7 +29,9 @@ from asunder.types import (
 )
 
 
-def _one_hot_master_partition(item: dict[str, Any]) -> MatrixLike | None:
+def _one_hot_master_partition(
+    item: dict[str, Any], *, max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
+) -> MatrixLike | None:
     """Recover an integral selected column from a master record, if present."""
     lambda_sol = item.get("lambda_sol")
     columns = item.get("columns") or []
@@ -39,12 +45,12 @@ def _one_hot_master_partition(item: dict[str, Any]) -> MatrixLike | None:
         return None
     if np.any(np.delete(values, selected) > 1e-7):
         return None
-    partition = columns[selected].copy()
+    partition = columns[selected]
     node2comp = item.get("node2comp")
     if node2comp is not None:
         from asunder.base.utils.graph import expand_z_matrix
 
-        partition = expand_z_matrix(partition, node2comp)
+        partition = expand_z_matrix(partition, node2comp, max_dense_working_bytes=max_dense_working_bytes)
     return partition
 
 
@@ -55,6 +61,7 @@ def _validated_final_candidate(
     must_link,
     cannot_link,
     additional_constraints,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> MatrixLike | None:
     """Validate structural, pairwise, and load-balancing constraints."""
     try:
@@ -62,6 +69,7 @@ def _validated_final_candidate(
             partition,
             n_nodes,
             name="final partition",
+            max_dense_working_bytes=max_dense_working_bytes,
         )
     except ValueError:
         return None
@@ -95,8 +103,19 @@ def _select_final_partition(
     must_link,
     cannot_link,
     additional_constraints,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
+    A: MatrixLike | None = None,
 ) -> tuple[MatrixLike | None, str | None]:
     """Select only a genuine integral solution, never a pricing candidate."""
+    worthy_edges = (additional_constraints or {}).get("worthy_edges")
+    if worthy_edges is not None:
+        if A is None:
+            raise ValueError("A is required to validate final edge constraints.")
+        worthy = {tuple(sorted(edge)) for edge in worthy_edges}
+        must_link = [
+            *(must_link or ()),
+            *(pair for pair in structural_edge_pairs(A) if pair not in worthy),
+        ]
     solution_sources = {
         "contracted_trivial",
         "integer_master",
@@ -110,11 +129,12 @@ def _select_final_partition(
                 must_link=must_link,
                 cannot_link=cannot_link,
                 additional_constraints=additional_constraints,
+                max_dense_working_bytes=max_dense_working_bytes,
             )
             if candidate is not None:
                 return candidate, item["partition_source"]
     for item in reversed(raw):
-        partition = _one_hot_master_partition(item)
+        partition = _one_hot_master_partition(item, max_dense_working_bytes=max_dense_working_bytes)
         if partition is not None:
             candidate = _validated_final_candidate(
                 partition,
@@ -122,6 +142,7 @@ def _select_final_partition(
                 must_link=must_link,
                 cannot_link=cannot_link,
                 additional_constraints=additional_constraints,
+                max_dense_working_bytes=max_dense_working_bytes,
             )
             if candidate is not None:
                 return candidate, "one_hot_relaxed_master"
@@ -222,10 +243,12 @@ class CSDDecomposition:
         final = records[-1] if records else None
         final_partition, final_partition_source = _select_final_partition(
             raw,
+            A=A,
             n_nodes=A.shape[0],
             must_link=cfg.get("must_link"),
             cannot_link=cfg.get("cannot_link"),
             additional_constraints=cfg.get("additional_constraints"),
+            max_dense_working_bytes=cfg["max_dense_working_bytes"],
         )
         metadata = {
             "n_iterations": len(records),

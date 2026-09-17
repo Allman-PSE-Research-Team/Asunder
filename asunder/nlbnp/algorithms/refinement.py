@@ -29,18 +29,20 @@ from asunder.nlbnp.algorithms.linear_group import (
 from asunder.types import MatrixLike
 
 
-def _hard_partition_labels(partition, n_nodes: int) -> tuple[np.ndarray, np.ndarray]:
+def _hard_partition_labels(
+    partition, n_nodes: int, *, max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
+) -> tuple[np.ndarray, MatrixLike]:
     if sparse.issparse(partition):
-        matrix = validate_partition_matrix(partition, n_nodes, name="partition")
+        matrix = validate_partition_matrix(partition, n_nodes, name="partition", max_dense_working_bytes=max_dense_working_bytes)
         return partition_matrix_to_vector(matrix), matrix
     values = np.asarray(partition)
     if values.ndim == 2:
-        matrix = validate_partition_matrix(values, n_nodes, name="partition")
+        matrix = validate_partition_matrix(values, n_nodes, name="partition", max_dense_working_bytes=max_dense_working_bytes)
         return partition_matrix_to_vector(matrix), matrix
     if values.ndim != 1 or values.shape != (n_nodes,):
         raise ValueError("partition must contain one label per adjacency-matrix node.")
     labels = values.copy()
-    return labels, partition_vector_to_2d_matrix(labels)
+    return labels, partition_vector_to_2d_matrix(labels, max_dense_working_bytes=max_dense_working_bytes)
 
 
 def refine_partition_linear_group(
@@ -56,6 +58,7 @@ def refine_partition_linear_group(
     threshold=0.8,
     verbose=False,
     seed=42,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ):
     """
     Refine a hard partition by forming exactly one linear-only group.
@@ -91,6 +94,8 @@ def refine_partition_linear_group(
         Controls the verbosity of the output.
     seed : int or None
         Random seed used by probability clustering.
+    max_dense_working_bytes : int or None, default=536870912
+        Estimated dense workspace limit; ``None`` disables the guard.
 
     Returns
     -------
@@ -99,7 +104,7 @@ def refine_partition_linear_group(
         be formed.
     """
     matrix = A
-    labels, hard_partition = _hard_partition_labels(partition, matrix.shape[0])
+    labels, hard_partition = _hard_partition_labels(partition, matrix.shape[0], max_dense_working_bytes=max_dense_working_bytes)
     probabilities = labels_to_probabilities(A, labels, p=p).toarray()
     proposed_labels = probability_to_integer_labels(
         probabilities,
@@ -112,7 +117,7 @@ def refine_partition_linear_group(
     if nonlinear_nodes is None:
         refined_labels = labels.copy()
         refined_labels[low_confidence] = int(labels.max(initial=-1)) + 1
-        return partition_vector_to_2d_matrix(refined_labels)
+        return partition_vector_to_2d_matrix(refined_labels, max_dense_working_bytes=max_dense_working_bytes)
 
     nonlinear = {int(node) for node in nonlinear_nodes}
     selected_nodes: set[int] = set()
@@ -129,6 +134,7 @@ def refine_partition_linear_group(
         additional_nodes=tuple(sorted(selected_nodes)),
         must_link=must_link,
         cannot_link=cannot_link,
+        max_dense_working_bytes=max_dense_working_bytes,
     )
 
 
@@ -200,6 +206,7 @@ def refine_partition_with_cp(
     partition_labels, hard_partition = _hard_partition_labels(
         partition,
         A.shape[0],
+        max_dense_working_bytes=max_dense_working_bytes,
     )
 
     dense_adjacency = checked_to_dense(
@@ -220,6 +227,7 @@ def refine_partition_with_cp(
         threshold=threshold,
         verbose=verbose,
         seed=seed,
+        max_dense_working_bytes=max_dense_working_bytes,
     )
     if cp_result.node_labels is None:
         raise RuntimeError("Core-periphery detection did not return binary node labels.")
@@ -230,11 +238,12 @@ def refine_partition_with_cp(
     )
     if nonlinear_nodes is None:
         refined_partition = np.where(linear_only_mask, -1, partition_labels)
-        return partition_vector_to_2d_matrix(refined_partition)
+        return partition_vector_to_2d_matrix(refined_partition, max_dense_working_bytes=max_dense_working_bytes)
     return merge_linear_only_communities(
         hard_partition,
         nonlinear_nodes,
         additional_nodes=np.flatnonzero(linear_only_mask),
         must_link=must_link,
         cannot_link=cannot_link,
+        max_dense_working_bytes=max_dense_working_bytes,
     )

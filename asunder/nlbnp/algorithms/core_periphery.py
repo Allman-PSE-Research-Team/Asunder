@@ -17,6 +17,7 @@ from asunder.base.algorithms.core_periphery import (
     normalized_BE_score,
     spectral_continuous_cp_detection,
 )
+from asunder.base.utils.matrix import DEFAULT_MAX_DENSE_WORKING_BYTES
 
 
 def _cluster_blocks(
@@ -113,6 +114,7 @@ def _detect_core_periphery(
     kl_max_iter: int = 50,
     ga_population_size: int = 50,
     ga_generations: int = 100,
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> CorePeripheryResult:
     """Detect and orient a constrained binary core-periphery partition.
 
@@ -148,6 +150,8 @@ def _detect_core_periphery(
         GA population size.
     ga_generations : int, default=100
         GA generation count.
+    max_dense_working_bytes : int or None, default=536870912
+        Estimated dense workspace limit forwarded to the detection backend.
 
     Returns
     -------
@@ -176,6 +180,7 @@ def _detect_core_periphery(
             must_link=edge_pairs,
             must_group=grouped_nodes,
             target=target,
+            max_dense_working_bytes=max_dense_working_bytes,
             max_iter=kl_max_iter,
             seed=seed,
         )
@@ -185,6 +190,7 @@ def _detect_core_periphery(
             must_link=edge_pairs,
             must_group=grouped_nodes,
             target=target,
+            max_dense_working_bytes=max_dense_working_bytes,
             pop_size=ga_population_size,
             generations=ga_generations,
             seed=seed,
@@ -195,6 +201,7 @@ def _detect_core_periphery(
             must_link=edge_pairs,
             must_group=grouped_nodes,
             target=target,
+            max_dense_working_bytes=max_dense_working_bytes,
             spectral_rank=spectral_rank,
         )
 

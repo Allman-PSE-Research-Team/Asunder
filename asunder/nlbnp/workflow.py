@@ -65,7 +65,30 @@ def _items_or_empty(items: Sequence[Any] | None) -> list[Any]:
     return [] if items is None else list(items)
 
 
-def _coerce_graph_input(graph):
+def _coerce_graph_input(
+    graph,
+    *,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
+):
+    """Normalize graph input with a checked dense dtype conversion.
+
+    Parameters
+    ----------
+    graph : networkx.Graph, numpy.ndarray, or scipy.sparse.spmatrix
+        Graph or square adjacency matrix.
+    max_dense_working_bytes : int or None, default=536870912
+        Dense dtype-conversion limit; ``None`` disables the guard. Existing
+        float64 arrays require no copy. Sparse and NetworkX inputs remain CSR.
+
+    Returns
+    -------
+    adjacency : numpy.ndarray or scipy.sparse.csr_matrix
+        Float64 adjacency matrix.
+    node_labels : list
+        Labels corresponding to adjacency rows.
+    original_graph : networkx.Graph or None
+        Original graph, when supplied, for attribute lookup.
+    """
     if isinstance(graph, nx.Graph):
         node_labels = list(graph.nodes())
         adjacency = nx.to_scipy_sparse_array(
@@ -76,7 +99,14 @@ def _coerce_graph_input(graph):
         )
         return sparse.csr_matrix(adjacency), node_labels, graph
 
-    A = normalize_adjacency(graph, dtype=float)
+    if sparse.issparse(graph):
+        A = normalize_adjacency(graph, dtype=float)
+    else:
+        A = checked_to_dense(
+            graph, dtype=float,
+            max_dense_working_bytes=max_dense_working_bytes,
+            operation="NLBNP adjacency dtype normalization",
+        )
     if len(A.shape) != 2 or A.shape[0] != A.shape[1]:
         raise ValueError("graph must be a networkx.Graph or a square adjacency matrix.")
     return A, list(range(A.shape[0])), None
@@ -185,6 +215,7 @@ def _expanded_candidate(
     *,
     n_nodes: int,
     node2comp: np.ndarray | None,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> MatrixLike | None:
     matrix = partition
     if matrix.shape == (n_nodes, n_nodes):
@@ -194,7 +225,7 @@ def _expanded_candidate(
     n_components = int(node2comp.max()) + 1 if node2comp.size else 0
     if matrix.shape != (n_components, n_components):
         return None
-    return expand_z_matrix(matrix, node2comp)
+    return expand_z_matrix(matrix, node2comp, max_dense_working_bytes=max_dense_working_bytes)
 
 
 def _select_hard_partition(
@@ -205,6 +236,7 @@ def _select_hard_partition(
     cannot_link: Sequence[tuple[int, int]],
     worthy_edges: Sequence[tuple[int, int]],
     resolution: float,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> tuple[MatrixLike | None, str | None, float | None]:
     """Select the best available integral column satisfying NLBNP rules.
 
@@ -225,6 +257,8 @@ def _select_hard_partition(
         Nonempty structural edges allowed to cross communities.
     resolution : float
         Modularity resolution used only when stored column scores are absent.
+    max_dense_working_bytes : int or None, default=536870912
+        Dense validation and original-size expansion workspace limit.
 
     Returns
     -------
@@ -251,6 +285,7 @@ def _select_hard_partition(
             partition,
             n_nodes=n_nodes,
             node2comp=node2comp,
+            max_dense_working_bytes=max_dense_working_bytes,
         )
         if expanded is None:
             return None
@@ -259,6 +294,7 @@ def _select_hard_partition(
                 expanded,
                 n_nodes,
                 name="NLBNP final candidate",
+                max_dense_working_bytes=max_dense_working_bytes,
             )
         except ValueError:
             return None
@@ -511,9 +547,11 @@ def run_nonlinear_branch_and_price(
     tolerance : float
         Reduced-cost stopping tolerance.
     column_storage : {"auto", "dense", "csr"}, default="auto"
-        Storage policy for binary co-association columns.
+        Storage policy for binary co-association columns. Automatic mode
+        preserves supplied dense/CSR representations, including mixed pools.
     sparse_column_density_threshold : float, default=0.20
-        Maximum measured density at which automatic storage uses CSR.
+        Maximum density for newly constructed automatic CSR columns; CSR must
+        also have a smaller estimated footprint than dense Boolean storage.
     max_dense_working_bytes : int or None, default=536870912
         Maximum operation-specific estimate for package-created dense work
         arrays. Sparse-compatible operations retain CSR; dense-only boundaries
@@ -544,7 +582,9 @@ def run_nonlinear_branch_and_price(
         infeasibility and heuristic cardinality failure are reported with
         ``final_partition=None`` and a descriptive metadata status/reason.
     """
-    A, node_labels, nx_graph = _coerce_graph_input(graph)
+    A, node_labels, nx_graph = _coerce_graph_input(
+        graph, max_dense_working_bytes=max_dense_working_bytes,
+    )
     label_node_map = {label: idx for idx, label in enumerate(node_labels)}
     node_label_map = {idx: label for idx, label in enumerate(node_labels)}
     if cardinality_method not in _CARDINALITY_METHODS:
@@ -817,6 +857,7 @@ def run_nonlinear_branch_and_price(
         cannot_link=active_cannot_link,
         worthy_edges=effective_worthy_edges,
         resolution=resolution,
+        max_dense_working_bytes=max_dense_working_bytes,
     )
     if base_partition is None:
         result.final_partition = None
@@ -842,6 +883,7 @@ def run_nonlinear_branch_and_price(
                     "prob_method": prob_method,
                     "verbose": False,
                     "seed": seed,
+                    "max_dense_working_bytes": max_dense_working_bytes,
                 }
                 refiner_kwargs.update(cardinality_kwargs)
                 final_partition = refine_partition_linear_group(
@@ -906,6 +948,7 @@ def run_nonlinear_branch_and_price(
             final_partition,
             nonlinear_idx,
             expected_nodes=expected_nodes,
+            max_dense_working_bytes=max_dense_working_bytes,
         )
     )
     if not final_is_valid:
@@ -933,7 +976,7 @@ def run_nonlinear_branch_and_price(
             gamma=resolution,
         )
     )
-    linear_groups = linear_only_communities(final_partition, nonlinear_idx)
+    linear_groups = linear_only_communities(final_partition, nonlinear_idx, max_dense_working_bytes=max_dense_working_bytes)
     linear_nodes = list(linear_groups[0])
     result.metadata["linear_only_node_indices"] = linear_nodes
     result.metadata["linear_only_nodes"] = [node_label_map[node] for node in linear_nodes]
@@ -1025,7 +1068,9 @@ def CorePeripheryPartition(
         Core-periphery detection, component, and graph-label metadata.
     """
     start = time.perf_counter()
-    A, node_labels, nx_graph = _coerce_graph_input(graph)
+    A, node_labels, nx_graph = _coerce_graph_input(
+        graph, max_dense_working_bytes=max_dense_working_bytes,
+    )
     label_node_map = {label: idx for idx, label in enumerate(node_labels)}
     node_label_map = {idx: label for idx, label in enumerate(node_labels)}
 
@@ -1067,6 +1112,7 @@ def CorePeripheryPartition(
         threshold=threshold,
         verbose=verbose,
         seed=seed,
+        max_dense_working_bytes=max_dense_working_bytes,
     )
     if cp_result.node_labels is None:
         raise RuntimeError("Core-periphery detection did not return binary node labels.")

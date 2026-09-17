@@ -49,7 +49,7 @@ def compute_f_star(
     gamma: float = 1.0,
 ) -> float:
     """
-    Compute column/partiton score used by the restricted master objective.
+    Compute the column/partition score used by the restricted master objective.
     
     Parameters
     ----------
@@ -60,7 +60,7 @@ def compute_f_star(
     m : float
         Twice the total weight in the graph.
     z : ndarray or scipy.sparse.spmatrix, shape (N, N)
-        Graph partition.
+        Hard or fractional co-association matrix.
     gamma : float
         Resolution parameter.
     
@@ -68,17 +68,44 @@ def compute_f_star(
     -------
     metric: float
         Modularity score.
+
+    Raises
+    ------
+    ValueError
+        If the graph volume is nonpositive or the matrix dimensions do not
+        match the degree vector.
+
+    Notes
+    -----
+    Dense terms are reduced one row at a time using float64 arithmetic and
+    O(N) scratch space. Boolean columns are not promoted to full floating-point
+    matrices. Sparse terms retain their sparse operations.
     """
     if  m <= 0:
         raise ValueError("Graph must have an edge and a positive edge sum.")
     a = np.asarray(a, dtype=float).reshape(-1)
+    if np.shape(A) != (a.size, a.size) or np.shape(z) != (a.size, a.size):
+        raise ValueError("A and z must be square matrices matching the length of a.")
+    dense_adjacency = None
     if sparse.issparse(A):
         adjacency_term = float(A.multiply(z).sum())
     elif sparse.issparse(z):
         adjacency_term = float(z.multiply(np.asarray(A)).sum())
     else:
-        adjacency_term = float(np.sum(np.asarray(A) * np.asarray(z)))
-    null_term = float(a @ (z @ a))
+        dense_adjacency = np.asarray(A)
+        adjacency_term = 0.0
+    if sparse.issparse(z):
+        null_term = float(a @ (z @ a))
+    else:
+        null_term = 0.0
+        for index, row in enumerate(np.asarray(z)):
+            # Casting a single row avoids the N x N promotion performed by
+            # dense Boolean-matrix/float-vector multiplication.
+            row_values = np.asarray(row, dtype=np.float64)
+            null_term += float(a[index] * np.dot(row_values, a))
+            if dense_adjacency is not None:
+                adjacency_row = np.asarray(dense_adjacency[index], dtype=np.float64)
+                adjacency_term += float(np.dot(adjacency_row, row_values))
     return adjacency_term / m - float(gamma) * null_term / (m * m)
 
 

@@ -42,9 +42,16 @@ def test_modified_louvain_receives_nondefault_resolution(monkeypatch):
     observed = {}
 
     class FakeModifiedLouvain:
-        def __init__(self, *, resolution, random_state):
+        def __init__(
+            self,
+            *,
+            resolution,
+            random_state,
+            max_dense_working_bytes,
+        ):
             observed["resolution"] = resolution
             observed["seed"] = random_state
+            observed["max_dense_working_bytes"] = max_dense_working_bytes
 
         def fit(self, A, duals):
             self.labels_ = np.array([0, 1])
@@ -65,4 +72,8 @@ def test_modified_louvain_receives_nondefault_resolution(monkeypatch):
         seed=7,
     )
 
-    assert observed == {"resolution": 1.25, "seed": 7}
+    assert observed == {
+        "resolution": 1.25,
+        "seed": 7,
+        "max_dense_working_bytes": 512 * 1024**2,
+    }

@@ -27,6 +27,7 @@ from asunder.base.utils.graph import partition_vector_to_2d_matrix
 from asunder.base.utils.matrix import (
     DEFAULT_MAX_DENSE_WORKING_BYTES,
     checked_to_dense,
+    ensure_dense_working_set,
     matrix_scalar,
 )
 from asunder.solvers import get_default_solver
@@ -202,6 +203,12 @@ def heuristic_subproblem(
     )
 
     pricing_adjacency = A
+    if not sparse.issparse(A) or not sparse.issparse(dualW):
+        ensure_dense_working_set(
+            A.shape, working_arrays=4.0,
+            max_dense_working_bytes=max_dense_working_bytes,
+            operation="dense pricing adjacency workspace",
+        )
     if sparse.issparse(A) and not sparse.issparse(dualW):
         pricing_adjacency = checked_to_dense(
             A,
@@ -249,7 +256,7 @@ def heuristic_subproblem(
         else:
             graph_modA[np.diag_indices_from(graph_modA)] *= 0.5
 
-    if algo == "signed_louvain" and sparse.issparse(graph_modA):
+    if algo == "signed_louvain":
         graph_modA = checked_to_dense(
             graph_modA,
             working_arrays=3.0,
@@ -544,46 +551,46 @@ def custom_heuristic_subproblem(
             "non-default modularity resolution."
         )
     assert algo in {"spectral", "full_louvain", "one_level_louvain", "RCCS"}
+    original_A = A
+    A = checked_to_dense(
+        A, working_arrays=6.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation=f"custom {algo} pricing",
+    )
     dualW, constant_terms = build_dual_weight_matrix(
         A,
         duals,
         max_dense_working_bytes=max_dense_working_bytes,
     )
 
-    if sparse.issparse(A):
-        A = checked_to_dense(
-            A,
-            working_arrays=4.0,
-            max_dense_working_bytes=max_dense_working_bytes,
-            operation=f"custom {algo} pricing",
-        )
-    if sparse.issparse(dualW):
-        dualW = checked_to_dense(
-            dualW,
-            working_arrays=2.0,
-            max_dense_working_bytes=max_dense_working_bytes,
-            operation=f"custom {algo} dual workspace",
-        )
+    dualW = checked_to_dense(
+        dualW, working_arrays=2.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation=f"custom {algo} dual workspace",
+    )
+    dense_duals = {"pairwise": dualW, "constant": constant_terms}
 
     if "louvain" in algo:
         louvain_model = ModifiedLouvain(
             resolution=gamma,
             random_state=seed,
+            max_dense_working_bytes=max_dense_working_bytes,
         )
         if algo.startswith("full_"):
-            louvain_model.fit(A, duals)
+            louvain_model.fit(A, dense_duals)
         else:
-            louvain_model.fit_modified_one_level(A, duals, max_iter=max_iterations, tol=tolerance)
+            louvain_model.fit_modified_one_level(A, dense_duals, max_iter=max_iterations, tol=tolerance)
         z_sol = partition_vector_to_2d_matrix(
             louvain_model.labels_,
             storage=column_storage,
             sparse_column_density_threshold=sparse_column_density_threshold,
             max_dense_working_bytes=max_dense_working_bytes,
         )
-        metric = louvain_model.obj_val_
     else:
         if algo == "RCCS":
-            res = search_partition_by_reduced_cost(adjacency=A, duals=duals, random_seed=seed)
+            res = search_partition_by_reduced_cost(
+                adjacency=A, duals=dense_duals, random_seed=seed,
+            )
             best_labels = res["best_labels"]
             z_sol = partition_vector_to_2d_matrix(
                 best_labels,
@@ -591,19 +598,14 @@ def custom_heuristic_subproblem(
                 sparse_column_density_threshold=sparse_column_density_threshold,
                 max_dense_working_bytes=max_dense_working_bytes,
             )
-            metric = res["best_reduced_cost"] + constant_terms # for normalization sake
         else:
-            z_sol, metric = full_spectral_bisection(A, a, m, dualW, refinement=True, verbose=verbose, max_outer_passes=max_iterations, tol=tolerance)
+            z_sol, _ = full_spectral_bisection(A, a, m, dualW, refinement=True, verbose=verbose, max_outer_passes=max_iterations, tol=tolerance, max_dense_working_bytes=max_dense_working_bytes)
 
-    if metric is None:
-        modularity_contribution = compute_f_star(
-            A,
-            a,
-            m,
-            z_sol,
-            gamma=gamma,
-        )
-        dual_contribution = float(dualW.multiply(z_sol).sum()) if sparse.issparse(z_sol) else (dualW * z_sol).sum()
-        metric = modularity_contribution - dual_contribution
-    sub_obj_val = metric - constant_terms
+    # Backend quality values need not be the original pricing objective.
+    modularity_contribution = compute_f_star(original_A, a, m, z_sol, gamma=gamma)
+    dual_contribution = (
+        float(z_sol.multiply(dualW).sum()) if sparse.issparse(z_sol)
+        else float(np.einsum("ij,ij->", dualW, z_sol))
+    )
+    sub_obj_val = modularity_contribution - dual_contribution - constant_terms
     return sub_obj_val, z_sol

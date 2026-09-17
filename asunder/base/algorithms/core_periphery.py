@@ -11,6 +11,11 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import eigsh
 
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    checked_to_dense,
+)
+
 AdjLike = np.ndarray | sp.spmatrix | nx.Graph | nx.DiGraph
 CorePeripheryTarget = Literal["contracted", "original"]
 
@@ -212,8 +217,18 @@ def _validate_target(target: str) -> CorePeripheryTarget:
     return target
 
 
-def _as_symmetric_adjacency(A: np.ndarray | sp.spmatrix) -> np.ndarray:
-    matrix = A.toarray() if sp.issparse(A) else np.asarray(A, dtype=float)
+def _as_symmetric_adjacency(
+    A: np.ndarray | sp.spmatrix,
+    *,
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
+) -> np.ndarray:
+    matrix = checked_to_dense(
+        A,
+        dtype=float,
+        working_arrays=4.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="core-periphery detection",
+    )
     matrix = np.asarray(matrix, dtype=float)
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
         raise ValueError("A must be a square adjacency matrix.")
@@ -246,6 +261,7 @@ def contract_core_periphery_adjacency(
     *,
     must_link: Sequence[tuple[int, int]] | None = None,
     must_group: Sequence[int] | None = None,
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> CorePeripheryContraction:
     """Return the aggregate contraction ``B = S.T @ A @ S``.
 
@@ -258,6 +274,10 @@ def contract_core_periphery_adjacency(
         respected.
     must_group : sequence of int, optional
         Nodes merged into one generic core-periphery detection block.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set, including workspaces for dense
+        input. ``None``
+        disables the guard.
 
     Returns
     -------
@@ -273,7 +293,10 @@ def contract_core_periphery_adjacency(
     applied.
     """
 
-    matrix = _as_symmetric_adjacency(A)
+    matrix = _as_symmetric_adjacency(
+        A,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
     pairs, group = _validate_block_constraints(matrix.shape[0], must_link, must_group)
     union_find = UnionFind(matrix.shape[0])
     for source, target in pairs:
@@ -521,7 +544,7 @@ class EnhancedGeneticBE:
 
     Parameters
     ----------
-    A : ndarray of float, shape (N, N)
+    A : ndarray or sparse matrix, shape (N, N)
         Symmetric adjacency or weight matrix.
     must_link : sequence of tuple of int, optional
         Node pairs constrained to one binary assignment.
@@ -537,11 +560,15 @@ class EnhancedGeneticBE:
         Candidates sampled during parent selection.
     seed : int or None, default=42
         Local random-generator seed.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set, including workspaces for dense
+        input. ``None``
+        disables the guard.
     """
 
     def __init__(
         self,
-        A: np.ndarray,
+        A: np.ndarray | sp.spmatrix,
         must_link: Sequence[tuple[int, int]] | None = None,
         pop_size: int = 50,
         generations: int = 100,
@@ -549,10 +576,18 @@ class EnhancedGeneticBE:
         elitism_size: int = 2,
         tournament_size: int = 3,
         seed: int | None = 42,
+        max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
     ) -> None:
-        self.A = _as_symmetric_adjacency(A)
+        self.A = _as_symmetric_adjacency(
+            A,
+            max_dense_working_bytes=max_dense_working_bytes,
+        )
         self.rng = np.random.default_rng(seed)
-        contraction = contract_core_periphery_adjacency(self.A, must_link=must_link)
+        contraction = contract_core_periphery_adjacency(
+            self.A,
+            must_link=must_link,
+            max_dense_working_bytes=max_dense_working_bytes,
+        )
         self.blocks = contraction.blocks
         self.node_to_block = contraction.node_to_block
         self.n_blocks = len(self.blocks)
@@ -718,6 +753,10 @@ class FullContinuousGeneticBE:
         Upper bound for initialized and clipped continuous scores.
     seed : int or None, default=42
         Local random-generator seed.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set, including workspaces for dense
+        input. ``None``
+        disables the guard.
     """
 
     def __init__(
@@ -734,14 +773,19 @@ class FullContinuousGeneticBE:
         tournament_size: int = 3,
         gene_init_scale: float = 1.0,
         seed: int | None = 42,
+        max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
     ) -> None:
         self.rng = np.random.default_rng(seed)
-        self.A = _as_symmetric_adjacency(A)
+        self.A = _as_symmetric_adjacency(
+            A,
+            max_dense_working_bytes=max_dense_working_bytes,
+        )
         self.target = _validate_target(target)
         self.contraction = contract_core_periphery_adjacency(
             self.A,
             must_link=must_link,
             must_group=must_group,
+            max_dense_working_bytes=max_dense_working_bytes,
         )
         self.blocks = self.contraction.blocks
         self.n_blocks = len(self.blocks)
@@ -916,6 +960,7 @@ def detect_continuous_KL(
     target: CorePeripheryTarget = "contracted",
     max_iter: int = 100,
     seed: int | None = 42,
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> CorePeripheryResult:
     """Optimize continuous BE fit by blockwise coordinate updates.
 
@@ -935,6 +980,10 @@ def detect_continuous_KL(
         Maximum complete passes over the block coordinates.
     seed : int or None, default=42
         Local random-generator seed.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set, including workspaces for dense
+        input. ``None``
+        disables the guard.
 
     Returns
     -------
@@ -948,12 +997,16 @@ def detect_continuous_KL(
     graph-bisection form of Kernighan-Lin.
     """
 
-    matrix = _as_symmetric_adjacency(A)
+    matrix = _as_symmetric_adjacency(
+        A,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
     selected_target = _validate_target(target)
     contraction = contract_core_periphery_adjacency(
         matrix,
         must_link=must_link,
         must_group=must_group,
+        max_dense_working_bytes=max_dense_working_bytes,
     )
     contracted_objective, original_objective = _block_pair_objectives(matrix, contraction)
     objective = contracted_objective if selected_target == "contracted" else original_objective
@@ -1031,6 +1084,7 @@ def spectral_continuous_cp_detection(
     target: CorePeripheryTarget = "contracted",
     spectral_rank: int = 1,
     normalize: bool = True,
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> CorePeripheryResult:
     """Detect block-level spectral structure in contracted or original space.
 
@@ -1052,6 +1106,10 @@ def spectral_continuous_cp_detection(
     normalize : bool, default=True
         Min-max normalize rank-one scalar scores. It does not alter the
         eigenvectors, eigenvalues, embedding, or reconstruction fits.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set, including workspaces for dense
+        input. ``None``
+        disables the guard.
 
     Returns
     -------
@@ -1068,12 +1126,16 @@ def spectral_continuous_cp_detection(
     ``G |Lambda|^1/2``.
     """
 
-    matrix = _as_symmetric_adjacency(A)
+    matrix = _as_symmetric_adjacency(
+        A,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
     selected_target = _validate_target(target)
     contraction = contract_core_periphery_adjacency(
         matrix,
         must_link=must_link,
         must_group=must_group,
+        max_dense_working_bytes=max_dense_working_bytes,
     )
     B = contraction.adjacency
     sizes = contraction.block_sizes

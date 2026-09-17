@@ -19,6 +19,7 @@ from asunder.base.utils.matrix import (
     matrix_scalar,
     normalize_adjacency,
     structural_edge_pairs,
+    validate_storage_options,
 )
 from asunder.types import MatrixLike
 
@@ -117,7 +118,8 @@ def partition_vector_to_2d_matrix(
     partition : array of int, shape (n,)
         1D label vector.
     storage : {"dense", "csr", "auto"}, default="dense"
-        Physical representation of the logical co-association matrix.
+        Physical representation. Automatic selection uses CSR only when its
+        density meets the threshold and its estimated storage is smaller.
     sparse_column_density_threshold : float, default=0.20
         Maximum density at which automatic selection uses CSR storage.
     max_dense_working_bytes : int or None, default=536870912
@@ -129,8 +131,7 @@ def partition_vector_to_2d_matrix(
     z : ndarray of bool or scipy.sparse.csr_matrix, shape (n, n)
         Binary co-association matrix.
     """
-    if storage not in {"auto", "dense", "csr"}:
-        raise ValueError("storage must be 'auto', 'dense', or 'csr'.")
+    validate_storage_options(storage, sparse_column_density_threshold, max_dense_working_bytes)
     threshold = float(sparse_column_density_threshold)
     if not np.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
         raise ValueError("sparse_column_density_threshold must be between 0 and 1.")
@@ -140,14 +141,18 @@ def partition_vector_to_2d_matrix(
         raise ValueError("partition must be a one-dimensional label vector.")
     n_nodes = labels.size
     if n_nodes:
-        unique_labels, counts = np.unique(labels, return_counts=True)
-        density = float(np.dot(counts, counts)) / float(n_nodes * n_nodes)
+        _, inverse, counts = np.unique(labels, return_inverse=True, return_counts=True)
+        nnz = sum(int(count) ** 2 for count in counts)
+        density = nnz / float(n_nodes * n_nodes)
     else:
-        unique_labels = np.empty(0, dtype=labels.dtype)
+        inverse = counts = np.empty(0, dtype=int)
+        nnz = 0
         density = 0.0
+    index_dtype = np.int32 if max(n_nodes, nnz) <= np.iinfo(np.int32).max else np.int64
+    csr_bytes = nnz * (1 + np.dtype(index_dtype).itemsize) + (n_nodes + 1) * np.dtype(index_dtype).itemsize
     resolved = storage
     if storage == "auto":
-        resolved = "csr" if density <= threshold else "dense"
+        resolved = "csr" if density <= threshold and csr_bytes < n_nodes * n_nodes else "dense"
 
     if resolved == "dense":
         ensure_dense_working_set(
@@ -158,19 +163,21 @@ def partition_vector_to_2d_matrix(
         )
         return np.equal.outer(labels, labels)
 
-    row_parts = []
-    column_parts = []
-    for label in unique_labels:
-        members = np.flatnonzero(labels == label)
-        row_parts.append(np.repeat(members, members.size))
-        column_parts.append(np.tile(members, members.size))
-    if not row_parts:
+    if not n_nodes:
         return sparse.csr_matrix((0, 0), dtype=bool)
-    rows = np.concatenate(row_parts)
-    columns = np.concatenate(column_parts)
+    # Fill final CSR buffers directly; auxiliary grouping arrays are O(N).
+    indptr = np.empty(n_nodes + 1, dtype=index_dtype)
+    indptr[0] = 0
+    np.cumsum(counts[inverse], out=indptr[1:])
+    indices = np.empty(nnz, dtype=index_dtype)
+    ordered = np.argsort(inverse, kind="stable") # Time: O(NlogN)
+    boundaries = np.concatenate(([0], np.cumsum(counts)))
+    for row, group in enumerate(inverse):
+        indices[indptr[row]:indptr[row + 1]] = ordered[boundaries[group]:boundaries[group + 1]]
     return sparse.csr_matrix(
-        (np.ones(rows.size, dtype=bool), (rows, columns)),
+        (np.ones(nnz, dtype=bool), indices, indptr),
         shape=(n_nodes, n_nodes),
+        copy=False,
     )
 
 def partition_matrix_to_vector(Z: MatrixLike) -> np.ndarray:
@@ -252,9 +259,17 @@ def validate_partition_matrix(
     Besides shape, symmetry, and unit-diagonal checks, this verifies that the
     matrix represents an equivalence relation.  The latter prevents malformed
     custom columns from silently entering a restricted master problem.
+
+    Automatic storage preserves the input representation. An already Boolean
+    dense input may be returned without copying and is never modified.
     """
     if storage not in {"preserve", "auto", "dense", "csr"}:
         raise ValueError("storage must be 'preserve', 'auto', 'dense', or 'csr'.")
+    validate_storage_options(
+        "auto" if storage == "preserve" else storage,
+        sparse_column_density_threshold,
+        max_dense_working_bytes,
+    )
     input_sparse = sparse.issparse(partition)
     matrix = (
         sparse.csr_matrix(partition, copy=True)
@@ -268,17 +283,12 @@ def validate_partition_matrix(
             f"{name} must have shape {(int(n_nodes), int(n_nodes))}, "
             f"not {matrix.shape}."
         )
-    values = matrix.data if input_sparse else matrix
-    try:
-        finite = np.all(np.isfinite(values))
-    except TypeError as exc:
-        raise ValueError(f"{name} must contain numeric values.") from exc
-    if not finite:
-        raise ValueError(f"{name} contains NaN or infinity.")
     if input_sparse:
         matrix.sum_duplicates()
         matrix.eliminate_zeros()
         matrix.sort_indices()
+        if not np.all(np.isfinite(matrix.data)):
+            raise ValueError(f"{name} contains NaN or infinity.")
         rounded_data = np.rint(matrix.data)
         if not np.allclose(matrix.data, rounded_data, atol=atol, rtol=0) or np.any(
             (rounded_data != 0) & (rounded_data != 1)
@@ -296,19 +306,37 @@ def validate_partition_matrix(
             raise ValueError(f"{name} must define a transitive co-association relation.")
         canonical = matrix.astype(bool, copy=False)
     else:
-        if not np.allclose(matrix, matrix.T, atol=atol, rtol=0):
-            raise ValueError(f"{name} must be symmetric.")
-        if not np.allclose(np.diag(matrix), 1.0, atol=atol, rtol=0):
-            raise ValueError(f"{name} must have a unit diagonal.")
-        rounded = np.rint(matrix)
-        if not np.allclose(matrix, rounded, atol=atol, rtol=0) or np.any(
-            (rounded != 0) & (rounded != 1)
-        ):
-            raise ValueError(f"{name} must be binary.")
-        canonical = rounded.astype(bool)
+        size = matrix.shape[0]
+        needs_copy = matrix.dtype != np.bool_
+        ensure_dense_working_set(
+            (size,), dtype=float, working_arrays=8,
+            extra_bytes=size * size if needs_copy else 0,
+            max_dense_working_bytes=max_dense_working_bytes,
+            operation=f"dense validation for {name}",
+        )
+        canonical = np.empty(matrix.shape, dtype=bool) if needs_copy else matrix
+        for index, row in enumerate(matrix):
+            try:
+                finite = np.all(np.isfinite(row))
+            except TypeError as exc:
+                raise ValueError(f"{name} must contain numeric values.") from exc
+            if not finite:
+                raise ValueError(f"{name} contains NaN or infinity.")
+            if not np.allclose(row, matrix[:, index], atol=atol, rtol=0):
+                raise ValueError(f"{name} must be symmetric.")
+            if not np.isclose(row[index], 1.0, atol=atol, rtol=0):
+                raise ValueError(f"{name} must have a unit diagonal.")
+            if needs_copy:
+                rounded = np.rint(row)
+                if not np.allclose(row, rounded, atol=atol, rtol=0) or np.any(
+                    (rounded != 0) & (rounded != 1)
+                ):
+                    raise ValueError(f"{name} must be binary.")
+                canonical[index] = rounded.astype(bool)
         labels = partition_matrix_to_vector(canonical)
-        if not np.array_equal(canonical, np.equal.outer(labels, labels)):
-            raise ValueError(f"{name} must define a transitive co-association relation.")
+        for index, row in enumerate(canonical):
+            if not np.array_equal(row, labels == labels[index]):
+                raise ValueError(f"{name} must define a transitive co-association relation.")
 
     if storage == "preserve":
         return canonical
@@ -415,6 +443,7 @@ def contract_partition_matrix(
     node2comp: np.ndarray,
     *,
     atol: float = 1e-8,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> MatrixLike:
     """Convert a component-consistent partition to contracted dimensions.
 
@@ -431,6 +460,8 @@ def contract_partition_matrix(
         Mapping from original nodes to ``C`` contracted components.
     atol : float
         Absolute tolerance used for component-consistency checks.
+    max_dense_working_bytes : int or None, default=536870912
+        Limit for newly allocated dense validation and contraction workspaces.
 
     Returns
     -------
@@ -455,8 +486,15 @@ def contract_partition_matrix(
         partition,
         name="Warm-start partition",
         atol=atol,
+        max_dense_working_bytes=max_dense_working_bytes,
     )
     if matrix.shape == (n_components, n_components):
+        if not input_sparse:
+            ensure_dense_working_set(
+                matrix.shape, dtype=matrix.dtype,
+                max_dense_working_bytes=max_dense_working_bytes,
+                operation="dense contracted partition copy",
+            )
         contracted = matrix.copy()
     elif matrix.shape == (n_nodes, n_nodes):
         component_nodes = [
@@ -476,7 +514,7 @@ def contract_partition_matrix(
         contracted = partition_vector_to_2d_matrix(
             component_labels,
             storage="csr" if input_sparse else "dense",
-            max_dense_working_bytes=None,
+            max_dense_working_bytes=max_dense_working_bytes,
         )
     else:
         raise ValueError(
@@ -494,6 +532,8 @@ def contract_adj_matrix_new(
     must_link=None,
     keep_self_loops=True,
     degree_preserving=True,   # if True -> diag = 2 * intra_sum, else diag = intra_sum
+    *,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> tuple[MatrixLike, np.ndarray]:
     """
     Contract A according to connected components induced by rule-graph (G_ml),
@@ -514,6 +554,8 @@ def contract_adj_matrix_new(
     degree_preserving : bool
         If True, we set diag(C,C) = 2 * intra_sum_C so that
         vol(supernode C) = sum_{i in C} deg(i). If False, diag = intra_sum_C.
+    max_dense_working_bytes : int or None, default=536870912
+        Limit for dense contraction workspaces. CSR contraction stays sparse.
 
     Returns
     -------
@@ -523,11 +565,19 @@ def contract_adj_matrix_new(
         Mapping from original node to supernode id.
     """
     input_sparse = sparse.issparse(A)
+    if not input_sparse:
+        A = checked_to_dense(
+            A, max_dense_working_bytes=max_dense_working_bytes,
+            operation="dense adjacency contraction input",
+        )
     A = normalize_adjacency(A)
     if A.ndim != 2 or A.shape[0] != A.shape[1]:
         raise ValueError("A must be a square matrix.")
-    finite_values = A.data if input_sparse else A
-    if not np.all(np.isfinite(finite_values)):
+    finite = (
+        np.all(np.isfinite(A.data)) if input_sparse
+        else all(np.all(np.isfinite(row)) for row in A)
+    )
+    if not finite:
         raise ValueError("A must contain only finite values.")
     if not is_symmetric(A, atol=1e-10):
         raise ValueError("A must be symmetric.")
@@ -573,6 +623,12 @@ def contract_adj_matrix_new(
             shape=(n, num_super),
         )
     else:
+        ensure_dense_working_set(
+            (num_super, num_super), dtype=float,
+            extra_bytes=2 * n * num_super * np.dtype(float).itemsize,
+            max_dense_working_bytes=max_dense_working_bytes,
+            operation="dense adjacency contraction",
+        )
         membership = np.zeros((n, num_super), dtype=float)
         membership[np.arange(n), node2comp] = 1.0
     # P.T @ A @ P exactly preserves every component's summed strength,
@@ -607,6 +663,8 @@ def expand_z_matrix(
     z: MatrixLike | np.ndarray | None,
     node2comp: np.ndarray | None,
     dim: int = 2,
+    *,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> MatrixLike | np.ndarray | None:
     """
     Expand a supernode-level partition back to original node dimension.
@@ -619,6 +677,9 @@ def expand_z_matrix(
         Mapping from original node to supernode id.
     dim : int
         Dimension of input array (`1` or `2`).
+    max_dense_working_bytes : int or None, default=536870912
+        Limit for a newly allocated dense original-size partition. CSR input
+        stays sparse. ``None`` disables the guard.
     
     Returns
     -------
@@ -635,6 +696,12 @@ def expand_z_matrix(
         if sparse.issparse(z):
             z_full = sparse.csr_matrix(z)[comp_idx, :][:, comp_idx]
         else:
+            ensure_dense_working_set(
+                (n, n), dtype=z.dtype,
+                extra_bytes=comp_idx.nbytes,
+                max_dense_working_bytes=max_dense_working_bytes,
+                operation="dense original-size partition expansion",
+            )
             z_full = z[np.ix_(comp_idx, comp_idx)]  # shape = (n, n)
     elif dim ==  1:
         z_full = np.array([z[node2comp[i]] for i in range(n)])
@@ -663,13 +730,21 @@ def z_hamming_upper(Z1: MatrixLike, Z2: MatrixLike) -> float:
     pairs = n * (n - 1) // 2
     if pairs == 0:
         return 0.0
-    if sparse.issparse(Z1) or sparse.issparse(Z2):
+    if sparse.issparse(Z1) and sparse.issparse(Z2):
         left = sparse.csr_matrix(Z1, dtype=bool)
         right = sparse.csr_matrix(Z2, dtype=bool)
         mismatches = (left != right).nnz // 2
         return float(mismatches / pairs)
-    iu = np.triu_indices(n, k=1)
-    return float(np.mean(np.asarray(Z1)[iu] != np.asarray(Z2)[iu]))
+    # A mixed comparison uses at most one sparse row and one Boolean row of
+    # scratch; never convert the entire dense operand into CSR.
+    left = sparse.csr_matrix(Z1) if sparse.issparse(Z1) else np.asarray(Z1)
+    right = sparse.csr_matrix(Z2) if sparse.issparse(Z2) else np.asarray(Z2)
+    mismatches = 0
+    for row in range(n - 1):
+        lrow = left.getrow(row).toarray().ravel() if sparse.issparse(left) else left[row]
+        rrow = right.getrow(row).toarray().ravel() if sparse.issparse(right) else right[row]
+        mismatches += np.count_nonzero(lrow[row + 1:] != rrow[row + 1:])
+    return float(mismatches / pairs)
 
 def sufficiently_different(
     Z_new: MatrixLike,

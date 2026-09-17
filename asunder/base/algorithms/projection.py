@@ -13,6 +13,7 @@ from asunder.base.utils.graph import (
 from asunder.base.utils.matrix import (
     DEFAULT_MAX_DENSE_WORKING_BYTES,
     checked_to_dense,
+    ensure_dense_working_set,
 )
 from asunder.base.utils.partition_generation import _build_components_links_only
 from asunder.solvers import get_default_solver
@@ -62,6 +63,8 @@ def _partition_from_component_matrix(
     comp: Dict[str, Any],
     same_component: dict[tuple[int, int], bool],
     N: int,
+    *,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> np.ndarray:
     C = int(comp["C"])
     parent = np.arange(C, dtype=int)
@@ -86,7 +89,7 @@ def _partition_from_component_matrix(
         label = find(c)
         for node in nodes:
             labels[int(node)] = label
-    return partition_vector_to_2d_matrix(labels)
+    return partition_vector_to_2d_matrix(labels, max_dense_working_bytes=max_dense_working_bytes)
 
 
 def project_partition_pairwise_ilp(
@@ -117,8 +120,8 @@ def project_partition_pairwise_ilp(
     solver : Any
         Optional Pyomo solver. If omitted, Asunder's default solver is used.
     max_dense_working_bytes : int or None, default=536870912
-        Maximum operation-specific dense working-set estimate for sparse input
-        conversion.
+        Maximum operation-specific dense working-set estimate for conversion
+        and additional dense workspaces.
 
     Returns
     -------
@@ -150,7 +153,12 @@ def project_partition_pairwise_ilp(
         operation="pairwise feasibility projection",
     )
     if wz.ndim == 1:
-        wz = partition_vector_to_2d_matrix(wz)
+        ensure_dense_working_set(
+            (wz.size, wz.size), working_arrays=3.0,
+            max_dense_working_bytes=max_dense_working_bytes,
+            operation="pairwise feasibility projection",
+        )
+        wz = partition_vector_to_2d_matrix(wz, max_dense_working_bytes=max_dense_working_bytes)
     if wz.ndim != 2 or wz.shape[0] != wz.shape[1]:
         raise ValueError("wz must be a partition vector or square matrix.")
 
@@ -244,7 +252,7 @@ def project_partition_pairwise_ilp(
             return None
         same_component[(int(c), int(d))] = float(val) > 0.5
 
-    Z = _partition_from_component_matrix(comp, same_component, N)
+    Z = _partition_from_component_matrix(comp, same_component, N, max_dense_working_bytes=max_dense_working_bytes)
     objective = float(sum(weight for pair, weight in weights.items() if same_component.get(pair, False)))
     meta = {
         "K_used": int(np.unique(partition_matrix_to_vector(Z)).size),

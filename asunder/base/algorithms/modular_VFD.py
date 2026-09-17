@@ -1101,6 +1101,8 @@ def modular_very_fortunate_descent(
     constraints: Sequence[VFDConstraint] = (),
     component_members: Optional[Sequence[Sequence[Any]]] = None,
     constraint_repair_steps: Optional[int] = None,
+    *,
+    max_dense_working_bytes: Optional[int] = DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
     """
     Modular function for building a feasible decomposition column from co-association structure and local search.
@@ -1141,6 +1143,9 @@ def modular_very_fortunate_descent(
     component_members : sequence of sequences, optional
         Original member identifiers represented by each row of ``A``. This is
         useful when ``A`` was contracted before ModularVFD was called.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense search workspace, including dense-input work.
+        ``None`` disables the guard and propagates through fallback searches.
     constraint_repair_steps : int or None, default=None
         Maximum guided feasibility-repair steps for partition-wide
         constraints. ``None`` derives a budget from ``local_iters``.
@@ -1204,12 +1209,20 @@ def modular_very_fortunate_descent(
 
     rng = np.random.default_rng(seed)
 
-    wz = np.asarray(wz, dtype=float)
+    wz = checked_to_dense(
+        wz, dtype=float, working_arrays=6.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="ModularVFD search",
+    )
     if wz.ndim != 2 or wz.shape[0] != wz.shape[1]:
         raise ValueError("wz must be a square matrix.")
     N = int(wz.shape[0])
 
-    A = np.asarray(A, dtype=float)
+    A = checked_to_dense(
+        A, dtype=float, working_arrays=6.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="ModularVFD adjacency",
+    )
     a = np.asarray(a, dtype=float).reshape(-1)
     if A.shape != (N, N) or a.shape != (N,):
         raise ValueError("wz and A must be (N,N), and a must be (N,).")
@@ -1289,7 +1302,7 @@ def modular_very_fortunate_descent(
                     str(getattr(runtime, "name", type(runtime).__name__))
                 )
         g0 = np.zeros(0, dtype=int)
-        return partition_vector_to_2d_matrix(g0), {
+        return partition_vector_to_2d_matrix(g0, max_dense_working_bytes=max_dense_working_bytes), {
             "r_min": 0,
             "r_max": 0,
             "K_used": 0,
@@ -1316,7 +1329,7 @@ def modular_very_fortunate_descent(
     Cn = int(comp["C"])
     if Cn == 0:
         g0 = np.zeros(N, dtype=int)
-        return partition_vector_to_2d_matrix(g0), {
+        return partition_vector_to_2d_matrix(g0, max_dense_working_bytes=max_dense_working_bytes), {
             "r_min": 0,
             "r_max": 0,
             "K_used": 0,
@@ -1397,7 +1410,7 @@ def modular_very_fortunate_descent(
     if C_node is None:
         if orbit_fallback:
             symmetry = weighted_constraint_orbits(A)
-            C_node = partition_vector_to_2d_matrix(symmetry.rep)
+            C_node = partition_vector_to_2d_matrix(symmetry.rep, max_dense_working_bytes=max_dense_working_bytes)
         else:
             C_node = sym.copy()
 
@@ -2925,7 +2938,7 @@ def modular_very_fortunate_descent(
                 continue
 
             gvec = build_gvec(comp2g_final)
-            Z = partition_vector_to_2d_matrix(gvec)
+            Z = partition_vector_to_2d_matrix(gvec, max_dense_working_bytes=max_dense_working_bytes)
             meta = {
                 "r_min": int(r_min),
                 "r_max": int(r_max),
@@ -2982,6 +2995,7 @@ def modular_very_fortunate_descent(
                 constraints=constraint_specs,
                 component_members=input_component_members,
                 constraint_repair_steps=constraint_repair_steps,
+                max_dense_working_bytes=max_dense_working_bytes,
                 seed=seed,
                 fingerprint_decimals=fingerprint_decimals,
                 allow_block_splitting=allow_block_splitting,
@@ -3041,8 +3055,8 @@ def refine_partition_modular_vfd(
     partition : ndarray or scipy.sparse.spmatrix, shape (N, N)
         Initial hard or fractional co-association matrix.
     max_dense_working_bytes : int or None, default=536870912
-        Maximum operation-specific dense working-set estimate for sparse
-        conversion. ``None`` disables the guard.
+        Maximum operation-specific dense working-set estimate, including
+        additional workspaces for dense input. ``None`` disables the guard.
 
     Returns
     -------
@@ -3065,7 +3079,7 @@ def refine_partition_modular_vfd(
         operation="ModularVFD refinement partition",
     )
     if candidate.ndim == 1:
-        candidate = partition_vector_to_2d_matrix(candidate)
+        candidate = partition_vector_to_2d_matrix(candidate, max_dense_working_bytes=max_dense_working_bytes)
     strengths = adjacency.sum(axis=1) if a is None else np.asarray(a, dtype=float)
     volume = float(strengths.sum()) if m is None else float(m)
     out = modular_very_fortunate_descent(
@@ -3085,6 +3099,7 @@ def refine_partition_modular_vfd(
         constraints=constraints,
         component_members=component_members,
         constraint_repair_steps=constraint_repair_steps,
+        max_dense_working_bytes=max_dense_working_bytes,
         seed=seed,
         **kwargs,
     )

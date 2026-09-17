@@ -11,6 +11,7 @@ from scipy import sparse
 from asunder.base.algorithms.signed_louvain import community_detection as cd
 from asunder.base.algorithms.signed_louvain import util as slouvain_util
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
+from asunder.base.utils.matrix import checked_to_dense
 from asunder.types import MatrixLike
 
 
@@ -117,7 +118,9 @@ def labels_to_probabilities(
         each node.
     """
     _, _, _, _, normalize, get_membership = _import_sknetwork()
-    if not sparse.isspmatrix_csr(A):
+    if sparse.issparse(A):
+        A = sparse.csr_matrix(A, dtype=float)
+    else:
         A = sparse.csr_matrix(np.asarray(A), dtype=float)
     M = get_membership(labels)
     return normalize(A @ M, p=p)
@@ -661,9 +664,10 @@ def run_signed_louvain(
     
     Parameters
     ----------
-    modified_A : ndarray of float, shape (N, N)
-        Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
-        The original adjacency / weight matrix can also be parsed.
+    modified_A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
+        Signed adjacency or dual-adjusted weight matrix. Negative weights are
+        supported. Sparse input crosses a guarded dense boundary before graph
+        extraction and positive/negative layer construction.
     seed : int or None
         Random seed value
     resolution : float, default=1.0
@@ -673,7 +677,8 @@ def run_signed_louvain(
     sparse_column_density_threshold : float, default=0.20
         Maximum density at which automatic storage uses CSR.
     max_dense_working_bytes : int or None, default=536870912
-        Maximum estimated dense working set for partition construction.
+        Maximum estimated dense conversion, edge-extraction, and partition
+        construction workspace, including additional work for dense input.
 
     Returns
     -------
@@ -682,6 +687,11 @@ def run_signed_louvain(
     float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
     """
+    modified_A = checked_to_dense(
+        modified_A, working_arrays=3.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="internal signed-Louvain pricing",
+    )
     n_nodes = modified_A.shape[0]
     edges = [(i, j, modified_A[i, j]) for i, j in zip(*np.where(np.triu(modified_A) != 0))]
     graph = slouvain_util.build_nx_graph(n_nodes, edges)

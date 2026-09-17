@@ -5,6 +5,11 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 from scipy import sparse
 
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    ensure_dense_working_set,
+)
+
 
 def to_csr(A) -> sparse.csr_matrix:
     """
@@ -187,6 +192,10 @@ class ModifiedLouvain:
         Seed for node shuffling inside local moving.
     symmetrize_average : bool
         If True, symmetrize directed inputs by averaging; otherwise by summation.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated working set for the dense dual-adjusted matrices.
+        ``None`` disables the guard. Standard Louvain does not use this dense
+        path.
 
     Attributes
     ----------
@@ -208,13 +217,20 @@ class ModifiedLouvain:
                  tol_aggregation: float = 1e-3,
                  n_aggregations: int = -1,
                  random_state: Optional[int] = None,
-                 symmetrize_average: bool = True):
+                 symmetrize_average: bool = True,
+                 max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES):
         self.resolution = float(resolution)
         self.tol_optimization = float(tol_optimization)
         self.tol_aggregation = float(tol_aggregation)
         self.n_aggregations = int(n_aggregations)
         self.random_state = int(random_state) if random_state is not None else None
         self.symmetrize_average = bool(symmetrize_average)
+        if (
+            max_dense_working_bytes is not None
+            and int(max_dense_working_bytes) <= 0
+        ):
+            raise ValueError("max_dense_working_bytes must be positive or None.")
+        self.max_dense_working_bytes = max_dense_working_bytes
 
         self.labels_: Optional[np.ndarray] = None
         self.probs_: Optional[sparse.csr_matrix] = None
@@ -253,6 +269,13 @@ class ModifiedLouvain:
         A0 = to_csr(input_matrix)
         A0 = symmetrize(A0, average=self.symmetrize_average)
         n0 = A0.shape[0]
+        ensure_dense_working_set(
+            (n0, n0),
+            dtype=float,
+            working_arrays=4.0,
+            max_dense_working_bytes=self.max_dense_working_bytes,
+            operation="dual-adjusted ModifiedLouvain",
+        )
 
         if a is None:
             a = degrees(A0)
@@ -441,13 +464,20 @@ class ModifiedLouvain:
         rng = np.random.RandomState(self.random_state)
         A = to_csr(input_matrix)
         A = symmetrize(A, average=self.symmetrize_average)
+        ensure_dense_working_set(
+            A.shape,
+            dtype=float,
+            working_arrays=4.0,
+            max_dense_working_bytes=self.max_dense_working_bytes,
+            operation="one-level dual-adjusted ModifiedLouvain",
+        )
 
         if a is None:
             a = degrees(A)
         if m is None:
             m = float(a.sum())
 
-        mm = self._build_modified_modularity(A, a, m, duals)
+        mm = self._build_modified_modularity(A, a, m, duals, gamma=self.resolution)
         labels = self._one_level_fast_unfolding(A, mm, rng, max_iter=max_iter, tol=tol)
 
         self.labels_ = reindex_consecutive(labels)
@@ -611,6 +641,7 @@ class ModifiedLouvain:
         a: np.ndarray,
         m: float,
         duals: Dict[str, np.ndarray],
+        gamma: float = 1.0,
     ) -> np.ndarray:
         """
         Construct dense modified modularity matrix.
@@ -625,18 +656,28 @@ class ModifiedLouvain:
             Twice the total graph weight, computed as sum(A).
         duals : Dict[str, np.ndarray or float]
             Dual terms used to modify the community detection objective. 2D and 1D dual values are supported.
+        gamma : float, default=1.0
+            Modularity resolution.
         
         Returns
         -------
         mm: np.ndarray of float, shape (N, N)
             Modified modularity matrix.
         """
-        A_dense = A.toarray().astype(float, copy=False)
+        A_dense = A.astype(float, copy=False).toarray()
         N = A_dense.shape[0]
 
-        mm = (A_dense / m) - np.outer(a, a) / (m * m)
+        mm = (A_dense / m) - gamma * np.outer(a, a) / (m * m)
 
         for _, dual in duals.items():
+            if sparse.issparse(dual):
+                raise TypeError("ModifiedLouvain requires dense duals; use custom_heuristic_subproblem for sparse duals.")
+            if dual is None or np.isscalar(dual):
+                continue
+            if not isinstance(dual, np.ndarray):
+                raise TypeError("Duals must be dense NumPy arrays or real scalars.")
+            if dual.ndim not in {1, 2}:
+                raise ValueError("Dual arrays must be one- or two-dimensional.")
             if isinstance(dual, np.ndarray):
                 if dual.ndim == 1:
                     temp_dual = np.zeros_like(A_dense)
@@ -749,6 +790,14 @@ class ModifiedLouvain:
         S = np.zeros((n, n), dtype=float)
         for key, dual in duals.items():
             del key
+            if sparse.issparse(dual):
+                raise TypeError("ModifiedLouvain requires dense duals; use custom_heuristic_subproblem for sparse duals.")
+            if dual is None or np.isscalar(dual):
+                continue
+            if not isinstance(dual, np.ndarray):
+                raise TypeError("Duals must be dense NumPy arrays or real scalars.")
+            if dual.ndim not in {1, 2}:
+                raise ValueError("Dual arrays must be one- or two-dimensional.")
             if isinstance(dual, np.ndarray):
                 if dual.ndim == 1:
                     temp_dual = np.zeros((n, n), dtype=float)
@@ -792,7 +841,7 @@ class ModifiedLouvain:
         M: np.ndarray of float, shape (N, N)
             Modified modularity matrix.
         """
-        A_dense = A.toarray().astype(float, copy=False)
+        A_dense = A.astype(float, copy=False).toarray()
         M = (A_dense / mprime) - gamma * np.outer(a, a) / (mprime * mprime) - S
         return M
 

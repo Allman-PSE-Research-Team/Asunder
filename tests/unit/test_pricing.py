@@ -1,14 +1,47 @@
 import numpy as np
 import pytest
+from scipy import sparse
 
+from asunder.base.algorithms.louvain_modified import ModifiedLouvain
+from asunder.base.algorithms.RCCS import search_partition_by_reduced_cost
 from asunder.base.column_generation.pricing import (
     build_dual_weight_matrix,
     compute_reduced_cost,
 )
+from asunder.base.column_generation.subproblem import custom_heuristic_subproblem
 from asunder.load_balancing.algorithms.qmetis import (
     QMETISApproximationWarning,
 )
 from asunder.load_balancing.column_generation import subproblem as lb_subproblem
+
+
+@pytest.mark.parametrize("algo,gamma", [("full_louvain", 1.0), ("one_level_louvain", 1.7), ("RCCS", 1.0)])
+def test_custom_pricing_sparse_duals_match_dense_and_exact_score(algo, gamma):
+    adjacency = np.ones((4, 4)) - np.eye(4)
+    pairs = 2 * adjacency
+    a, m = adjacency.sum(axis=1), float(adjacency.sum())
+    common = {"node": np.arange(4) / 100, "constant": 0.125}
+    dense_duals = {**common, "pair": pairs}
+    sparse_duals = {**common, "pair": sparse.csr_matrix(pairs)}
+    expected_rc, expected_z = custom_heuristic_subproblem(adjacency, a, m, dense_duals, algo=algo, gamma=gamma)
+    for A in (adjacency, sparse.csr_matrix(adjacency)):
+        rc, z = custom_heuristic_subproblem(A, a, m, sparse_duals, algo=algo, gamma=gamma)
+        assert rc == pytest.approx(compute_reduced_cost(A, a, m, z, sparse_duals, gamma=gamma))
+        assert rc == pytest.approx(expected_rc)
+        assert np.array_equal(z, expected_z)
+        with pytest.raises(MemoryError):
+            custom_heuristic_subproblem(A, a, m, sparse_duals, algo=algo, gamma=gamma, max_dense_working_bytes=1)
+    if algo == "RCCS":
+        with pytest.raises(TypeError, match="dense duals"):
+            search_partition_by_reduced_cost(adjacency, sparse_duals)
+    else:
+        model = ModifiedLouvain(resolution=gamma)
+        fit = model.fit if algo == "full_louvain" else model.fit_modified_one_level
+        with pytest.raises(TypeError, match="dense duals"):
+            fit(adjacency, sparse_duals)
+        if algo == "one_level_louvain":
+            mm = model._build_modified_modularity(sparse.csr_matrix(adjacency), a, m, {}, gamma=gamma)
+            assert np.allclose(mm, adjacency / m - gamma * np.outer(a, a) / m**2)
 
 
 def test_build_dual_weight_matrix_handles_fractional_duals():

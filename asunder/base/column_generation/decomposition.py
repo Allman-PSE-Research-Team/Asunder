@@ -24,11 +24,11 @@ from asunder.base.utils.matrix import (
     DEFAULT_MAX_DENSE_WORKING_BYTES,
     DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
     checked_to_dense,
-    estimate_dense_working_bytes,
+    ensure_dense_working_set,
     is_symmetric,
-    matrix_density,
     matrix_storage,
     normalize_adjacency,
+    structural_edge_pairs,
     validate_storage_options,
 )
 
@@ -50,52 +50,35 @@ def _weighted_column_sum(
     if not active:
         return sparse.csr_matrix(shape, dtype=float)
 
-    required = estimate_dense_working_bytes(
-        shape,
-        dtype=float,
-        working_arrays=2.0,
-    )
-    dense_allowed = (
-        max_dense_working_bytes is None
-        or required <= int(max_dense_working_bytes)
-    )
     all_sparse = all(sparse.issparse(column) for _, column in active)
-    if all_sparse or not dense_allowed:
+    if all_sparse:
         result = sparse.csr_matrix(shape, dtype=float)
         for weight, column in active:
-            values = (
-                column
-                if sparse.issparse(column)
-                else sparse.csr_matrix(np.asarray(column))
-            )
-            result = result + weight * values
+            values = sparse.csr_matrix(column, dtype=float)
+            result = result + values.multiply(weight)
+        result.sum_duplicates()
         result.eliminate_zeros()
-        if (
-            not dense_allowed
-            or matrix_density(result) <= sparse_column_density_threshold
-        ):
-            return result
-        return checked_to_dense(
-            result,
-            dtype=float,
-            working_arrays=2.0,
-            max_dense_working_bytes=max_dense_working_bytes,
-            operation="dense post-loop fractional co-association assembly",
-        )
-
-    from asunder.base.utils.matrix import ensure_dense_working_set
+        result.sort_indices()
+        return result
 
     ensure_dense_working_set(
         shape,
         dtype=float,
-        working_arrays=2.0,
+        working_arrays=1.0,
+        extra_bytes=2 * shape[1] * np.dtype(float).itemsize,
         max_dense_working_bytes=max_dense_working_bytes,
         operation="dense post-loop fractional co-association assembly",
     )
     result = np.zeros(shape, dtype=float)
     for weight, column in active:
-        values = column.toarray() if sparse.issparse(column) else np.asarray(column)
-        result += weight * values
+        if sparse.issparse(column):
+            values = sparse.csr_matrix(column)
+            for row in range(shape[0]):
+                start, end = values.indptr[row:row + 2]
+                np.add.at(result[row], values.indices[start:end], weight * values.data[start:end])
+        else:
+            for row in range(shape[0]):
+                result[row] += weight * column[row]
     return result
 
 
@@ -194,9 +177,11 @@ def CSD_decomposition(
         Modularity resolution parameter. It is applied consistently when
         pricing and scoring columns.
     column_storage : {"auto", "dense", "csr"}, default="auto"
-        Physical storage policy for binary co-association columns.
+        Physical storage policy for binary co-association columns. Automatic mode
+        preserves supplied dense/CSR representations, including mixed pools.
     sparse_column_density_threshold : float, default=0.20
-        Maximum measured density at which automatic storage uses CSR.
+        Maximum density for newly constructed automatic CSR columns; CSR must
+        also have a smaller estimated footprint than dense Boolean storage.
     max_dense_working_bytes : int or None, default=536870912
         Maximum operation-specific estimate for package-created dense work
         arrays. Sparse-compatible operations retain CSR; dense-only boundaries
@@ -250,6 +235,11 @@ def CSD_decomposition(
         max_dense_working_bytes,
     )
     input_adjacency_storage = matrix_storage(A)
+    if not sparse.issparse(A):
+        A = checked_to_dense(
+            A, max_dense_working_bytes=max_dense_working_bytes,
+            operation="dense adjacency dtype normalization",
+        )
     A = normalize_adjacency(A, dtype=float)
     a = np.asarray(a, dtype=float).reshape(-1)
     dense_boundary_events = []
@@ -267,8 +257,11 @@ def CSD_decomposition(
         raise ValueError("A must be a square matrix.")
     if a.shape != (A.shape[0],):
         raise ValueError(f"a must have shape {(A.shape[0],)}.")
-    adjacency_values = A.data if sparse.issparse(A) else A
-    if not np.all(np.isfinite(adjacency_values)) or not np.all(np.isfinite(a)):
+    adjacency_finite = (
+        np.all(np.isfinite(A.data)) if sparse.issparse(A)
+        else all(np.all(np.isfinite(row)) for row in A)
+    )
+    if not adjacency_finite or not np.all(np.isfinite(a)):
         raise ValueError("A and a must contain only finite values.")
     if not is_symmetric(A, atol=1e-10):
         raise ValueError("A must be symmetric for undirected decomposition.")
@@ -349,6 +342,13 @@ def CSD_decomposition(
     additional_constraints = (
         {} if additional_constraints is None else dict(additional_constraints)
     )
+    refinement_must_link = list(must_link)
+    worthy_edges = additional_constraints.get("worthy_edges")
+    if worthy_edges is not None:
+        worthy = {tuple(sorted(edge)) for edge in worthy_edges}
+        refinement_must_link = sorted(set(refinement_must_link).union(
+            pair for pair in structural_edge_pairs(A) if pair not in worthy
+        ))
     subproblem_signature = inspect.signature(sp_function)
     if (
         "balance_weights" in subproblem_signature.parameters
@@ -360,7 +360,11 @@ def CSD_decomposition(
         )
     if callable(refine_func):
         if "must_link" in refine_signature.parameters:
-            refine_kwargs.setdefault("must_link", must_link)
+            refine_kwargs["must_link"] = normalize_node_pairs(
+                [*refinement_must_link, *(refine_kwargs.get("must_link") or ())],
+                A.shape[0],
+                relation_name="refinement must-link",
+            )
         if "cannot_link" in refine_signature.parameters:
             refine_kwargs.setdefault("cannot_link", cannot_link)
         if "balance_weights" in refine_signature.parameters and "balance_weights" in additional_constraints:
@@ -386,7 +390,10 @@ def CSD_decomposition(
             or not np.all(original_balance_weights == np.rint(original_balance_weights))
         ):
             raise ValueError("balance_weights must contain positive integers.")
-        A, node2comp = contract_adj_matrix_new(A, additional_constraints.get("worthy_edges"), must_link)
+        A, node2comp = contract_adj_matrix_new(
+            A, additional_constraints.get("worthy_edges"), must_link,
+            max_dense_working_bytes=max_dense_working_bytes,
+        )
         a = np.asarray(A.sum(axis=0)).reshape(-1)
         m = float(np.sum(a))
         additional_constraints["worthy_edges"] = None
@@ -460,7 +467,7 @@ def CSD_decomposition(
         if columns is not None and len(columns) > 0:
             columns = [
                 normalize_column(
-                    contract_partition_matrix(column, node2comp),
+                    contract_partition_matrix(column, node2comp, max_dense_working_bytes=max_dense_working_bytes),
                     name=f"contracted warm-start column {index}",
                 )
                 for index, column in enumerate(columns)
@@ -501,7 +508,7 @@ def CSD_decomposition(
             return [{
                 "lambda_sol": [1.0],
                 "master_obj_val": score,
-                "z_sol": expand_z_matrix(coarse_partition, node2comp),
+                "z_sol": expand_z_matrix(coarse_partition, node2comp, max_dense_working_bytes=max_dense_working_bytes),
                 "heuristic_col": None,
                 "sub_obj_val": None,
                 "columns": [coarse_partition],
@@ -689,7 +696,7 @@ def CSD_decomposition(
                 "lambda_sol": lambda_sol,
                 **duals,
                 "master_obj_val": master_obj_val,
-                "z_sol": expand_z_matrix(z_sol, node2comp) if contract_graph else z_sol,
+                "z_sol": expand_z_matrix(z_sol, node2comp, max_dense_working_bytes=max_dense_working_bytes) if contract_graph else z_sol,
                 "sub_obj_val": sub_obj_val, "columns": Z_star.copy(),
                 "f_stars": f_stars.copy(),
                 "partition_source": "pricing_candidate",
@@ -739,7 +746,7 @@ def CSD_decomposition(
                     )
                     if not partition_satisfies_pairwise_constraints(
                         heuristic_col,
-                        must_link=[] if contract_graph else must_link,
+                        must_link=[] if contract_graph else refinement_must_link,
                         cannot_link=cannot_link,
                     ):
                         heuristic_col = None
@@ -806,7 +813,7 @@ def CSD_decomposition(
             )
             if not partition_satisfies_pairwise_constraints(
                 heuristic_col,
-                must_link=[] if contract_graph else must_link,
+                must_link=[] if contract_graph else refinement_must_link,
                 cannot_link=cannot_link,
             ):
                 heuristic_col = None
@@ -827,7 +834,7 @@ def CSD_decomposition(
                 "lambda_sol": None,
                 **empty_duals,
                 "master_obj_val": None,
-                "z_sol": expand_z_matrix(heuristic_col, node2comp) if contract_graph else heuristic_col,
+                "z_sol": expand_z_matrix(heuristic_col, node2comp, max_dense_working_bytes=max_dense_working_bytes) if contract_graph else heuristic_col,
                 "heuristic_col": heuristic_col,
                 "sub_obj_val": None,
                 "columns": Z_star.copy(),
@@ -860,7 +867,7 @@ def CSD_decomposition(
             "lambda_sol": lambda_sol,
             **empty_duals,
             "master_obj_val": master_obj_val,
-            "z_sol": expand_z_matrix(z_sol, node2comp) if contract_graph else z_sol,
+            "z_sol": expand_z_matrix(z_sol, node2comp, max_dense_working_bytes=max_dense_working_bytes) if contract_graph else z_sol,
             "heuristic_col": None,
             "sub_obj_val": None,
             "columns": Z_star.copy(),

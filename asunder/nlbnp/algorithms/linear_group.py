@@ -15,6 +15,7 @@ from asunder.base.utils.graph import (
     validate_partition_matrix,
 )
 from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
     is_symmetric,
     matrix_scalar,
     normalize_adjacency,
@@ -280,10 +281,27 @@ def compute_max_feasible_linear_group(
 def linear_only_communities(
     partition: MatrixLike,
     nonlinear_nodes: Sequence[int],
+    *,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> tuple[tuple[int, ...], ...]:
-    """Return nonempty communities containing no designated nonlinear node."""
+    """Return nonempty communities containing no designated nonlinear node.
 
-    matrix = validate_partition_matrix(partition, name="partition")
+    Parameters
+    ----------
+    partition : numpy.ndarray or scipy.sparse.spmatrix
+        Square hard co-association matrix.
+    nonlinear_nodes : sequence of int
+        Designated nonlinear-node indices.
+    max_dense_working_bytes : int or None, default=536870912
+        Dense validation workspace limit; ``None`` disables it.
+
+    Returns
+    -------
+    tuple of tuple of int
+        Original-node indices of each linear-only community.
+    """
+
+    matrix = validate_partition_matrix(partition, name="partition", max_dense_working_bytes=max_dense_working_bytes)
     nonlinear = set(
         _validate_node_indices(
             nonlinear_nodes,
@@ -320,10 +338,28 @@ def partition_satisfies_nlbnp_cardinality(
     nonlinear_nodes: Sequence[int],
     *,
     expected_nodes: Sequence[int] | None = None,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> bool:
-    """Check that exactly one linear-only community exists."""
+    """Check that exactly one linear-only community exists.
 
-    communities = linear_only_communities(partition, nonlinear_nodes)
+    Parameters
+    ----------
+    partition : numpy.ndarray or scipy.sparse.spmatrix
+        Square hard co-association matrix.
+    nonlinear_nodes : sequence of int
+        Designated nonlinear-node indices.
+    expected_nodes : sequence of int or None, default=None
+        Required membership of the linear-only group, when supplied.
+    max_dense_working_bytes : int or None, default=536870912
+        Dense validation workspace limit; ``None`` disables it.
+
+    Returns
+    -------
+    bool
+        Whether exactly one qualifying group with the required members exists.
+    """
+
+    communities = linear_only_communities(partition, nonlinear_nodes, max_dense_working_bytes=max_dense_working_bytes)
     if len(communities) != 1:
         return False
     return expected_nodes is None or set(communities[0]) == set(expected_nodes)
@@ -336,10 +372,30 @@ def merge_linear_only_communities(
     additional_nodes: Sequence[int] | None = None,
     must_link: Sequence[tuple[int, int]] | None = None,
     cannot_link: Sequence[tuple[int, int]] | None = None,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> np.ndarray | None:
-    """Merge existing pure-linear communities and additional eligible nodes."""
+    """Merge existing pure-linear communities and additional eligible nodes.
 
-    matrix = validate_partition_matrix(partition, name="partition")
+    Parameters
+    ----------
+    partition : numpy.ndarray or scipy.sparse.spmatrix
+        Square hard co-association matrix.
+    nonlinear_nodes : sequence of int
+        Designated nonlinear-node indices.
+    additional_nodes : sequence of int or None, default=None
+        Eligible nodes to join the merged linear-only group.
+    must_link, cannot_link : sequence of tuple of int or None, default=None
+        Pairwise constraints the merged partition must preserve.
+    max_dense_working_bytes : int or None, default=536870912
+        Dense validation and output-construction limit; ``None`` disables it.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Dense Boolean partition, or ``None`` if the merge is infeasible.
+    """
+
+    matrix = validate_partition_matrix(partition, name="partition", max_dense_working_bytes=max_dense_working_bytes)
     labels = partition_matrix_to_vector(matrix)
     nonlinear = set(
         _validate_node_indices(
@@ -348,7 +404,7 @@ def merge_linear_only_communities(
             name="nonlinear_nodes",
         )
     )
-    pure_communities = linear_only_communities(matrix, tuple(nonlinear))
+    pure_communities = linear_only_communities(matrix, tuple(nonlinear), max_dense_working_bytes=max_dense_working_bytes)
     target_nodes = {
         node for community in pure_communities for node in community
     }
@@ -373,7 +429,7 @@ def merge_linear_only_communities(
 
     refined_labels = labels.copy()
     refined_labels[list(sorted(target_nodes))] = target_label
-    refined = partition_vector_to_2d_matrix(refined_labels)
+    refined = partition_vector_to_2d_matrix(refined_labels, max_dense_working_bytes=max_dense_working_bytes)
     if not partition_satisfies_pairwise_constraints(
         refined,
         must_link=must_link,
