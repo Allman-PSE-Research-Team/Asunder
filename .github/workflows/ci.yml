@@ -37,7 +37,7 @@ jobs:
       - name: Install mainstream extras
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,graph,viz]"
+          pip install -e ".[dev,viz]"
       - name: Test with mainstream extras
         run: pytest -m "not legacy"
 
@@ -110,7 +110,7 @@ jobs:
       - name: Install docs deps
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[docs,graph,viz]"
+          pip install -e ".[dev,viz,docs]"
       - name: Build docs
         run: |
           sphinx-build -b html docs docs/_build/html
@@ -129,6 +129,21 @@ jobs:
           python tools/fetch_qmetis.py --platform linux-x86_64
           pip install -e ".[dev]" highspy
       - name: QMETIS native and LoadBalancer smoke test
+        id: qmetis-smoke
         run: |
           cd "${RUNNER_TEMP}"
           python "${GITHUB_WORKSPACE}/tools/qmetis_smoke.py"
+      - name: Diagnose native smoke crash
+        if: failure() && steps.qmetis-smoke.outcome == 'failure'
+        run: |
+          lscpu
+          cat "${GITHUB_WORKSPACE}/asunder/load_balancing/algorithms/_native/QMETIS-BUILD-INFO.txt"
+          sudo apt-get update
+          sudo apt-get install -y gdb
+          cd "${RUNNER_TEMP}"
+          gdb --batch \
+            -ex run \
+            -ex 'thread apply all bt' \
+            -ex 'x/16i $pc-16' \
+            -ex 'info sharedlibrary' \
+            --args python -u -X faulthandler "${GITHUB_WORKSPACE}/tools/qmetis_smoke.py"

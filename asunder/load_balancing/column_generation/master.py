@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from asunder.base.column_generation.master import _require_pyomo
+from asunder.base.utils.matrix import matrix_scalar
 from asunder.load_balancing.utils.balance import resolve_balance_bounds
 from asunder.solvers import get_default_solver
 
@@ -34,8 +35,9 @@ def solve_master_problem(
     f_stars,
     LB=True, 
     R=1, 
-    K=2, 
+    K=2,
     R_bounds=None,
+    balance_weights=None,
     cannot_link=None,
     must_link=None,
     extract_dual=False,
@@ -44,7 +46,7 @@ def solve_master_problem(
 ):
     """
     Solve the restricted master problem for the current column pool.
-    
+
     Parameters
     ----------
     A : np.ndarray of int | float, shape (N, N)
@@ -66,7 +68,10 @@ def solve_master_problem(
     K : int | None
         Number of communities.
     R_bounds : tuple[int, int] | None
-        Minimum and maximum number of nodes per community (community size constraint).
+        Minimum and maximum total node weight per community.
+    balance_weights : array-like or None
+        Positive node weights used to compute each community's load. Unit
+        weights are used when omitted.
     cannot_link : list[tuple[int, int]] or None
         List of node pairs that must not be together.
     must_link : list[tuple[int, int]] or None
@@ -80,7 +85,7 @@ def solve_master_problem(
         ``True`` | ``1``: Detailed output
     solver : Any
         Solver object.
-    
+
     Returns
     -------
     lambda_sol: list or ndarray of float
@@ -89,6 +94,12 @@ def solve_master_problem(
         Dual values computed from the master problem. This could be a 1D array, 2D array or a float.
     master_obj_val: float
         The objective value of the master problem.
+
+    Raises
+    ------
+    RuntimeError
+        If the solver terminates without optimality for a reason other than
+        infeasibility.
     """
     _require_pyomo()
     cannot_link = [] if cannot_link is None else cannot_link
@@ -103,11 +114,27 @@ def solve_master_problem(
     if LB:
         if K is None:
             raise ValueError("K is required when load-balancing constraints are active.")
-        if R == 0 and R_bounds is None and I % K != 0:
+        if balance_weights is None:
+            balance_weights = np.ones(I, dtype=int)
+        else:
+            balance_weights = np.asarray(balance_weights)
+            if balance_weights.shape != (I,):
+                raise ValueError("balance_weights must contain one value per node.")
+            if not np.all(np.isfinite(balance_weights)):
+                raise ValueError("balance_weights must contain only finite values.")
+            if np.any(balance_weights <= 0):
+                raise ValueError("balance_weights must contain positive values.")
+        total_balance_weight = float(np.sum(balance_weights))
+        if R == 0 and R_bounds is None and total_balance_weight % K != 0:
             raise ValueError(
-                "Infeasible R and K combination, given the number of nodes."
+                "Infeasible R and K combination, given the total node weight."
             )
-        R_min, R_max = resolve_balance_bounds(I, K, R, R_bounds)
+        R_min, R_max = resolve_balance_bounds(
+            total_balance_weight,
+            K,
+            R,
+            R_bounds,
+        )
 
     if extract_dual:
         model.lmbd = Var(model.C, domain=NonNegativeReals, bounds=(0, None), initialize=0)
@@ -129,7 +156,9 @@ def solve_master_problem(
             """
             Enforce a cannot-link pair in the master problem.
             """
-            return sum(mdl.lmbd[c] * Z_star[c][i, j] for c in mdl.C) == 0
+            return sum(
+                mdl.lmbd[c] * matrix_scalar(Z_star[c], i, j) for c in mdl.C
+            ) == 0
 
         model.CannotLink = Constraint(cannot_link_pairs, rule=cannot_link_rule)
     else:
@@ -142,7 +171,9 @@ def solve_master_problem(
             """
             Enforce a must-link pair in the master problem.
             """
-            return sum(mdl.lmbd[c] * Z_star[c][i, j] for c in mdl.C) == 1
+            return sum(
+                mdl.lmbd[c] * matrix_scalar(Z_star[c], i, j) for c in mdl.C
+            ) == 1
 
         model.MustLink = Constraint(must_link_pairs, rule=must_link_rule)
     else:
@@ -150,14 +181,28 @@ def solve_master_problem(
 
     if LB:
         model.Rmin = Constraint(
-            model.I, rule=lambda m, i: R_min <= sum(
-                sum(m.lmbd[c] * Z_star[c][i, j] for c in m.C) for j in m.I
-            )
+            model.I,
+            rule=lambda m, i: R_min
+            <= sum(
+                sum(
+                    m.lmbd[c]
+                    * matrix_scalar(Z_star[c], i, j)
+                    * float(balance_weights[j])
+                    for c in m.C
+                )
+                for j in m.I
+            ),
         )
 
         model.Rmax = Constraint(
             model.I, rule=lambda m, i: R_max >= sum(
-                sum(m.lmbd[c] * Z_star[c][i, j] for c in m.C) for j in m.I
+                sum(
+                    m.lmbd[c]
+                    * matrix_scalar(Z_star[c], i, j)
+                    * float(balance_weights[j])
+                    for c in m.C
+                )
+                for j in m.I
             )
         )
 
@@ -172,8 +217,11 @@ def solve_master_problem(
         model.dual = Suffix(direction=Suffix.IMPORT)
 
     res = solver.solve(model, tee=bool(verbose is True))
-    if res.solver.termination_condition == TerminationCondition.infeasible:
+    condition = res.solver.termination_condition
+    if condition == TerminationCondition.infeasible:
         return (None, None, None) if extract_dual else (None, None)
+    if condition != TerminationCondition.optimal:
+        raise RuntimeError(f"Master solve ended without optimality: {condition}")
     lambda_sol = [value(model.lmbd[c]) for c in model.C]
     master_obj_val = value(model.OBJ)
 
@@ -183,14 +231,23 @@ def solve_master_problem(
     duals = {"mu_dual": model.dual.get(model.OneColumn, 0)}
 
     if LB:
-        # Build tau_dual array from the Rmin constraint.
-        tau_dual = np.zeros((I,))
+        # Lift node-constraint duals to their exact weighted pairwise
+        # coefficients.  A plain half-sum is correct only for unit weights.
+        tau_node_dual = np.zeros((I,))
         for j in model.I:
-            tau_dual[j] = model.dual.get(model.Rmin[j], 0)
-        # Build pi_dual array from the Rmax constraint.
-        pi_dual = np.zeros((I,))
+            tau_node_dual[j] = model.dual.get(model.Rmin[j], 0)
+        pi_node_dual = np.zeros((I,))
         for j in model.I:
-            pi_dual[j] = model.dual.get(model.Rmax[j], 0)
+            pi_node_dual[j] = model.dual.get(model.Rmax[j], 0)
+        weights = np.asarray(balance_weights, dtype=float)
+        tau_dual = 0.5 * (
+            tau_node_dual[:, None] * weights[None, :]
+            + weights[:, None] * tau_node_dual[None, :]
+        )
+        pi_dual = 0.5 * (
+            pi_node_dual[:, None] * weights[None, :]
+            + weights[:, None] * pi_node_dual[None, :]
+        )
         duals["tau_dual"] = tau_dual
         duals["pi_dual"] = pi_dual
 

@@ -1,6 +1,19 @@
+import ctypes
+
 import numpy as np
 import pytest
 
+from asunder.load_balancing.algorithms import qmetis as qmetis_module
+from asunder.load_balancing.algorithms._qmetis_wrapper import (
+    METIS_OBJTYPE_MOD,
+    METIS_OK,
+    METIS_OPTION_CONTIG,
+    METIS_OPTION_MODRESOLUTION,
+    METIS_OPTION_NITER,
+    METIS_OPTION_OBJTYPE,
+    METIS_OPTION_SEED,
+    QMETISBinding,
+)
 from asunder.load_balancing.algorithms.qmetis import (
     QMETISApproximationWarning,
     _epsilon_to_ubvec,
@@ -79,3 +92,71 @@ def test_quantization_drops_diagonal_before_testing_for_positive_edges():
 
 def test_zero_epsilon_requests_exact_upper_balance_factor():
     assert _epsilon_to_ubvec(0.0, None) == [1.0]
+
+
+def test_internal_wrapper_uses_qmetis_option_layout_and_fixed_resolution():
+    binding = object.__new__(QMETISBinding)
+    binding.idx_t = ctypes.c_int64
+
+    def set_defaults(options):
+        for index in range(len(options)):
+            options[index] = -1
+        return METIS_OK
+
+    binding._set_default_options = set_defaults
+    options = binding._make_options(
+        resolution=1.25,
+        supplied={"niter": 20, "seed": 7, "contig": True},
+    )
+
+    assert options[METIS_OPTION_OBJTYPE] == METIS_OBJTYPE_MOD
+    assert options[METIS_OPTION_MODRESOLUTION] == 1_250_000
+    assert options[METIS_OPTION_NITER] == 20
+    assert options[METIS_OPTION_SEED] == 7
+    assert options[METIS_OPTION_CONTIG] == 1
+
+
+def test_internal_wrapper_rejects_non_modularity_objective():
+    binding = object.__new__(QMETISBinding)
+    binding.idx_t = ctypes.c_int64
+    binding._set_default_options = lambda options: METIS_OK
+
+    with pytest.raises(ValueError, match="only the modularity"):
+        binding._make_options(
+            resolution=1.0,
+            supplied={"objtype": "cut"},
+        )
+
+
+def test_run_qmetis_forwards_resolution_without_rescaling_objective(monkeypatch):
+    observed = {}
+
+    def fake_partition(graph, **kwargs):
+        observed.update(kwargs)
+        return {"partition": [0, 0, 1], "obj_val": 0.375}
+
+    monkeypatch.setattr(
+        qmetis_module,
+        "qmetis_load_balanced_partition",
+        fake_partition,
+    )
+    adjacency = np.array(
+        [
+            [0.0, 2.0, 0.0],
+            [2.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+
+    partition, objective = qmetis_module.run_qmetis(
+        adjacency,
+        2,
+        resolution=1.25,
+    )
+
+    assert observed["resolution"] == pytest.approx(1.25)
+    assert objective == pytest.approx(0.375)
+    assert np.array_equal(
+        partition,
+        np.equal.outer([0, 0, 1], [0, 0, 1]).astype(int),
+    )

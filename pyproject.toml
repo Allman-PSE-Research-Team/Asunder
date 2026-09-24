@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "put-asunder"
-version = "0.3.0"
+version = "0.4.0"
 description = "Asunder: Constrained Network Structure Detection on Undirected Graphs."
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -19,7 +19,8 @@ dependencies = [
   "tqdm>=4.66",
   "pyomo>=6.8",
   "gurobipy>=11.0",
-  "metis>=0.2a5",
+  "python-igraph>=0.11",
+  "leidenalg>=0.10",
 ]
 keywords = ["graph", "constrained-clustering", "graph-clustering", "community-detection", "core-periphery", "column-generation", "constrained-network-structure-detection", "branch-and-price"]
 classifiers = [
@@ -33,7 +34,6 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-graph = ["python-igraph>=0.11", "leidenalg>=0.10"]
 viz = ["matplotlib>=3.8", "seaborn>=0.13"]
 legacy = ["cpnet"]
 docs = [

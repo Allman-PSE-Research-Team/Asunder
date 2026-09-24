@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, TypeAlias
 
 import numpy as np
+from scipy.sparse import csr_matrix
+
+MatrixLike: TypeAlias = np.ndarray | csr_matrix
 
 
 class MasterProblemFn(Protocol):
@@ -21,10 +25,10 @@ class MasterProblemFn(Protocol):
 
     def __call__(
         self,
-        A: np.ndarray,
+        A: MatrixLike,
         a: np.ndarray,
         m: float,
-        Z_star: List[np.ndarray],
+        Z_star: List[MatrixLike],
         f_stars: List[float],
         **kwargs: Any,
     ) -> Any: ...
@@ -42,7 +46,7 @@ class SubproblemFn(Protocol):
 
     def __call__(
         self,
-        A: np.ndarray,
+        A: MatrixLike,
         a: np.ndarray,
         m: float,
         duals: Dict[str, Any],
@@ -60,25 +64,28 @@ class IterationRecord:
     lambda_sol : list[float] or ndarray[float]
         A list/vector which sums to ``1`` that indicates what weight is assigned 
         to each column (and by implication, what columns are active).
-    duals : Dict[str, ndarray[float] or float]
+    duals : Dict[str, ndarray[float], scipy.sparse.csr_matrix, or float]
         The dual terms corresponding to a constraint in the relaxed master problem. 
         This could be a 2D array, 1D array or a float.
     master_obj_val : float
         The objective value of the master problem.
-    z_sol : ndarray[int], shape (N, N)
+    z_sol : ndarray[bool] or scipy.sparse.csr_matrix, shape (N, N)
         The most recently generated column from the subproblem.
-    heuristic_col : ndarray[int], shape (N, N)
+    heuristic_col : ndarray[bool] or scipy.sparse.csr_matrix, shape (N, N)
         Refined column generated using local search that is initialized 
         with ``z_sol`` or the convex combinations of all columns.
     sub_obj_val : float
         The reduced cost of the current column.
-    columns : list[ndarray]
-        All columns under consideration for the next iteration. The most recently
-        generated column is at index ``-1``. When graph contraction is active,
+    columns : sequence[ndarray or scipy.sparse.csr_matrix]
+        All columns used in the most recent RMP solve. When graph contraction is active,
         these remain in contracted component dimensions even though ``z_sol``
-        is expanded to original-node dimensions.
-    f_stars : list[float]
-        List of objective values computed using each column in ``columns``.
+        is expanded to original-node dimensions. Column-generation histories
+        may be read-only prefix views of a shared column pool.
+    f_stars : sequence[float]
+        Objective values corresponding to ``columns``.
+    partition_source : str or None
+        Role of ``z_sol`` in this record, such as ``"pricing_candidate"``,
+        ``"post_loop_refinement"``, or ``"integer_master"``.
 
     Notes
     -----
@@ -90,11 +97,12 @@ class IterationRecord:
     lambda_sol: Optional[List[float]]
     duals: Dict[str, Any] = field(default_factory=dict)
     master_obj_val: Optional[float] = None
-    z_sol: Optional[np.ndarray] = None
-    heuristic_col: Optional[np.ndarray] = None
+    z_sol: Optional[MatrixLike] = None
+    heuristic_col: Optional[MatrixLike] = None
     sub_obj_val: Optional[float] = None
-    columns: List[np.ndarray] = field(default_factory=list)
-    f_stars: List[float] = field(default_factory=list)
+    columns: Sequence[MatrixLike] = field(default_factory=list)
+    f_stars: Sequence[float] = field(default_factory=list)
+    partition_source: Optional[str] = None
 
 
 @dataclass
@@ -106,8 +114,9 @@ class DecompositionResult:
     ----------
     records : List[IterationRecord]
         Column generation iteration records.
-    final_partition : Optional[np.ndarray]
-        Partition matrix.
+    final_partition : ndarray[bool], scipy.sparse.csr_matrix, or None
+        Logical ``(N, N)`` partition matrix. Physical storage follows the
+        configured column-storage policy.
     final_master_obj : Optional[float]
         Final master problem objective.
     metadata : Dict[str, Any]
@@ -117,6 +126,6 @@ class DecompositionResult:
     """
 
     records: List[IterationRecord]
-    final_partition: Optional[np.ndarray]
+    final_partition: Optional[MatrixLike]
     final_master_obj: Optional[float]
     metadata: Dict[str, Any] = field(default_factory=dict)

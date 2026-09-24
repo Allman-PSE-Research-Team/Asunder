@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy import sparse
 
+from asunder.base.utils.matrix import matrix_scalar, structural_edge_pairs
 from asunder.solvers import get_default_solver
+from asunder.types import MatrixLike
 
 try:
     from pyomo.environ import (
@@ -38,20 +41,26 @@ def _require_pyomo():
         raise ImportError("pyomo is required for master/subproblem optimization. Ensure base dependencies are installed.")
 
 
-def compute_f_star(A, a, m, z, gamma=1.0):
+def compute_f_star(
+    A: MatrixLike,
+    a: np.ndarray,
+    m: float,
+    z: MatrixLike,
+    gamma: float = 1.0,
+) -> float:
     """
-    Compute column/partiton score used by the restricted master objective.
+    Compute the column/partition score used by the restricted master objective.
     
     Parameters
     ----------
-    A : np.ndarray of int | float, shape (N, N)
+    A : ndarray or scipy.sparse.spmatrix, shape (N, N)
         Adjacency / weight matrix.
     a : np.ndarray of int | float, shape (N,)
         Degree-like vector; defaults to row sums of the symmetrized adjacency.
     m : float
         Twice the total weight in the graph.
-    z : ndarray of int | float, shape (N, N)
-        Graph partition.
+    z : ndarray or scipy.sparse.spmatrix, shape (N, N)
+        Hard or fractional co-association matrix.
     gamma : float
         Resolution parameter.
     
@@ -59,19 +68,53 @@ def compute_f_star(A, a, m, z, gamma=1.0):
     -------
     metric: float
         Modularity score.
+
+    Raises
+    ------
+    ValueError
+        If the graph volume is nonpositive or the matrix dimensions do not
+        match the degree vector.
+
+    Notes
+    -----
+    Dense terms are reduced one row at a time using float64 arithmetic and
+    O(N) scratch space. Boolean columns are not promoted to full floating-point
+    matrices. Sparse terms retain their sparse operations.
     """
     if  m <= 0:
         raise ValueError("Graph must have an edge and a positive edge sum.")
-    metric = np.sum((A / m - gamma * np.outer(a, a) / (m * m)) * z)
-    return metric
+    a = np.asarray(a, dtype=float).reshape(-1)
+    if np.shape(A) != (a.size, a.size) or np.shape(z) != (a.size, a.size):
+        raise ValueError("A and z must be square matrices matching the length of a.")
+    dense_adjacency = None
+    if sparse.issparse(A):
+        adjacency_term = float(A.multiply(z).sum())
+    elif sparse.issparse(z):
+        adjacency_term = float(z.multiply(np.asarray(A)).sum())
+    else:
+        dense_adjacency = np.asarray(A)
+        adjacency_term = 0.0
+    if sparse.issparse(z):
+        null_term = float(a @ (z @ a))
+    else:
+        null_term = 0.0
+        for index, row in enumerate(np.asarray(z)):
+            # Casting a single row avoids the N x N promotion performed by
+            # dense Boolean-matrix/float-vector multiplication.
+            row_values = np.asarray(row, dtype=np.float64)
+            null_term += float(a[index] * np.dot(row_values, a))
+            if dense_adjacency is not None:
+                adjacency_row = np.asarray(dense_adjacency[index], dtype=np.float64)
+                adjacency_term += float(np.dot(adjacency_row, row_values))
+    return adjacency_term / m - float(gamma) * null_term / (m * m)
 
 
 def solve_master_problem(
-    A,
-    a,
-    m,
-    Z_star,
-    f_stars,
+    A: MatrixLike,
+    a: np.ndarray,
+    m: float,
+    Z_star: list[MatrixLike],
+    f_stars: list[float],
     cannot_link=None,
     must_link=None,
     worthy_edges=None,
@@ -84,14 +127,14 @@ def solve_master_problem(
     
     Parameters
     ----------
-    A : np.ndarray of int | float, shape (N, N)
-        Adjacency / weight matrix.
+    A : numpy.ndarray or scipy.sparse.csr_matrix, shape (N, N)
+        Adjacency or weight matrix.
     a : np.ndarray of int | float, shape (N,)
         Degree-like vector; defaults to row sums of the symmetrized adjacency.
     m : float
         Twice the total weight in the graph.
-    Z_star : list[ndarray of int]
-        List of columns.
+    Z_star : list[numpy.ndarray or scipy.sparse.csr_matrix]
+        Binary co-association columns. Dense and CSR columns may coexist.
     f_stars : list[float]
         Objective values computed using the existing columns.
     cannot_link : list[tuple[int, int]] or None
@@ -99,7 +142,9 @@ def solve_master_problem(
     must_link : list[tuple[int, int]] or None
         List of node pairs that must be together.
     worthy_edges : list[tuple[int, int]] or None
-        List of edges that are allowed to connect different communities
+        Edges allowed to connect different communities. ``None`` disables the
+        edge rule; an empty collection requires every structural edge to stay
+        within a community.
     extract_dual : bool
         Boolean that determines whether we extract duals from the master problem or not.
     verbose : int or bool
@@ -112,12 +157,20 @@ def solve_master_problem(
     
     Returns
     -------
-    lambda_sol: list or ndarray of float
+    lambda_sol : list or ndarray of float
         A list/vector which sums to ``1`` that indicates what weight is assigned to each column (and by implication, what columns are active).
-    duals: dict[str, ndarray or float]
-        Dual values computed from the master problem. This could be a 1D array, 2D array or a float.
-    master_obj_val: float
+    duals : dict[str, numpy.ndarray, scipy.sparse.csr_matrix, or float]
+        Dual values computed from the master problem. Pairwise duals are
+        returned as CSR matrices; scalar and one-dimensional values are also
+        supported by downstream pricing.
+    master_obj_val : float
         The objective value of the master problem.
+
+    Raises
+    ------
+    RuntimeError
+        If the solver terminates without optimality for a reason other than
+        infeasibility.
     """
     _require_pyomo()
     cannot_link = [] if cannot_link is None else cannot_link
@@ -141,18 +194,21 @@ def solve_master_problem(
 
     model.OneColumn = Constraint(rule=one_column_rule)
 
-    if worthy_edges:
+    if worthy_edges is not None:
         worthy_edges = tuple(tuple(sorted(edge)) for edge in worthy_edges)
+        worthy_edge_set = set(worthy_edges)
 
         def worthy_edge_rule(mdl, i, j):
             """
             Enforce worthy-edge consistency for a candidate edge pair.
             """
-            if ((i, j) in worthy_edges) or ((j, i) in worthy_edges):
+            if tuple(sorted((int(i), int(j)))) in worthy_edge_set:
                 return Constraint.Skip
-            return sum(mdl.lmbd[c] * Z_star[c][i, j] for c in mdl.C) == 1
+            return sum(
+                mdl.lmbd[c] * matrix_scalar(Z_star[c], i, j) for c in mdl.C
+            ) == 1
 
-        all_edges = np.argwhere(np.triu(A, k=0) >= 1).tolist()
+        all_edges = structural_edge_pairs(A)
         model.WorthyEdges = Constraint(all_edges, rule=worthy_edge_rule)
     else:
         all_edges = []
@@ -164,7 +220,9 @@ def solve_master_problem(
             """
             Enforce a cannot-link pair in the master problem.
             """
-            return sum(mdl.lmbd[c] * Z_star[c][i, j] for c in mdl.C) == 0
+            return sum(
+                mdl.lmbd[c] * matrix_scalar(Z_star[c], i, j) for c in mdl.C
+            ) == 0
 
         model.CannotLink = Constraint(cannot_link_pairs, rule=cannot_link_rule)
     else:
@@ -177,7 +235,9 @@ def solve_master_problem(
             """
             Enforce a must-link pair in the master problem.
             """
-            return sum(mdl.lmbd[c] * Z_star[c][i, j] for c in mdl.C) == 1
+            return sum(
+                mdl.lmbd[c] * matrix_scalar(Z_star[c], i, j) for c in mdl.C
+            ) == 1
 
         model.MustLink = Constraint(must_link_pairs, rule=must_link_rule)
     else:
@@ -194,8 +254,11 @@ def solve_master_problem(
         model.dual = Suffix(direction=Suffix.IMPORT)
 
     res = solver.solve(model, tee=bool(verbose is True))
-    if res.solver.termination_condition == TerminationCondition.infeasible:
+    condition = res.solver.termination_condition
+    if condition == TerminationCondition.infeasible:
         return (None, None, None) if extract_dual else (None, None)
+    if condition != TerminationCondition.optimal:
+        raise RuntimeError(f"Master solve ended without optimality: {condition}")
     
     lambda_sol = [value(model.lmbd[c]) for c in model.C]
     master_obj_val = value(model.OBJ)
@@ -205,22 +268,40 @@ def solve_master_problem(
 
     duals = {"mu_dual": model.dual.get(model.OneColumn, 0)}
     if cannot_link:
-        tau_dual = np.zeros((I, I))
+        rows, columns, values = [], [], []
         for (i, j) in cannot_link_pairs:
-            tau_dual[i, j] = model.dual.get(model.CannotLink[i, j], 0)
-        duals["tau_dual"] = tau_dual
+            dual = model.dual.get(model.CannotLink[i, j], 0)
+            if dual:
+                rows.append(i)
+                columns.append(j)
+                values.append(dual)
+        duals["tau_dual"] = sparse.csr_matrix(
+            (values, (rows, columns)), shape=(I, I), dtype=float
+        )
 
     if must_link:
-        gamma_dual = np.zeros((I, I))
+        rows, columns, values = [], [], []
         for (i, j) in must_link_pairs:
-            gamma_dual[i, j] = model.dual.get(model.MustLink[i, j], 0)
-        duals["gamma_dual"] = gamma_dual
+            dual = model.dual.get(model.MustLink[i, j], 0)
+            if dual:
+                rows.append(i)
+                columns.append(j)
+                values.append(dual)
+        duals["gamma_dual"] = sparse.csr_matrix(
+            (values, (rows, columns)), shape=(I, I), dtype=float
+        )
 
-    if worthy_edges:
-        pi_dual = np.zeros((I, I))
+    if worthy_edges is not None:
+        rows, columns, values = [], [], []
         for (i, j) in all_edges:
-            if not ((i, j) in worthy_edges or (j, i) in worthy_edges):
-                pi_dual[i, j] = model.dual.get(model.WorthyEdges[i, j], 0)
-        duals["pi_dual"] = pi_dual
+            if tuple(sorted((int(i), int(j)))) not in worthy_edge_set:
+                dual = model.dual.get(model.WorthyEdges[i, j], 0)
+                if dual:
+                    rows.append(i)
+                    columns.append(j)
+                    values.append(dual)
+        duals["pi_dual"] = sparse.csr_matrix(
+            (values, (rows, columns)), shape=(I, I), dtype=float
+        )
 
     return lambda_sol, duals, master_obj_val

@@ -1,6 +1,13 @@
 import numpy as np
+import pytest
+from scipy import sparse
 
 from asunder import CSDDecomposition, CSDDecompositionConfig
+from asunder.base.column_generation.decomposition import (
+    CSD_decomposition,
+    _weighted_column_sum,
+)
+from asunder.orchestrator import _select_final_partition
 
 
 def _ifc_generator(N, **_):
@@ -27,7 +34,6 @@ def test_custom_master_and_subproblem_wiring():
     )
     cfg = CSDDecompositionConfig(
         ifc_params={"generator": _ifc_generator, "num": 1, "args": {"N": A.shape[0]}},
-        extract_dual=True,
         final_master_solve=False,
         max_iterations=3,
         tolerance=1e-8,
@@ -37,3 +43,152 @@ def test_custom_master_and_subproblem_wiring():
     assert result.records
     assert result.final_partition is not None
 
+
+def test_resolution_is_forwarded_to_pricing():
+    adjacency = np.array([[0.0, 1.0], [1.0, 0.0]])
+    observed = {}
+
+    def resolution_subproblem(A, a, m, duals, *, gamma):
+        observed["gamma"] = gamma
+        return 0.0, np.eye(A.shape[0], dtype=int)
+
+    config = CSDDecompositionConfig(
+        resolution=1.25,
+        ifc_params={
+            "generator": _ifc_generator,
+            "num": 1,
+            "args": {"N": adjacency.shape[0]},
+        },
+        use_refined_column=False,
+        refine_post_loop=False,
+        final_master_solve=False,
+        max_iterations=1,
+        disable_tqdm=True,
+        verbose=0,
+    )
+
+    result = CSDDecomposition(
+        config=config,
+        master_fn=_master,
+        subproblem_fn=resolution_subproblem,
+    ).run(adjacency)
+
+    assert observed["gamma"] == 1.25
+    assert result.metadata["resolution"] == 1.25
+
+
+def test_csd_preserves_sparse_adjacency_and_csr_columns():
+    adjacency = sparse.csr_matrix(
+        np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+    )
+    observed = {}
+
+    def sparse_master(A, a, m, Z_star, f_stars, **kwargs):
+        observed["adjacency"] = A
+        observed["column"] = Z_star[0]
+        return [1.0], {"mu_dual": 0.0}, float(f_stars[0])
+
+    config = CSDDecompositionConfig(
+        column_storage="csr",
+        ifc_params={
+            "generator": _ifc_generator,
+            "num": 1,
+            "args": {"N": adjacency.shape[0]},
+        },
+        refine_post_loop=False,
+        final_master_solve=False,
+        max_iterations=1,
+        disable_tqdm=True,
+        verbose=0,
+    )
+    result = CSDDecomposition(
+        config=config,
+        master_fn=sparse_master,
+        subproblem_fn=_subproblem,
+    ).run(adjacency)
+
+    assert sparse.isspmatrix_csr(observed["adjacency"])
+    assert sparse.isspmatrix_csr(observed["column"])
+    assert sparse.isspmatrix_csr(result.final_partition)
+    assert result.metadata["final_partition_storage"] == "csr"
+
+
+def test_mixed_post_loop_columns_accumulate_densely_and_report_final_pool():
+    """Mixed storage is preserved; aggregation and final metadata stay correct."""
+    n_nodes = 20
+    adjacency = np.zeros((n_nodes, n_nodes), dtype=float)
+    adjacency[np.arange(n_nodes - 1), np.arange(1, n_nodes)] = 1.0
+    adjacency += adjacency.T
+    strengths = adjacency.sum(axis=1)
+    labels = np.repeat(np.arange(8), [3, 3, 3, 3, 2, 2, 2, 2])
+    dense_column = np.equal.outer(labels, labels)
+    csr_column = sparse.eye(n_nodes, format="csr", dtype=bool)
+    observed = {}
+
+    def fractional_master(A, a, m, Z_star, f_stars, **kwargs):
+        return [0.5, 0.5], {"mu_dual": 0.0}, 0.0
+
+    def capture_refiner(A, partition, **kwargs):
+        observed["partition"] = partition
+        return dense_column
+
+    raw = CSD_decomposition(
+        adjacency,
+        strengths,
+        float(strengths.sum()),
+        fractional_master,
+        _subproblem,
+        columns=[dense_column, csr_column],
+        f_stars=[0.0, 0.0],
+        refine_params={"refine_func": capture_refiner},
+        refine_post_loop=True,
+        final_master_solve=False,
+        max_iterations=1,
+        disable_tqdm=True,
+        verbose=-1,
+        column_storage="auto",
+        sparse_column_density_threshold=0.1,
+        max_dense_working_bytes=4000,
+    )
+
+    assert isinstance(observed["partition"], np.ndarray)
+    assert np.array_equal(observed["partition"], 0.5 * dense_column + 0.5 * csr_column.toarray())
+    assert isinstance(raw[-1]["columns"][0], np.ndarray)
+    assert sparse.isspmatrix_csr(raw[-1]["columns"][1])
+    assert len(raw) == 2
+    assert "storage_metadata" not in raw[0]
+    assert raw[-1]["storage_metadata"]["column_storage_counts"] == {
+        "dense": 2,
+        "csr": 1,
+    }
+    final, source = _select_final_partition(
+        raw, n_nodes=n_nodes, must_link=(), cannot_link=(), additional_constraints={},
+        max_dense_working_bytes=None,
+    )
+    assert source == "post_loop_refinement"
+    assert np.array_equal(final, dense_column)
+
+
+def test_mixed_post_loop_columns_guard_dense_buffer_and_scratch():
+    with pytest.raises(MemoryError, match="estimated.*working set"):
+        _weighted_column_sum(
+            [0.5, 0.5],
+            [
+                np.ones((3, 3), dtype=bool),
+                sparse.eye(3, format="csr", dtype=bool),
+            ],
+            sparse_column_density_threshold=0.5,
+            max_dense_working_bytes=72,
+        )
+    for cap in (120, None):
+        value = _weighted_column_sum(
+            [0.5, 0.5], [np.ones((3, 3), dtype=bool), sparse.eye(3, format="csr")],
+            sparse_column_density_threshold=0.5, max_dense_working_bytes=cap,
+        )
+        assert np.array_equal(value, 0.5 * (np.ones((3, 3)) + np.eye(3)))
+    sparse_value = _weighted_column_sum(
+        [0.5, 0.5], [sparse.csr_matrix(np.ones((3, 3))), sparse.eye(3, format="csr")],
+        sparse_column_density_threshold=0.0, max_dense_working_bytes=1,
+    )
+    assert sparse.isspmatrix_csr(sparse_value)
+    assert np.array_equal(sparse_value.toarray(), value)

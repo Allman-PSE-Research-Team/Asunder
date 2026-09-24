@@ -1,5 +1,5 @@
-Generic NLBNP Workflow
-======================
+NLBNP Workflows
+===============
 
 .. automodule:: asunder.nlbnp.workflow
    :members:

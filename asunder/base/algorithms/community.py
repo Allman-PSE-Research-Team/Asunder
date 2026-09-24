@@ -10,6 +10,9 @@ from scipy import sparse
 
 from asunder.base.algorithms.signed_louvain import community_detection as cd
 from asunder.base.algorithms.signed_louvain import util as slouvain_util
+from asunder.base.utils.graph import partition_vector_to_2d_matrix
+from asunder.base.utils.matrix import checked_to_dense
+from asunder.types import MatrixLike
 
 
 def _import_sknetwork():
@@ -55,13 +58,53 @@ def _import_leidenalg():
 
     return la
 
-def labels_to_probabilities(A, labels, p=1):
+
+def _igraph_from_matrix(matrix: MatrixLike):
+    """Build an undirected igraph graph without a dense Python-list copy."""
+    ig = _import_igraph()
+    if sparse.issparse(matrix):
+        upper = sparse.triu(matrix, k=0, format="coo")
+    else:
+        upper = sparse.coo_matrix(np.triu(np.asarray(matrix)))
+    keep = upper.data != 0
+    rows = upper.row[keep]
+    columns = upper.col[keep]
+    weights = np.asarray(upper.data[keep], dtype=float)
+    graph = ig.Graph(
+        n=matrix.shape[0],
+        edges=list(zip(rows.tolist(), columns.tolist())),
+        directed=False,
+    )
+    graph.es["weight"] = weights.tolist()
+    return graph
+
+
+def _partition_from_labels(
+    labels,
+    *,
+    column_storage="dense",
+    sparse_column_density_threshold=0.20,
+    max_dense_working_bytes=512 * 1024**2,
+):
+    """Construct a hard column using the requested storage policy."""
+    return partition_vector_to_2d_matrix(
+        np.asarray(labels),
+        storage=column_storage,
+        sparse_column_density_threshold=sparse_column_density_threshold,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
+
+def labels_to_probabilities(
+    A: MatrixLike,
+    labels: np.ndarray,
+    p: int = 1,
+) -> sparse.spmatrix:
     """
     Convert hard labels into row-normalized membership probabilities.
     
     Parameters
     ----------
-    A : ndarray of float, shape (N, N)
+    A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Graph adjacency/weight matrix.
     labels : ndarray of int, shape (N,)
         [Predicted] community labels for each node in a given graph.
@@ -70,82 +113,109 @@ def labels_to_probabilities(A, labels, p=1):
     
     Returns
     -------
-    ndarray of float, shape (N, K)
-        Normalized matrix with K community assignment confidence scores for each node.
+    scipy.sparse.spmatrix, shape (N, K)
+        Normalized matrix with K community-assignment confidence scores for
+        each node.
     """
     _, _, _, _, normalize, get_membership = _import_sknetwork()
-    if not sparse.isspmatrix_csr(A):
+    if sparse.issparse(A):
+        A = sparse.csr_matrix(A, dtype=float)
+    else:
         A = sparse.csr_matrix(np.asarray(A), dtype=float)
     M = get_membership(labels)
     return normalize(A @ M, p=p)
 
 
-def probability_to_integer_labels(probabilities, method="threshold", threshold=0.8, verbose=False):
-    """
-    Heuristic map from probability / soft memberships values to integer labels using a configurable rule. It is used to sunder a core-like community from every other node based on the observation that such core-like nodes have low membership scores across every community, given their central role.
-    These nodes are core-like and not exactly core nodes because they do not exhibit the typical dense connection one expects from core nodes. They, in fact, are not adjacent to one another.
+def probability_to_integer_labels(
+    probabilities,
+    method="threshold",
+    threshold=0.8,
+    verbose=False,
+    seed=42,
+):
+    """Convert soft memberships to labels with a low-confidence group.
+
+    Nodes assigned to the low-confidence group receive label ``-1``. All
+    other nodes receive the label of their largest membership value. For
+    clustering methods, the cluster with the lowest mean maximum-membership
+    confidence is treated as the low-confidence group.
     
     Parameters
     ----------
-    probabilities : ndarray of float, shape (N,K) or (N,)
-        2D probabilities reflect the confidence that each node n belongs to community k. 
-        1D probabilities reflect the confidence that a node is in one of two groups, typically a core and a periphery group.
-    method : str
-        One of "threshold," "gaussian_mixture," and "DBSCAN." Determines whether clustering algorithms are required to process probabilities or if thresholding is sufficient.
-    threshold : float
-        Value (between 0 and 1) below which a node is assumed to be in the core-like group.
-    verbose : bool
-        Controls the verbosity of the output. Default is False.
+    probabilities : ndarray of float, shape (N, K) or (N,)
+        Per-node membership values. For a two-dimensional input, each row
+        contains the memberships of one node. A one-dimensional input contains
+        one confidence value per node.
+    method : {"threshold", "gaussian_mixture", "DBSCAN"}, default="threshold"
+        Rule used to identify the low-confidence nodes.
+    threshold : float, default=0.8
+        Confidence below which a node is assigned to the low-confidence group.
+        This is also the fallback when DBSCAN clustering finds fewer than
+        two clusters.
+    verbose : bool, default=False
+        Whether to print the maximum membership values.
+    seed : int or None, default=42
+        Random seed used by Gaussian-mixture clustering.
     
     Returns
     -------
     ndarray of int, shape (N,)
-        Integer community assignment of the nodes reflecting a bipartition.
+        Hard community labels. Low-confidence nodes have label ``-1``.
+
+    Raises
+    ------
+    ValueError
+        If ``method`` is unsupported or ``probabilities`` has an invalid
+        shape.
     """
     from sklearn.cluster import DBSCAN
     from sklearn.mixture import GaussianMixture
 
-    assert method in ["threshold", "gaussian_mixture", "DBSCAN"]
+    if method not in {"threshold", "gaussian_mixture", "DBSCAN"}:
+        raise ValueError(
+            "method must be one of 'threshold', 'gaussian_mixture', or 'DBSCAN'."
+        )
+    values = np.asarray(probabilities, dtype=float)
+    if values.ndim not in {1, 2} or values.shape[0] == 0:
+        raise ValueError("probabilities must have shape (N,) or (N, K) with N > 0.")
 
-    if probabilities.ndim == 2:
-        p = np.max(probabilities, axis=1).reshape((-1, 1))
+    if values.ndim == 2:
+        p = np.max(values, axis=1).reshape((-1, 1))
+        partition = np.argmax(values, axis=1).astype(int)
     else:
-        p = probabilities.reshape((-1, 1))
-    scaled_probabilities = (probabilities - p.min()) / (p.max() - p.min() + 1e-12)
+        p = values.reshape((-1, 1))
+        partition = np.zeros(values.shape[0], dtype=int)
+    scaled_probabilities = (values - p.min()) / (p.max() - p.min() + 1e-12)
     scaled_probabilities[scaled_probabilities < 0] = 0
 
     if verbose:
         print("Probability values are:\n", p)
-    partition = np.zeros(shape=(probabilities.shape[0],))
 
     if method == "threshold":
-        for i in range(probabilities.shape[0]):
-            if np.max(probabilities[i]) < threshold:
-                partition[i] = -1
-            else:
-                partition[i] = np.argmax(probabilities[i])
+        low_confidence = p.reshape(-1) < threshold
     elif method == "gaussian_mixture":
-        gmm = GaussianMixture(n_components=2, random_state=42)
+        gmm = GaussianMixture(n_components=2, random_state=seed)
         labels_gmm = gmm.fit_predict(p)
-        core_cluster = np.argmin(gmm.means_)
+        low_cluster = int(np.argmin(gmm.means_.reshape(-1)))
         if verbose:
             print("Labels from GMM are:\n", labels_gmm)
-        for i in range(probabilities.shape[0]):
-            if labels_gmm[i] == core_cluster:
-                partition[i] = -1
-            else:
-                partition[i] = np.argmax(probabilities[i])
+        low_confidence = labels_gmm == low_cluster
     else:
         labels_dbscan = DBSCAN().fit_predict(
-            scaled_probabilities if (np.std(np.unique(p)) < 0.25) else probabilities
+            scaled_probabilities if (np.std(np.unique(p)) < 0.25) else values
         )
-        v, c = np.unique(labels_dbscan, return_counts=True)
-        lv = v[np.argmin(c)]
-        for i in range(probabilities.shape[0]):
-            if labels_dbscan[i] == lv:
-                partition[i] = -1
-            else:
-                partition[i] = np.argmax(probabilities[i])
+        clusters = np.unique(labels_dbscan)
+        if clusters.size < 2:
+            low_confidence = p.reshape(-1) < threshold
+        else:
+            confidence = p.reshape(-1)
+            low_cluster = min(
+                clusters,
+                key=lambda cluster: float(confidence[labels_dbscan == cluster].mean()),
+            )
+            low_confidence = labels_dbscan == low_cluster
+
+    partition[low_confidence] = -1
     return partition
 
 def best_girvan_newman_partition(G, max_levels=10):
@@ -178,13 +248,24 @@ def best_girvan_newman_partition(G, max_levels=10):
     return best_communities, best_mod
 
 
-def run_modularity(modified_A, algo="louvain", package="networkx", seed=42, resolution=1, verbose=False):
+def run_modularity(
+    modified_A: MatrixLike,
+    algo="louvain",
+    package="networkx",
+    seed=42,
+    resolution=1,
+    verbose=False,
+    *,
+    column_storage="dense",
+    sparse_column_density_threshold=0.20,
+    max_dense_working_bytes=512 * 1024**2,
+) -> tuple[MatrixLike, float]:
     """
     Run modularity-style community detection and return ``(partition, score)``.
     
     Parameters
     ----------
-    modified_A : ndarray of float, shape (N, N)
+    modified_A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
         The original adjacency / weight matrix can also be parsed.
     algo : str
@@ -197,22 +278,32 @@ def run_modularity(modified_A, algo="louvain", package="networkx", seed=42, reso
         Resolution parameter (gamma) used in modularity based methods.
     verbose : bool
         Controls the verbosity of the output. Default is False.
+    column_storage : {"auto", "dense", "csr"}, default="dense"
+        Physical storage used for the returned hard partition.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set for partition construction.
 
     Returns
     -------
-    zii: ndarray of int, shape (N, N)
+    zii : ndarray of bool or scipy.sparse.csr_matrix, shape (N, N)
         2D graph partition.
     metric: float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
     """
-    assert modified_A.min() >= 0, "Adjacency / weight matrix includes negative values." # TODO: may need to drop this.
+    minimum = modified_A.min() if sparse.issparse(modified_A) else np.min(modified_A)
+    assert minimum >= 0, "Adjacency / weight matrix includes negative values." # TODO: may need to drop this.
     assert algo in ["louvain", "leiden", "greedy", "girvan_newman"]
-    modG = nx.from_numpy_array(modified_A.astype([("weight", "float")]))
+    modG = (
+        nx.from_scipy_sparse_array(sparse.csr_matrix(modified_A), edge_attribute="weight")
+        if sparse.issparse(modified_A)
+        else nx.from_numpy_array(modified_A.astype([("weight", "float")]))
+    )
     metric = None
 
     if package == "igraph":
-        ig = _import_igraph()
-        ig_graph = ig.Graph.Weighted_Adjacency(modified_A.tolist(), mode="UNDIRECTED", attr="weight")
+        ig_graph = _igraph_from_matrix(modified_A)
     else:
         ig_graph = None
 
@@ -269,24 +360,41 @@ def run_modularity(modified_A, algo="louvain", package="networkx", seed=42, reso
         for node in community:
             oneD_z[node] = i
 
-    zii = np.equal.outer(oneD_z, oneD_z).astype(int)
+    zii = _partition_from_labels(
+        oneD_z,
+        column_storage=column_storage,
+        sparse_column_density_threshold=sparse_column_density_threshold,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
     metric = nx.community.modularity(modG, communities, resolution=resolution if resolution is not None else 1)
     return zii, metric
 
 
-def run_lpa(modified_A):
+def run_lpa(
+    modified_A: MatrixLike,
+    *,
+    column_storage="dense",
+    sparse_column_density_threshold=0.20,
+    max_dense_working_bytes=512 * 1024**2,
+) -> tuple[MatrixLike, float]:
     """
     Run label propagation clustering and return ``(partition, modularity)``.
     
     Parameters
     ----------
-    modified_A : ndarray of float, shape (N, N)
+    modified_A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
         The original adjacency / weight matrix can also be parsed.
+    column_storage : {"auto", "dense", "csr"}, default="dense"
+        Physical storage used for the returned hard partition.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set for partition construction.
     
     Returns
     -------
-    zii: ndarray of int, shape (N, N)
+    zii : ndarray of bool or scipy.sparse.csr_matrix, shape (N, N)
         2D graph partition.
     float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
@@ -302,57 +410,91 @@ def run_lpa(modified_A):
     for i, community in enumerate(communities.values()):
         for node in community:
             oneD_z[node] = i
-    zii = np.equal.outer(oneD_z, oneD_z).astype(int)
+    zii = _partition_from_labels(
+        oneD_z,
+        column_storage=column_storage,
+        sparse_column_density_threshold=sparse_column_density_threshold,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
     return zii, get_modularity(modified_A, partition.astype(int))
 
 
-def run_igraph_spinglass(modified_A):
+def run_igraph_spinglass(
+    modified_A: MatrixLike,
+    *,
+    column_storage="dense",
+    sparse_column_density_threshold=0.20,
+    max_dense_working_bytes=512 * 1024**2,
+) -> MatrixLike:
     """
     Run igraph spinglass community detection and return a partition matrix.
     
     Parameters
     ----------
-    modified_A : ndarray of float, shape (N, N)
+    modified_A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
         The original adjacency / weight matrix can also be parsed.
+    column_storage : {"auto", "dense", "csr"}, default="dense"
+        Physical storage used for the returned hard partition.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set for partition construction.
     
     Returns
     -------
-    ndarray of int, shape (N, N)
+    ndarray of bool or scipy.sparse.csr_matrix, shape (N, N)
         2D graph partition.
     """
-    ig = _import_igraph()
-    ig_graph = ig.Graph.Weighted_Adjacency(modified_A.tolist(), mode="UNDIRECTED", attr="weight")
+    ig_graph = _igraph_from_matrix(modified_A)
     clustering = ig_graph.community_spinglass(
         weights="weight", implementation="neg", lambda_=0.0, spins=500, start_temp=1.0, stop_temp=0.01, cool_fact=0.99
     )
     oneD_z = clustering.membership
-    return np.equal.outer(oneD_z, oneD_z).astype(int)
+    return _partition_from_labels(
+        oneD_z,
+        column_storage=column_storage,
+        sparse_column_density_threshold=sparse_column_density_threshold,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
 
 
-def run_igraph(modified_A, algo="infomap", resolution=1):
+def run_igraph(
+    modified_A: MatrixLike,
+    algo="infomap",
+    resolution=1,
+    *,
+    column_storage="dense",
+    sparse_column_density_threshold=0.20,
+    max_dense_working_bytes=512 * 1024**2,
+) -> tuple[MatrixLike, float]:
     """
     Run selected igraph community algorithm and return ``(partition, score)``.
     
     Parameters
     ----------
-    modified_A : ndarray of float, shape (N, N)
+    modified_A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
         The original adjacency / weight matrix can also be parsed.
     algo : str
         Algorithm to be used for modularity based community detection.
     resolution : int or float
         Resolution parameter (gamma) used in computing the modularity metric.
+    column_storage : {"auto", "dense", "csr"}, default="dense"
+        Physical storage used for the returned hard partition.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set for partition construction.
     
     Returns
     -------
-    zii: ndarray of int, shape (N, N)
+    zii : ndarray of bool or scipy.sparse.csr_matrix, shape (N, N)
         2D graph partition.
-    metric: float
+    metric : float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
     """
-    ig = _import_igraph()
-    ig_graph = ig.Graph.Weighted_Adjacency(modified_A.tolist(), mode="UNDIRECTED", attr="weight")
+    ig_graph = _igraph_from_matrix(modified_A)
     if algo == "infomap":
         clustering = ig_graph.community_infomap(edge_weights="weight")
     elif algo == "lpa":
@@ -369,17 +511,32 @@ def run_igraph(modified_A, algo="infomap", resolution=1):
     else:
         raise NotImplementedError("Invalid Igraph Algorithm")
     oneD_z = clustering.membership
-    zii = np.equal.outer(oneD_z, oneD_z).astype(int)
+    zii = _partition_from_labels(
+        oneD_z,
+        column_storage=column_storage,
+        sparse_column_density_threshold=sparse_column_density_threshold,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
     metric = ig_graph.modularity(clustering, weights="weight", resolution=resolution if  algo == "multilevel" else 1)
     return zii, metric
 
-def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=False):
+def run_leidenalg(
+    modified_A: MatrixLike,
+    algo="leiden",
+    seed=42,
+    resolution=1,
+    verbose=False,
+    *,
+    column_storage="dense",
+    sparse_column_density_threshold=0.20,
+    max_dense_working_bytes=512 * 1024**2,
+) -> tuple[MatrixLike, float]:
     """
     Run Leiden algorithm to optimize varying quality functions and return ``(partition, score)``.
 
     Parameters
     ----------
-    modified_A : ndarray of float, shape (N, N)
+    modified_A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
         Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights.
         The original adjacency / weight matrix can also be parsed.
     algo : str
@@ -390,19 +547,24 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
         Resolution parameter (gamma) used.
     verbose : bool
         Controls the verbosity of the output. Default is False.
+    column_storage : {"auto", "dense", "csr"}, default="dense"
+        Physical storage used for the returned hard partition.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set for partition construction.
 
     Returns
     -------
-    zii: ndarray of int, shape (N, N)
+    zii : ndarray of bool or scipy.sparse.csr_matrix, shape (N, N)
         2D graph partition.
-    metric: float
+    metric : float
         Quality of ``zii`` computed using the provided adjacency / weight matrix. This could be modularity, CPM or surprise.
     """
     assert algo in ['leiden', 'signed_leiden', 'cpm_leiden', 'surprise_leiden', 'signed_surprise_leiden']
     la = _import_leidenalg()
-    ig = _import_igraph()
     # create modified graph
-    ig_graph = ig.Graph.Weighted_Adjacency(modified_A.tolist(), mode='UNDIRECTED', attr='weight')
+    ig_graph = _igraph_from_matrix(modified_A)
 
     metric = None
     if algo == "leiden":
@@ -479,29 +641,57 @@ def run_leidenalg(modified_A, algo='leiden', seed=42, resolution=1, verbose=Fals
     oneD_z = np.array(
         partition if algo.startswith("signed") else partition.membership
     )
-    zii = np.equal.outer(oneD_z, oneD_z).astype(int)
+    zii = _partition_from_labels(
+        oneD_z,
+        column_storage=column_storage,
+        sparse_column_density_threshold=sparse_column_density_threshold,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
     return zii, metric
 
 
-def run_signed_louvain(modified_A, seed=42):
+def run_signed_louvain(
+    modified_A,
+    seed=42,
+    resolution=1.0,
+    *,
+    column_storage="dense",
+    sparse_column_density_threshold=0.20,
+    max_dense_working_bytes=512 * 1024**2,
+):
     """
     Run signed Louvain on positive/negative layers and return ``(partition, score)``.
     
     Parameters
     ----------
-    modified_A : ndarray of float, shape (N, N)
-        Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
-        The original adjacency / weight matrix can also be parsed.
+    modified_A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
+        Signed adjacency or dual-adjusted weight matrix. Negative weights are
+        supported. Sparse input crosses a guarded dense boundary before graph
+        extraction and positive/negative layer construction.
     seed : int or None
         Random seed value
-    
+    resolution : float, default=1.0
+        Resolution applied to both signed Louvain layers.
+    column_storage : {"auto", "dense", "csr"}, default="dense"
+        Physical storage used for the returned hard partition.
+    sparse_column_density_threshold : float, default=0.20
+        Maximum density at which automatic storage uses CSR.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense conversion, edge-extraction, and partition
+        construction workspace, including additional work for dense input.
+
     Returns
     -------
-    zii: ndarray of int, shape (N, N)
+    zii : ndarray of bool or scipy.sparse.csr_matrix, shape (N, N)
         2D graph partition.
     float
         Modularity score of ``zii`` computed using the provided adjacency / weight matrix.
     """
+    modified_A = checked_to_dense(
+        modified_A, working_arrays=3.0,
+        max_dense_working_bytes=max_dense_working_bytes,
+        operation="internal signed-Louvain pricing",
+    )
     n_nodes = modified_A.shape[0]
     edges = [(i, j, modified_A[i, j]) for i, j in zip(*np.where(np.triu(modified_A) != 0))]
     graph = slouvain_util.build_nx_graph(n_nodes, edges)
@@ -509,7 +699,7 @@ def run_signed_louvain(modified_A, seed=42):
     communities, status = cd.best_partition(
         layers=[posgraph, neggraph],
         layer_weights=[1.0, -1.0],
-        resolutions=[1.0, 1.0],
+        resolutions=[resolution, resolution],
         masks=[False, True],
         k=2,
         initial_membership=None,
@@ -522,5 +712,10 @@ def run_signed_louvain(modified_A, seed=42):
     oneD_z = np.zeros(shape=(modified_A.shape[0]), dtype=np.int64)
     for node, community in communities.items():
         oneD_z[node] = community
-    zii = np.equal.outer(oneD_z, oneD_z).astype(int)
+    zii = _partition_from_labels(
+        oneD_z,
+        column_storage=column_storage,
+        sparse_column_density_threshold=sparse_column_density_threshold,
+        max_dense_working_bytes=max_dense_working_bytes,
+    )
     return zii, status.modularity()

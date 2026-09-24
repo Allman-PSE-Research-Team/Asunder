@@ -73,6 +73,19 @@ def verify_wheel(wheel: Path, platform_key: str) -> None:
                 "Wheel QMETIS bundle metadata lists unexpected libraries."
             )
 
+        required_runtime_suffixes = {
+            PurePosixPath(
+                "asunder/load_balancing/algorithms/_qmetis_wrapper.py"
+            ),
+        }
+        wheel_paths = [PurePosixPath(name) for name in names]
+        for suffix in required_runtime_suffixes:
+            if not any(
+                name.parts[-len(suffix.parts) :] == suffix.parts
+                for name in wheel_paths
+            ):
+                raise RuntimeError(f"Wheel is missing required file {suffix}.")
+
         wheel_metadata_names = [
             name for name in names if name.endswith(".dist-info/WHEEL")
         ]

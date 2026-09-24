@@ -1,217 +1,121 @@
-Problem Fit and Utility
-=======================
+Problem Fit and Workflow Choice
+===============================
 
-Asunder is most useful when a larger optimization or partitioning problem has a
-meaningful graph representation and the resulting grouping decisions are useful
-for decomposition, coordination analysis, or parallel computing.
+Asunder is useful when a problem has a meaningful undirected graph and the
+resulting groups matter operationally or help decompose a larger optimization
+problem. This page helps decide whether to use Asunder and which workflow to
+start with.
 
-In those settings, the package provides three complementary layers:
+Choose a workflow
+-----------------
 
-- ``asunder.base`` for reusable decomposition and partitioning tools
-- ``asunder.load_balancing`` for the built-in load-balanced graph partitioning
-  workflow
-- ``asunder.nlbnp`` for generic and case-study nonlinear branch-and-price
-  workflows
+.. list-table:: Workflow decision guide
+   :header-rows: 1
+   :widths: 32 32 36
 
-Choosing Between Package Layers
--------------------------------
+   * - Requirement
+     - Recommended entry point
+     - Why
+   * - A fixed number of balanced or bounded communities
+     - ``asunder.load_balancing.LoadBalancer``
+     - It includes initial partitions, balance-aware master and pricing logic,
+       and VFD refinement.
+   * - One NLBNP linear-only separator plus independent communities
+     - ``asunder.nlbnp.CorePeripheryPartition``
+     - It merges the detected periphery into one linear-only group, then
+       excludes it from the original graph to expose connected independent
+       core-side communities without column generation.
+   * - An NLBNP problem not captured by that structural shortcut
+     - ``asunder.nlbnp.NonlinearBranchAndPrice``
+     - It enforces the edge rule through column generation. The cardinality rule
+       is enforced through column generation only for the exact reformulated case;
+       confidence-based and core-periphery modes are structure-specific heuristics.
+   * - Custom initial columns, master, pricing, or refinement
+     - ``asunder.run_csd_decomposition``
+     - It exposes reusable orchestration without imposing one application
+       workflow.
+   * - Only refinement of an existing partition
+     - ``refine_partition_modular_vfd``
+     - It improves one candidate and supports application-defined hard
+       constraints without running the full decomposition loop.
 
-Use ``asunder.base`` when:
+Follow :doc:`../../getting_started/quickstart` for load balancing,
+:doc:`../../getting_started/base_decomposition` for reusable decomposition, or
+:doc:`../../getting_started/nlbnp` for the NLBNP entry points.
 
-- you already have a graph and want reusable decomposition primitives
-- you want to plug in your own master, subproblem, or refinement logic
-- your application is not the current nonlinear branch-and-price workflow
-- you are building the next application package on top of the reusable core
+Good fit
+--------
 
-Use ``asunder.load_balancing`` when:
+Asunder is usually worth trying when:
 
-- you want graph communities with equal, near-equal, or bounded sizes
-- load is represented by node counts rather than a separate custom objective
-- must-link and cannot-link pairs capture required grouping rules
-- you want the packaged initial column generation, master problem, and
-  refinement path
+- nodes represent real units such as tasks, constraints, assets, scenarios,
+  or locations;
+- edge weights express meaningful interaction or coupling strength;
+- dense local interactions and sparser long-range interactions should influence
+  the grouping;
+- balanced loads, pairwise grouping rules, or application-defined community
+  constraints matter;
+- the resulting communities are useful for coordination, interpretation, or a
+  downstream optimization workflow; and
+- heuristic pricing or refinement is acceptable, even if other stages use an
+  exact solver.
 
-Use ``asunder.nlbnp`` when:
+Typical graph patterns include shared variables between mathematical
+constraints, communication between computing tasks, geographic adjacency,
+resource coupling, and interactions across time or scenarios.
 
-- you expect core removal to leave connected components that are meaningful
-  final communities and want ``CorePeripheryPartition``
-- you already have a graph and want a high-level nonlinear branch-and-price
-  workflow through ``NonlinearBranchAndPrice``
-- you want the packaged nonlinear branch-and-price evaluation workflow which
-  imposes edge-based and cardinality constraints.
-- you want the current built-in case-study graph builders
-- you want the NLBNP-specific refinement routine
-
-What Good Problem Fit Looks Like
---------------------------------
-
-The default approach is usually a good first choice when:
-
-- balanced or bounded community sizes are part of the problem definition
-- must-link, cannot-link, or worthy-edge semantics are meaningful
-- nodes represent constraints, tasks, assets, or entities with real
-  coordination structure
-- dense local interactions and sparser long-range interactions both matter
-- a graph partition would make an optimization model easier to solve or easier
-  to understand
-- a heuristic pricing step is acceptable even if the final application still
-  uses solver-backed components elsewhere
-
-In practice, this often means the graph captures one or more of the following:
-
-- work units that must be distributed across balanced groups
-- service regions, teams, scenarios, or assets with graph-backed interaction
-  structure
-- coupling across time periods
-- shared resources or shared decision variables
-- mixed discrete-continuous interactions
-- repeated motifs or region-like communities
-- pairwise incompatibilities or enforced pairwise grouping decisions
-
-What Poor Problem Fit Looks Like
---------------------------------
+Poor fit
+--------
 
 Asunder is usually a poor fit when:
 
-- there is no meaningful graph representation of the problem
-- the graph is almost uniform, with little structure to exploit
-- the important constraints cannot be expressed through pairwise logic, do not
-  fit the Nonlinear Branch and Price workflow, and no custom extension is planned
-- the application requires an exact pricing formulation and domain-specific
-  logic, but you are not prepared to implement those custom pieces
-- the partition itself is not operationally useful and only a full monolithic
-  solve matters
+- there is no defensible graph representation of the problem;
+- the graph is nearly uniform, so it provides little grouping information;
+- the partition has no operational or modeling value by itself;
+- every stage requires an exact application-specific formulation and no custom
+  implementation is planned; or
+- important constraints are enforced only during refinement even though other
+  column-generation stages can introduce violating partitions.
 
-Constraint Graph Compatibility
-------------------------------
+Check the graph before tuning algorithms
+----------------------------------------
 
-For ``asunder.load_balancing.LoadBalancer``, Asunder expects:
+Algorithm settings cannot repair an unsuitable graph model. Before comparing
+pricing or refinement methods, confirm that:
 
-- graph type: undirected ``networkx.Graph``
-- node labels: stable identifiers that can be mapped back to the source system
-- optional constraints: ``must_link`` and ``cannot_link`` pairs using those node
-  labels
-- size controls: ``K`` and ``R`` for near-equal community sizes, or
-  ``R_bounds=(lower, upper)`` for explicit bounds
+- node identity is stable and maps back to application data;
+- edge meaning and weight scale are documented;
+- must-link and cannot-link pairs refer to the intended identifiers;
+- node weights describe the quantity that should be balanced; and
+- a small known example produces communities that are meaningful to a domain
+  expert.
 
-The load balancing workflow does not require the case-study node and edge
-attributes used by ``asunder.nlbnp``. Node attributes can still be present for
-application metadata, but the high-level workflow primarily uses graph topology,
-node labels, and explicit pairwise constraints.
+Choose the right constraint mechanism
+-------------------------------------
 
-For the generic ``asunder.nlbnp.NonlinearBranchAndPrice`` workflow, Asunder can
-start from a ``networkx.Graph`` or a square adjacency matrix. ``worthy_edges``,
-``must_link``, and ``cannot_link`` can be supplied directly; for ``networkx``
-inputs, those pairs use graph node labels. Worthy edges can also be derived from
-an edge attribute with ``worthy_edge_attr`` and ``worthy_edge_value``.
+Use built-in ``must_link`` and ``cannot_link`` arguments for pairwise rules.
+Use ``K``, ``R``, ``R_bounds``, and node weights for ordinary load balancing.
+Use ModularVFD's constraint API when a refinement rule examines community
+contents, counts qualifying communities, or compares the whole partition.
 
-``asunder.nlbnp.CorePeripheryPartition`` accepts the same graph or adjacency
-input styles, plus ``unworthy_edges`` and ``nonlinear_nodes`` constraints. It
-detects a core and returns one community for that core plus one community for
-each connected periphery component. This is the preferred path when those
-components do not require further subdivision. Use ``NonlinearBranchAndPrice``
-when finer-grained periphery communities are expected.
+Custom refinement constraints do not automatically become master or pricing
+constraints. Read
+:doc:`../../reference/development/extending_modular_vfd` before treating a
+custom rule as an end-to-end model guarantee.
 
-For the built-in case-study evaluation flows in ``run_evaluation``, Asunder
-expects a constraint-graph schema similar to the packaged case studies in
-``asunder.nlbnp.case_studies``.
-
-Required fields
-^^^^^^^^^^^^^^^
-
-- graph type: undirected graph, typically ``networkx.Graph``
-- node attribute: ``constraint`` (string tag)
-- edge attribute: ``var_type`` with values ``"integer"`` or ``"continuous"``
-
-Recommended fields
-^^^^^^^^^^^^^^^^^^
-
-- node attributes: ``type`` and ``details``
-- edge attributes: ``weight``, ``variables``, and ``var_types``
-
-Operational meaning in built-in workflows
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-- ``constraint`` is used for ground-truth role labels and for identifying
-  nonlinear/core groups
-- ``var_type`` is used to derive the edge subsets needed by the CP and
-  CD_Refine evaluation paths
-
-If you use the reusable decomposition APIs directly instead of
-``run_evaluation``, the strict case-study graph schema is not required. In that
-mode you can work directly from adjacency data plus explicit
-``must_link``, ``cannot_link``, and optional ``worthy_edges`` inputs.
-
-Representative Domains
-----------------------
-
-Load Balancing and Balanced Decomposition
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-- decomposition workloads where each block should receive a comparable number
-  of graph nodes
-- service territory, team assignment, scenario grouping, or region design
-  problems with graph-backed adjacency
-- non-optimization applications where communities must be interpretable and
-  size-balanced
-
-Stochastic Design and Dispatch in Energy Systems
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-- unit commitment, expansion, and dispatch decisions often couple across time,
-  scenarios, and network constraints
-- graph structure naturally captures temporal continuity, transmission
-  interactions, and shared operational constraints
-- Asunder can separate dense operational blocks while preserving cross-block
-  coordination through the master/pricing loop
-
-Scheduling and Resource Allocation in Healthcare Systems
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-- staffing, bed allocation, OR scheduling, and patient-flow constraints are
-  strongly coupled across shifts and days
-- graph views often reveal repeated motifs such as wards, service lines, and
-  resource teams
-- Asunder can produce partitions aligned with practical coordination boundaries
-
-Planning, Routing, and Location in Supply Chain and Logistics
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-- facility location, routing, and inventory decisions share temporal and
-  capacity coupling
-- graph structure can encode shared assets, lane dependencies, and
-  synchronization constraints
-- Asunder can isolate dense local coordination while leaving broader tradeoffs
-  to the master problem
-
-Network Configuration and Resource Management in Telecommunications
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-- spectrum allocation, routing, placement, and resilience constraints often
-  couple across time and topology
-- interaction graphs frequently contain region-like clusters with sparse
-  long-range coupling
-- Asunder can help identify staged or hierarchical optimization structure
-
-When To Customize
+When to customize
 -----------------
 
-Customization is usually helpful when:
+Customization is appropriate when:
 
-- your preferred objective surrogate differs from modularity-style scoring
-- initial feasible column generation is highly domain-specific
-- pricing requires a custom heuristic or exact formulation
-- the refinement step is application-specific
-- the graph representation is only a starting point and needs extra domain
-  logic to be operationally meaningful
+- the initial feasible partitions require domain-specific construction;
+- the objective used for pricing differs from the built-in modularity-based
+  choices;
+- pricing requires a specialized heuristic or exact formulation;
+- refinement needs application metadata or non-pairwise hard constraints; or
+- the final partition needs domain-specific validation or post-processing.
 
-As a rule of thumb:
-
-- customize within ``asunder.base`` when the logic is reusable across
-  applications
-- extend ``asunder.load_balancing``, ``asunder.nlbnp``, or add a new peer
-  application package when the logic is specific to one workflow or one family
-  of case studies
-
-See ``Reference -> Development Guide -> Special Topics`` for integration
-contracts and extension points.
+Put reusable logic in ``asunder.base``. Put workflow-specific behavior in
+``asunder.load_balancing``, ``asunder.nlbnp``, or another application package.
+The callable contracts are documented in
+:doc:`../../reference/development/special_topics`.

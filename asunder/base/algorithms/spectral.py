@@ -8,6 +8,7 @@ from asunder.base.utils.graph import (
     partition_matrix_to_vector,
     partition_vector_to_2d_matrix,
 )
+from asunder.base.utils.matrix import DEFAULT_MAX_DENSE_WORKING_BYTES
 
 
 def make_dual_adjusted_matrix(A, a, m, dualW, symmetrize=True):
@@ -276,7 +277,7 @@ def refine_two_way_split(B_g, s_init, tol=1e-10):
             temp_value += best_delta
             moved[best_vertex] = True
 
-            if temp_value > best_value + tol:
+            if temp_value > best_value:
                 best_s = temp_s.copy()
                 best_value = temp_value
 
@@ -467,7 +468,7 @@ def spec_part_extra_bisect(
     # zii = (np.outer(gp, gp) + 1) / 2.0
 
     gp = np.where(evmax >= 0, 1, -1).astype(int)
-    if np.all(gp == gp[0]) or leading_value <= tol:
+    if np.all(gp == gp[0]) or leading_value <= 0:
         if verbose == 1:
             print(f"Rejected group {group}: no positive spectral split.")
         return gp, current_obj, z_curr
@@ -494,7 +495,7 @@ def spec_part_extra_bisect(
     return gp, candidate_obj, z_out
 
 
-def best_single_node_move(B, labels, current_obj, allow_singletons=True, tol=1e-10):
+def best_single_node_move(B, labels, current_obj, allow_singletons=True, tol=1e-10, *, max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES):
     """
     Find the best improving single-node move across existing communities.
 
@@ -510,6 +511,8 @@ def best_single_node_move(B, labels, current_obj, allow_singletons=True, tol=1e-
         If True, also test moving a node into a new singleton community.
     tol : float, optional
         Minimum improvement required to accept a move.
+    max_dense_working_bytes : int or None, default=536870912
+        Limit forwarded to dense candidate construction. ``None`` disables it.
 
     Returns
     -------
@@ -537,17 +540,17 @@ def best_single_node_move(B, labels, current_obj, allow_singletons=True, tol=1e-
             candidate_labels = labels.copy()
             candidate_labels[node] = target
             candidate_labels = relabel_consecutive(candidate_labels)
-            candidate_z = partition_vector_to_2d_matrix(candidate_labels)
+            candidate_z = partition_vector_to_2d_matrix(candidate_labels, max_dense_working_bytes=max_dense_working_bytes)
             candidate_obj = partition_objective(B, candidate_z)
 
-            if candidate_obj > best_obj + tol:
+            if candidate_obj > best_obj:
                 best_obj = candidate_obj
                 best_labels = candidate_labels
 
     return best_labels, best_obj, bool(best_obj > current_obj + tol)
 
 
-def greedy_global_refinement(B, z_init, allow_singletons=True, tol=1e-10, max_moves=None):
+def greedy_global_refinement(B, z_init, allow_singletons=True, tol=1e-10, max_moves=None, *, max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES):
     """
     Refine a full partition by greedy single-node moves.
 
@@ -564,6 +567,8 @@ def greedy_global_refinement(B, z_init, allow_singletons=True, tol=1e-10, max_mo
     max_moves : int, optional
         Maximum number of accepted moves. If omitted, at most ``N ** 2`` moves
         are accepted.
+    max_dense_working_bytes : int or None, default=536870912
+        Limit forwarded through candidate construction and node-move searches.
 
     Returns
     -------
@@ -576,7 +581,7 @@ def greedy_global_refinement(B, z_init, allow_singletons=True, tol=1e-10, max_mo
     """
     B = np.asarray(B, dtype=float)
     labels = partition_matrix_to_vector(z_init)
-    obj = partition_objective(B, partition_vector_to_2d_matrix(labels))
+    obj = partition_objective(B, partition_vector_to_2d_matrix(labels, max_dense_working_bytes=max_dense_working_bytes))
     N = B.shape[0]
     if max_moves is None:
         max_moves = N * N
@@ -589,6 +594,7 @@ def greedy_global_refinement(B, z_init, allow_singletons=True, tol=1e-10, max_mo
             obj,
             allow_singletons=allow_singletons,
             tol=tol,
+            max_dense_working_bytes=max_dense_working_bytes,
         )
         if not improved:
             break
@@ -596,7 +602,7 @@ def greedy_global_refinement(B, z_init, allow_singletons=True, tol=1e-10, max_mo
         obj = obj_new
         changed = True
 
-    return partition_vector_to_2d_matrix(labels), obj, changed
+    return partition_vector_to_2d_matrix(labels, max_dense_working_bytes=max_dense_working_bytes), obj, changed
 
 
 def full_spectral_bisection(
@@ -610,6 +616,8 @@ def full_spectral_bisection(
     max_outer_passes=None,
     tol=1e-10,
     verbose=False,
+    *,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ):
     """
     Build a dual-adjusted partition using repeated spectral bisection.
@@ -638,6 +646,9 @@ def full_spectral_bisection(
         Minimum improvement required to accept a split or move.
     verbose : bool, optional
         If True, print accepted and rejected move diagnostics.
+    max_dense_working_bytes : int or None, default=536870912
+        Dense partition-construction limit propagated to nested refinement.
+        The pricing adapter separately guards this dense algorithm's workspace.
 
     Returns
     -------
@@ -683,6 +694,7 @@ def full_spectral_bisection(
                 z_curr,
                 allow_singletons=allow_singletons,
                 tol=tol,
+                max_dense_working_bytes=max_dense_working_bytes,
             )
             if obj_refined > obj + tol:
                 z_curr = z_refined
@@ -698,4 +710,3 @@ def full_spectral_bisection(
             break
 
     return z_curr.astype(int), float(obj)
-    

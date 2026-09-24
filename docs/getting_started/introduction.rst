@@ -1,138 +1,130 @@
 Introduction
 ============
 
-Asunder is a Python package for constrained network structure detection on undirected
-graphs. In practice, that means it helps you take a graph whose nodes and edges are
-subject to constraints and generates a partition that respects those constraints.
+Asunder is a Python package for constrained network structure detection on
+undirected graphs. Simply put, it divides an undirected graph into communities
+under hard constraints. It is designed for problems where the grouping itself
+is useful or where grouping makes a larger optimization problem easier to
+coordinate or solve.
 
-The package is built around a simple idea: many parallel computing problems can be
-viewed through a graph, and the constrained community structure detection problem can
-be decomposed using a restricted master problem plus a pricing or heuristic subproblem.
-Asunder provides reusable tooling for that pattern and leaves room for
-application-specific logic where needed.
+The basic model
+---------------
 
-What Asunder Provides
----------------------
+Every Asunder workflow starts from the same ideas:
 
-Asunder gives you three things:
+``node``
+   An item to group, such as a task, mathematical constraint, asset, or
+   geographic unit.
 
-- a reusable decomposition layer for graph-based constrained partitioning and
-  column-generation style workflows
-- a built-in load balancing workflow for graph partitions with equal,
-  near-equal, or explicitly bounded community sizes
-- packaged application logic for the current nonlinear branch-and-price
-  workflow, plus supporting algorithms, utilities, and visualization helpers
+``edge``
+   A relationship between two nodes. An edge weight can express the strength
+   of that relationship.
 
-The package is therefore useful in three different modes:
+``community``
+   One group of nodes.
 
-- as a reusable toolkit for constrained partitioning and decomposition
-- as a complete load-balanced graph partitioning workflow
-- as a concrete application package for the built-in nonlinear branch-and-price
-  workflow and its case studies
+``partition``
+   A complete assignment of nodes to communities. Most Asunder decomposition
+   APIs represent a partition as an ``N x N`` binary matrix: entry ``[i, j]``
+   is one when nodes ``i`` and ``j`` share a community.
 
-Package Layout
---------------
+``hard constraint``
+   A rule every returned partition must satisfy. Common examples are
+   must-link pairs, cannot-link pairs, and community load bounds.
 
-The public package is intentionally split into layers.
+The graph supplies evidence about which nodes belong together. The constraints
+define which otherwise attractive partitions are allowed.
+
+Choose the highest-level workflow that fits
+-------------------------------------------
+
+.. list-table:: Workflow guide
+   :header-rows: 1
+   :widths: 25 41 34
+
+   * - Workflow
+     - Use it when
+     - Main result
+   * - ``LoadBalancer``
+     - You need a fixed number of balanced or explicitly bounded communities.
+     - A :class:`~asunder.types.DecompositionResult` with a partition matrix
+       and label-aware balance metadata.
+   * - ``CorePeripheryPartition``
+     - An NLBNP constraint graph has one linear-only separator group whose
+       exclusion exposes independent communities.
+     - A one-dimensional label vector plus NLBNP structural metadata.
+   * - ``NonlinearBranchAndPrice``
+     - The NLBNP structural shortcut is insufficient and the packaged
+       column-generation workflow is needed. Its default exact cardinality
+       reformulation uses known worthy edges and nonlinear nodes; confidence
+       and core-periphery refinements are alternatives.
+     - A :class:`~asunder.types.DecompositionResult` with label-aware metadata.
+   * - ``run_csd_decomposition``
+     - You need to supply or replace initial columns, the master problem,
+       pricing, or refinement.
+     - A reusable decomposition result and per-iteration records.
+
+Start with :doc:`quickstart` for ordinary balanced partitioning. Use
+:doc:`base_decomposition` only when you need the reusable orchestration layer,
+and use :doc:`nlbnp` for the two nonlinear branch-and-price entry points.
+
+What column generation means here
+---------------------------------
+
+Some high-level workflows use column generation internally. You do not need to
+understand it to call ``LoadBalancer``. ``CorePeripheryPartition`` bypasses
+column generation and uses the NLBNP structural shortcut described in
+:doc:`nlbnp`.
+
+At a conceptual level:
+
+1. An initial-column generator proposes one or more feasible partitions.
+2. A master problem scores and combines the available candidates.
+3. A pricing method searches for another useful candidate.
+4. An optional refinement heuristic improves candidate partitions.
+5. The process stops when no useful candidate is found or a configured limit
+   is reached.
+
+Users of :doc:`base_decomposition` can replace those pieces. Detailed callable
+contracts live in :doc:`../reference/development/special_topics`.
+
+Package organization
+--------------------
 
 ``asunder``
-   The top-level facade. Use this when you want the main convenience entry
-   points such as ``run_csd_decomposition``, ``solve_master_problem``,
-   ``solve_subproblem``, ``run_evaluation``, or the orchestration/config types.
-
-``asunder.base``
-   The reusable layer. This contains algorithms, branch-and-price utilities,
-   column-generation modules, evaluation metrics, legacy notebook shims,
-   utilities, and visualization helpers.
+   Convenience imports for reusable decomposition, solvers, configuration,
+   and result types.
 
 ``asunder.load_balancing``
-   The application layer for load-balanced graph partitioning. This contains
-   the high-level ``LoadBalancer`` workflow, load-balancing master problem,
-   initial feasible partition generators, and refinement logic.
+   The complete balanced or bounded graph-partitioning workflow.
 
 ``asunder.nlbnp``
-   The application layer for nonlinear branch-and-price workflows. This
-   contains ``CorePeripheryPartition`` for component-level partitioning after
-   core removal, the finer-grained ``NonlinearBranchAndPrice`` workflow, case
-   studies, the built-in evaluation runner, and NLBNP-specific refinement.
+   The NLBNP linear-only-separator shortcut and nonlinear branch-and-price
+   workflow.
 
-If you are building a new application area, ``asunder.base`` is the starting
-point. If you want a complete balanced partitioning workflow, start with
-``asunder.load_balancing``. If you want to use the existing nonlinear
-branch-and-price workflow, ``asunder.nlbnp`` gives you the packaged
-application-specific pieces.
+``asunder.base``
+   Reusable algorithms, column-generation components, utilities, evaluation,
+   and visualization. Most users only need this layer when customizing a
+   workflow.
 
-Mental Model
-------------
+What Asunder does not infer
+---------------------------
 
-Most workflows in Asunder follow this rough sequence:
+Asunder does not automatically turn a raw optimization model into a graph. You
+must supply a NetworkX graph, an adjacency matrix, or application logic that
+constructs one. The quality of the result depends on whether that graph and its
+constraints capture relationships that matter in the application.
 
-1. Build or derive a graph whose nodes represent constraints, tasks, entities,
-   or other units that should be grouped.
-2. Encode constraints through available and additional constraints. This could be
-   pairwise structure through adjacency, weights, must-link, cannot-link, or
-   worthy-edge style constraints.
-3. Generate one or more initial feasible partition matrices.
-4. Run a master problem and a pricing or heuristic subproblem in a loop.
-5. Optionally apply a refinement step or application-specific post-processing.
-6. Evaluate, inspect, or visualize the resulting partition.
+It also does not guarantee that a generic heuristic will solve every custom
+constraint effectively. ModularVFD supports extensible community and
+partition constraints, but difficult rules may need specialized repair logic
+and enforcement in other column-generation stages.
 
-You do not need every layer every time. Some users will call
-``asunder.load_balancing.LoadBalancer`` directly, some will use the high-level
-top-level decomposition API, and others will work directly with
-``asunder.base`` modules and plug in their own master, subproblem, and
-refinement routines.
-
-When To Start High-Level vs Low-Level
--------------------------------------
-
-Start with the top-level API if:
-
-- you want to run the default decomposition loop quickly
-- you are still validating whether your problem is a good fit
-- you mainly need orchestration and typed results
-
-Use ``asunder.load_balancing`` if:
-
-- you want graph communities with balanced or bounded sizes
-- you have must-link or cannot-link constraints between graph nodes
-- you want a packaged workflow instead of custom master/subproblem wiring
-
-Drop into ``asunder.base`` if:
-
-- you need a custom master problem
-- you need a custom pricing/subproblem routine
-- you want to mix and match reusable utilities and algorithms
-- you are building a new application package on top of the reusable layer
-
-Use ``asunder.nlbnp`` if:
-
-- you expect core removal to expose connected components that are final
-  communities
-- you already have a graph and want the generic nonlinear branch-and-price
-  workflow
-- you want the built-in nonlinear branch-and-price case studies
-- you want the packaged evaluation runner
-- you need the NLBNP-specific refinement workflow
-
-What Asunder Does Not Do For You
---------------------------------
-
-Asunder does not yet support general-purpose automatic decomposition from a raw
-Pyomo model. It expects you to supply either:
-
-- a graph representation of the problem, or
-- enough application logic to derive one
-
-It is also not a guarantee that a default heuristic will be appropriate for
-every problem. The package is designed so that you can replace initial feasible
-column generation, master problem logic, subproblem logic, and refinement logic
-when the default pieces are not enough.
-
-Next Steps
+Next steps
 ----------
 
-- See :doc:`installation` for environment setup.
-- See :doc:`quickstart` for load balancing and minimal decomposition examples.
-- See :doc:`../learn/guides/problem_fit` for guidance on when the package is a
-  good fit and when customization is likely to be necessary.
+- :doc:`installation` explains package, solver, and optional-feature setup.
+- :doc:`quickstart` builds a first balanced partition.
+- :doc:`../learn/guides/problem_fit` helps choose or reject a workflow.
+- :doc:`../reference/development/extending_modular_vfd` explains custom
+  refinement constraints.

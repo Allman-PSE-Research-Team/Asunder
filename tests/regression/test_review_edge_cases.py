@@ -34,6 +34,25 @@ def _small_graph():
     return A, A.sum(axis=1), float(A.sum()), np.eye(2, dtype=int)
 
 
+@pytest.mark.parametrize(
+    ("solver_type", "option_name"),
+    [
+        ("gurobi_direct", "TimeLimit"),
+        ("cplex_direct", "timelimit"),
+        ("appsi_highs", "time_limit"),
+    ],
+)
+def test_projection_time_limit_uses_native_solver_option(solver_type, option_name):
+    solver = SimpleNamespace(type=solver_type, options={option_name: 30.0})
+
+    restore, applied = lb_module._temporarily_apply_projection_time_limit(solver, 15.0)
+
+    assert applied is True
+    assert solver.options[option_name] == 15.0
+    restore()
+    assert solver.options[option_name] == 30.0
+
+
 def _master_ok(A, a, m, Z_star, f_stars, extract_dual=False, **kwargs):
     lambdas = [1.0] + [0.0] * (len(Z_star) - 1)
     if extract_dual:
@@ -128,9 +147,8 @@ def test_final_master_infeasibility_records_no_partition():
         _subproblem_eye,
         columns=[Z],
         f_stars=[0.0],
-        extract_dual=True,
         final_master_solve=True,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -163,9 +181,8 @@ def test_contract_final_master_infeasibility_expands_none():
         must_link=[(0, 1)],
         additional_constraints=dict(),
         contract_graph=True,
-        extract_dual=True,
         final_master_solve=True,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -194,14 +211,13 @@ def test_contracted_decomposition_maps_cannot_links_for_initial_columns():
         must_link=[(0, 1)],
         cannot_link=[(0, 3)],
         contract_graph=True,
-        extract_dual=True,
         ifc_params={
             "generator": make_simple_partition,
             "num": 1,
-            "args": {"N": 4, "cannot_link": [(0, 3)]},
+            "args": {"N": 4},
         },
         final_master_solve=False,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -241,9 +257,8 @@ def test_contracted_decomposition_transforms_and_rescores_warm_start():
         f_stars=[12345.0],
         must_link=[(0, 1)],
         contract_graph=True,
-        extract_dual=True,
         final_master_solve=False,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -285,24 +300,71 @@ def test_contracted_single_component_short_circuits_pricing():
     assert np.array_equal(out[0]["columns"][0], np.ones((1, 1), dtype=int))
     assert out[0]["lambda_sol"] == [1.0]
 
-
-def test_load_balancing_contraction_is_explicitly_unsupported():
-    """Component cardinalities require vertex weights before LB contraction."""
-    A, a, m, _ = _small_graph()
-
-    with pytest.raises(ValueError, match="component-size vertex weights"):
+    # Tiny contracted work must not conceal the original-size allocation.
+    original = csr_matrix(nx.to_numpy_array(nx.path_graph(16)))
+    kwargs = dict(
+        must_link=[(0, node) for node in range(1, 16)],
+        contract_graph=True, disable_tqdm=True, verbose=-1,
+    )
+    with pytest.raises(MemoryError, match="original-size partition expansion"):
         CSD_decomposition(
-            A,
-            a,
-            m,
-            _master_ok,
-            _subproblem_eye,
-            must_link=[(0, 1)],
-            additional_constraints={"LB": True, "K": 1, "R": 0},
-            contract_graph=True,
-            disable_tqdm=True,
-            verbose=-1,
+            original, np.asarray(original.sum(axis=1)).ravel(), float(original.sum()),
+            unexpected_call, unexpected_call, max_dense_working_bytes=80, **kwargs,
         )
+    for cap in (512, None):
+        expanded = CSD_decomposition(
+            original, np.asarray(original.sum(axis=1)).ravel(), float(original.sum()),
+            unexpected_call, unexpected_call, max_dense_working_bytes=cap, **kwargs,
+        )
+        assert np.array_equal(expanded[-1]["z_sol"], np.ones((16, 16), dtype=bool))
+
+
+def test_load_balancing_contraction_propagates_component_weights():
+    """Contracted load balancing counts original node mass, not supernodes."""
+    A = nx.to_numpy_array(nx.path_graph(3), dtype=float)
+    captured = {}
+
+    def generator(N, node_weights, **_):
+        captured["generator_weights"] = np.asarray(node_weights).copy()
+        return [np.eye(N, dtype=int)]
+
+    def master(A, a, m, Z_star, f_stars, balance_weights=None, **_):
+        captured["master_weights"] = np.asarray(balance_weights).copy()
+        return [1.0], {"mu_dual": 0.0}, float(f_stars[0])
+
+    def pricing(A, a, m, duals, balance_weights=None, **_):
+        captured["pricing_weights"] = np.asarray(balance_weights).copy()
+        return 0.0, np.eye(A.shape[0], dtype=int)
+
+    out = CSD_decomposition(
+        A,
+        A.sum(axis=1),
+        float(A.sum()),
+        master,
+        pricing,
+        must_link=[(0, 1)],
+        node_weights=[1, 2, 3],
+        additional_constraints={
+            "LB": True,
+            "K": 2,
+            "R": 1,
+        },
+        contract_graph=True,
+        ifc_params={
+            "generator": generator,
+            "num": 1,
+            "args": {"N": 3},
+        },
+        final_master_solve=False,
+        max_iterations=1,
+        disable_tqdm=True,
+        verbose=-1,
+    )
+
+    assert np.array_equal(captured["generator_weights"], np.array([3.0, 3.0]))
+    assert np.array_equal(captured["master_weights"], np.array([3.0, 3.0]))
+    assert np.array_equal(captured["pricing_weights"], np.array([3.0, 3.0]))
+    assert out[-1]["node2comp"].tolist() == [0, 0, 1]
 
 
 def test_decomposition_accepts_wrapped_heuristic_callables():
@@ -322,14 +384,15 @@ def test_decomposition_accepts_wrapped_heuristic_callables():
             hook,
             columns=[Z],
             f_stars=[0.0],
-            extract_dual=True,
             final_master_solve=False,
-            max_iterations=0,
+            max_iterations=1,
             disable_tqdm=True,
             verbose=-1,
         )
         assert out[-1]["z_sol"].shape == A.shape
 
+def improving_subproblem(A, a, m, duals, **kwargs):
+    return 1.0, np.eye(A.shape[0], dtype=int)
 
 def test_refine_post_loop_false_keeps_in_loop_refinement_only():
     """Regression coverage for decoupling in-loop and post-loop refinement."""
@@ -345,15 +408,14 @@ def test_refine_post_loop_false_keeps_in_loop_refinement_only():
         a,
         m,
         _master_ok,
-        _subproblem_eye,
+        improving_subproblem,
         columns=[Z],
         f_stars=[0.0],
-        extract_dual=True,
         refine_params={"refine_func": refine_once, "kwargs": {}},
         use_refined_column=True,
         refine_post_loop=False,
         final_master_solve=False,
-        max_iterations=0,
+        max_iterations=1,
         disable_tqdm=True,
         verbose=-1,
     )
@@ -433,7 +495,8 @@ def test_projection_ilp_returns_strict_k_load_balanced_partition():
     assert meta["K_used"] == 2
     assert meta["requested_K"] == 2
     assert meta["feasibility_fallback"] == "projection_ilp"
-    assert meta["projection_wz_score"] == pytest.approx(4.0)
+    assert meta["projection_objective"] == pytest.approx(2.0)
+    assert meta["projection_distance"] == pytest.approx(8.0)
 
 
 def test_projection_ilp_rejects_infeasible_strict_k_before_solving():
@@ -501,7 +564,10 @@ def test_vfd_returns_feasible_fallback_when_reference_score_is_unattainable():
     )
 
     for out in (
-        modular_very_fortunate_descent(**common_kwargs),
+        modular_very_fortunate_descent(
+            **common_kwargs,
+            use_K_constraint=True,
+        ),
         very_fortunate_descent(**common_kwargs),
     ):
         assert out is not None
@@ -522,7 +588,7 @@ def test_core_periphery_seed_none_uses_local_rng():
 
     EnhancedGeneticBE(A, pop_size=4, generations=1, tournament_size=2, seed=None).run()
     FullContinuousGeneticBE(A, pop_size=4, generations=1, tournament_size=2, seed=None).run()
-    detect_continuous_KL(csr_matrix(A), must_links=[], nonlinear_nodes=[], max_iter=1, seed=None)
+    detect_continuous_KL(csr_matrix(A), must_link=[], must_group=[], max_iter=1, seed=None)
 
 
 def test_find_core_advanced_validates_labels():

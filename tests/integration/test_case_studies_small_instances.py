@@ -262,9 +262,12 @@ def _assert_real_decomposition_quality(A, labels_gt, results):
 
 def _tracked_package_refine(counter):
     """Track refinement"""
-    def _refine(A, partition, **kwargs):
+    def _refine(A, partition, *, must_link=(), cannot_link=(), **kwargs):
         counter["count"] += 1
-        return refine_partition_linear_group(A=A, partition=partition, **kwargs)
+        return refine_partition_linear_group(
+            A=A, partition=partition, must_link=must_link,
+            cannot_link=cannot_link, **kwargs,
+        )
 
     return _refine
 
@@ -311,7 +314,6 @@ def test_cd_refine_real_decomposition_quality_cpcong_small_instance():
         additional_constraints=additional_constraints,
         algo="spectral",
         package=None,
-        extract_dual=True,
         ifc_params=ifc_params,
         refine_params=refine_params,
         use_refined_column=True,
@@ -366,7 +368,6 @@ def test_cd_refine_real_decomposition_quality_circcut_small_instance():
         additional_constraints=additional_constraints,
         algo="spectral",
         package=None,
-        extract_dual=True,
         ifc_params=ifc_params,
         refine_params=refine_params,
         use_refined_column=True,

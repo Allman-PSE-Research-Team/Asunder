@@ -2,40 +2,51 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from asunder.base.algorithms.modular_VFD import _range_bounds_from_KR
+from asunder.base.utils.graph import partition_matrix_to_vector
 
 
 def resolve_balance_bounds(
-    n_nodes: int,
+    n_nodes: int | float,
     K: int,
     R: int,
     R_bounds: tuple[int | None, int | None] | None = None,
 ) -> tuple[int, int]:
-    """Resolve and validate load-balancing community-size bounds.
+    """Resolve and validate integer community-load bounds.
 
     Parameters
     ----------
-    n_nodes : int
-        Number of graph nodes.
+    n_nodes : int or float
+        Total node weight, which must be integer-valued. Equals the node
+        count for unit weights; contraction preserves this total.
     K : int
         Number of requested communities.
     R : int
-        Width of the default permitted size range.
+        Width of the default permitted load range, in node-weight units.
     R_bounds : tuple[int or None, int or None] or None
-        Optional explicit lower and upper bounds. A missing endpoint is
-        replaced by one or ``n_nodes``, respectively.
+        Optional explicit integer lower and upper load bounds, in node-weight
+        units. A missing endpoint is replaced by one or ``n_nodes``, respectively.
 
     Returns
     -------
     lower : int
-        Inclusive minimum community size.
+        Inclusive minimum community load.
     upper : int
-        Inclusive maximum community size, capped at ``n_nodes``.
+        Inclusive maximum community load, capped at ``n_nodes``.
 
     Raises
     ------
     ValueError
         If node, community, range, or bound values are inconsistent.
+
+    Notes
+    -----
+    Default bounds use half-up rounding about ``n_nodes / K``. Consequently,
+    scaling both the weights and ``R`` need not scale the derived bounds
+    exactly. To preserve existing bounds, scale explicit ``R_bounds`` instead.
+    Node weights and bounds are never scaled automatically.
     """
 
     # Below, we respect the range parameter: R_max = R_min + R
@@ -45,6 +56,12 @@ def resolve_balance_bounds(
     # ⌊(I/K - R/2) + 1/2⌋ = ((2*I) - K*(R - 1)) // (2*K)
     # We, however, do not anticipate such issues as a graph that big should only be looked at from afar.
 
+    if not float(n_nodes).is_integer():
+        raise ValueError(
+            "The total balance weight must be an integer. Scale node weights "
+            "and explicit R_bounds to common integer units before calling."
+        )
+    n_nodes = int(n_nodes)
     if n_nodes < 0:
         raise ValueError("n_nodes must be nonnegative.")
     if K < 1:
@@ -111,3 +128,45 @@ def epsilon_for_upper_bound(n_nodes: int, K: int, R_max: int) -> float:
 
     average = n_nodes / K
     return max(0.0, float(R_max) / average - 1.0)
+
+
+def partition_satisfies_balance_constraints(
+    partition,
+    *,
+    K: int,
+    R: int,
+    R_bounds: tuple[int | None, int | None] | None = None,
+    balance_weights=None,
+) -> bool:
+    """Return whether a partition satisfies the balance constraints."""
+    matrix = partition
+    n_nodes = matrix.shape[0]
+    try:
+        K = int(K)
+        R = int(R)
+    except (TypeError, ValueError):
+        return False
+    if balance_weights is None:
+        weights = np.ones(n_nodes, dtype=int)
+    else:
+        weights = np.asarray(balance_weights)
+        if weights.shape != (n_nodes,):
+            return False
+        if (
+            not np.all(np.isfinite(weights))
+            or np.any(weights <= 0)
+            or not np.all(weights == np.rint(weights))
+        ):
+            return False
+    labels = partition_matrix_to_vector(matrix)
+    loads = np.bincount(labels, weights=weights)
+    try:
+        lower, upper = resolve_balance_bounds(
+            float(np.sum(weights)),
+            K,
+            R,
+            R_bounds,
+        )
+    except ValueError:
+        return False
+    return bool(np.all((loads >= lower) & (loads <= upper)))

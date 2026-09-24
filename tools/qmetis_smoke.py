@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import faulthandler
+
+# Enable before third-party imports: native dependencies can fail during import.
+faulthandler.enable()
+print("qmetis_smoke: importing dependencies", flush=True)
+
 import networkx as nx
 import numpy as np
 
@@ -20,9 +26,11 @@ def main() -> int:
     """Exercise native QMETIS and end-to-end LoadBalancer routing."""
 
     adjacency = nx.to_numpy_array(nx.path_graph(8), dtype=float)
+    print("qmetis_smoke: native k-way partition", flush=True)
     partition, modularity = run_qmetis(
         adjacency,
         2,
+        resolution=1.25,
         balance_epsilon=0.25,
         seed=7,
     )
@@ -30,7 +38,21 @@ def main() -> int:
         raise RuntimeError(f"Unexpected QMETIS partition shape {partition.shape}.")
     if not np.isfinite(modularity):
         raise RuntimeError(f"QMETIS returned non-finite modularity {modularity}.")
+    print("qmetis_smoke: native recursive partition", flush=True)
+    recursive_partition, recursive_modularity = run_qmetis(
+        adjacency,
+        2,
+        resolution=1.25,
+        balance_epsilon=0.25,
+        recursive=True,
+        seed=7,
+    )
+    if recursive_partition.shape != adjacency.shape or not np.isfinite(
+        recursive_modularity
+    ):
+        raise RuntimeError("Recursive QMETIS modularity smoke test failed.")
 
+    print("qmetis_smoke: pricing adapter", flush=True)
     a = adjacency.sum(axis=1)
     m = float(a.sum())
     reduced_cost, priced_partition = qmetis_pricing_subproblem(
@@ -44,20 +66,24 @@ def main() -> int:
         },
         K=2,
         R=2,
+        gamma=1.25,
         seed=7,
     )
     if priced_partition.shape != adjacency.shape or not np.isfinite(reduced_cost):
         raise RuntimeError("QMETIS pricing adapter smoke test failed.")
 
+    print("qmetis_smoke: creating HiGHS solver", flush=True)
     solver = create_solver("appsi_highs")
     if not solver.available(exception_flag=False):
         raise RuntimeError("The HiGHS solver required by the release smoke test is unavailable.")
     set_default_solver(solver)
+    print("qmetis_smoke: LoadBalancer", flush=True)
     result = LoadBalancer(
         nx.path_graph(8),
         K=2,
         R=2,
         algorithm="qmetis",
+        resolution=1.25,
         ifc_generator="ordered",
         refine_post_loop=True,
         max_iterations=3,
@@ -76,6 +102,7 @@ def main() -> int:
         "qmetis_smoke_ok",
         bundled_qmetis_release(),
         float(modularity),
+        float(recursive_modularity),
         float(reduced_cost),
     )
     return 0

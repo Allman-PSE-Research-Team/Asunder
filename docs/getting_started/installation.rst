@@ -1,154 +1,142 @@
 Installation
 ============
 
-Asunder is distributed on PyPI as ``put-asunder``. The base install is enough
-for the main package, the load balancing workflow, the default decomposition
-APIs, NetworkX-based algorithms, scikit-network algorithms, Pyomo modeling, and
-the standard evaluation utilities.
+Asunder is distributed on PyPI as ``put-asunder`` and supports Python 3.10
+through 3.14.
 
-Base Install
-------------
+Install and verify
+------------------
 
-Install the released package with:
+Install the released package:
 
 .. code-block:: bash
 
    python -m pip install put-asunder
 
-QMETIS Platform Support
------------------------
+Verify the import and installed version:
 
-The released Windows x86-64, Linux x86-64, and macOS universal2 wheels bundle
-the pinned ``qmetis-v5.2.1-modularity.1`` native library with an
-``idx64-real32`` ABI. Pip selects the compatible platform wheel automatically.
-Each wheel includes only ``qmetis.dll``, ``libqmetis.so``, or
-``libqmetis.dylib`` as appropriate; generic ``metis``-named native libraries
-are deliberately excluded.
+.. code-block:: bash
 
-Use the bundled load-balancing pricing heuristic with:
+   python -c "import asunder; print(asunder.__version__)"
+
+The base installation includes NetworkX, NumPy, Pyomo, ``python-igraph``, and
+``leidenalg``. Signed Leiden is the default pricing heuristic.
+
+Configure an optimization solver
+--------------------------------
+
+``LoadBalancer``, ``NonlinearBranchAndPrice``, and the default reusable
+decomposition workflow solve Pyomo master problems. They therefore require an
+available Pyomo-compatible solver.
+
+Asunder selects ``gurobi_direct`` by default. Installing ``gurobipy`` does not
+provide a Gurobi license; configure a local, WLS, or other supported Gurobi
+license before running a solver-backed workflow. A simple availability check
+is:
 
 .. code-block:: python
 
-   result = LoadBalancer(G, K=4, R=2, algorithm="qmetis")
+   from asunder import create_solver
 
-The high-level interface intentionally has no QMETIS-specific parameters.
-Asunder derives QMETIS's search envelope from the load-balancing bounds and
-recalculates reduced cost with the original floating-point graph and duals.
-Because QMETIS does not reliably support adjacency self-loops, its candidate
-generator drops nonzero diagonal values, including internal-edge mass created
-by graph contraction, and emits
-:class:`~asunder.load_balancing.algorithms.qmetis.QMETISApproximationWarning`.
-This is an explicit search approximation only; exact reduced-cost rescoring
-continues to use the original diagonal values.
+   solver = create_solver("gurobi_direct")
+   if not solver.available(False):
+       raise RuntimeError("Gurobi is not available or is not licensed")
 
-The source distribution does not contain native libraries. A source install
-can use the rest of Asunder normally, but selecting ``algorithm="qmetis"``
-requires a compatible QMETIS library to be staged during a platform-wheel
-build.
+To select a different installed Pyomo solver for the current process, register
+it before calling a high-level workflow. For example, after installing
+``highspy``:
 
-Optional Extras
+.. code-block:: bash
+
+   python -m pip install highspy
+
+.. code-block:: python
+
+   from asunder import create_solver
+   from asunder.solvers import set_default_solver
+
+   solver = create_solver("appsi_highs")
+   if not solver.available(False):
+       raise RuntimeError("HiGHS is not available")
+   set_default_solver(solver)
+
+The solver executable, license, and solver-specific environment configuration
+remain local responsibilities; they are not provided by an Asunder extra.
+
+Optional extras
 ---------------
 
-Optional extras add dependencies for workflows that are useful but not required
-for every installation. Extras can be installed one at a time or combined in a
-comma-separated list.
-
-``graph``
-   Installs ``python-igraph`` and ``leidenalg``.
-
-   Use this extra when you want the igraph- or leidenalg-backed community
-   detection paths, such as calling decomposition routines with
-   ``package="igraph"`` or ``package="leidenalg"``. These backends are
-   especially useful for larger graph instances where compiled graph routines
-   can be faster than pure Python alternatives. ``python-igraph`` is also used
-   by some graph automorphism and symmetry-detection helpers.
-
-   .. code-block:: bash
-
-      python -m pip install "put-asunder[graph]"
-
 ``viz``
-   Installs ``matplotlib`` and ``seaborn``.
-
-   Use this extra when you want plotting helpers under
-   ``asunder.base.visualization`` for graph, partition, and matrix inspection.
-   It is independent of the graph extra, but commonly installed with it for
-   exploratory analysis.
+   Installs Matplotlib and Seaborn for graph, partition, and matrix
+   visualization.
 
    .. code-block:: bash
 
       python -m pip install "put-asunder[viz]"
 
 ``legacy``
-   Installs ``cpnet``.
-
-   Use this extra only when you need legacy core-periphery heuristics that rely
-   on ``cpnet``. The core package and current high-level workflows do not
-   require it. The legacy extra is best-effort on Python 3.13 and 3.14 because
-   it depends on compatibility from the upstream legacy package.
+   Installs ``cpnet`` for legacy core-periphery heuristics. Current high-level
+   workflows do not require it. Upstream compatibility makes this extra
+   best-effort on Python 3.13 and 3.14.
 
    .. code-block:: bash
 
       python -m pip install "put-asunder[legacy]"
 
 ``docs``
-   Installs the Sphinx documentation toolchain: ``sphinx``, ``furo``,
-   ``myst-parser``, and ``sphinx-autodoc-typehints``.
-
-   Use this extra from a local clone when you want to build the documentation.
+   Installs the Sphinx documentation toolchain for a local clone.
 
    .. code-block:: bash
 
       python -m pip install -e ".[docs]"
 
 ``dev``
-   Installs development tools: ``build``, ``pytest``, ``pytest-cov``,
-   ``ruff``, ``mypy``, and ``pre-commit``.
-
-   Use this extra from a local clone when you want to run tests, linting, type
-   checks, or contribution hooks.
+   Installs testing, linting, type-checking, build, and contribution tools.
 
    .. code-block:: bash
 
       python -m pip install -e ".[dev]"
 
-Common Install Recipes
-----------------------
-
-Install graph algorithms plus visualization support from PyPI:
+For a complete contributor environment:
 
 .. code-block:: bash
 
-   python -m pip install "put-asunder[graph,viz]"
+   python -m pip install -e ".[dev,viz,docs]"
 
-Install the common contributor environment from a local clone:
+QMETIS availability
+-------------------
+
+Released Windows x86-64, Linux x86-64, and macOS universal2 wheels bundle the
+QMETIS native library. Pip selects the matching wheel automatically. The
+source distribution does not contain native binaries, so ``algorithm="qmetis"``
+is unavailable from a plain source install unless a compatible library is
+staged as part of a platform-wheel build.
+
+QMETIS is optional at runtime: other pricing algorithms work without its
+native library. See :doc:`../reference/qmetis` for supported platforms,
+quantization, contraction, and approximation details.
+
+Build the documentation
+-----------------------
+
+From a local clone with the ``docs`` extra installed:
 
 .. code-block:: bash
 
-   python -m pip install -e ".[dev,graph,viz,docs]"
+   sphinx-build -W --keep-going -b html docs docs/_build/html
 
-Build the documentation after installing the documentation dependencies:
+Troubleshooting
+---------------
 
-.. code-block:: bash
+``No executable found`` or ``solver not available``
+   Install and configure a Pyomo-compatible solver, then register it with
+   ``set_default_solver`` if it is not Gurobi.
 
-   sphinx-build -b html docs docs/_build/html
+Gurobi license errors
+   Follow the Gurobi license instructions for your environment. Depending on
+   the license type, this may involve ``GRB_LICENSE_FILE`` or WLS credential
+   variables.
 
-Python Support
---------------
-
-The core package supports Python 3.10, 3.11, 3.12, 3.13, and 3.14. The
-mainstream ``graph`` and ``viz`` extras are also expected to work across those
-versions. The ``legacy`` extra is maintained on a best-effort basis on Python
-3.13 and 3.14 because it depends on upstream legacy dependencies.
-
-Notes
------
-
-Solver-backed workflows require an available Pyomo-compatible solver in your
-local environment. Asunder includes the Python modeling interfaces needed by
-the package, but solver executables, licenses, and solver-specific environment
-configuration remain local setup concerns rather than dedicated Asunder extras.
-
-For Gurobi-backed runs, configure your environment as required by Gurobi. In
-many setups that includes setting ``GRB_LICENSE_FILE`` before calling
-``create_solver("gurobi_direct")`` or another Gurobi solver name.
+QMETIS import errors
+   Confirm that pip installed a supported platform wheel. Use another pricing
+   algorithm when working from an unstaged source distribution.

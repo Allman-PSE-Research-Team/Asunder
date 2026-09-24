@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-
-from asunder.base.utils.graph import partition_vector_to_2d_matrix
+from scipy import sparse
 
 
 def _canonicalize_labels(labels: np.ndarray | list[int]) -> np.ndarray:
@@ -132,6 +131,8 @@ def _parse_duals_to_matrix_and_constant(
     constant_terms = 0.0
 
     for _, dual in duals.items():
+        if sparse.issparse(dual):
+            raise TypeError("RCCS requires dense duals; use custom_heuristic_subproblem for sparse duals.")
         if dual is None:
             continue
         if np.isscalar(dual):
@@ -782,11 +783,10 @@ def compute_modularity_reduced_cost(
 
     a = A.sum(axis=1)
     m = float(A.sum())
-    Z = partition_vector_to_2d_matrix(labels_arr)
     modularity_base = (A / m) - (np.outer(a, a) / (m * m))
 
-    modularity_term = float(np.sum(modularity_base * Z))
-    dual_partition_term = float(np.sum(dualW * Z))
+    modularity_term = _score_labels_from_W(labels_arr, modularity_base, 0.0)
+    dual_partition_term = _score_labels_from_W(labels_arr, dualW, 0.0)
     reduced_cost = modularity_term - dual_partition_term - float(constant_terms)
 
     if not return_details:

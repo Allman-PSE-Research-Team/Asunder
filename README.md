@@ -1,295 +1,221 @@
-![](assets/asunder.gif)
----
-Asunder is a Python package for constrained network structure detection (constrained graph clustering) on undirected graphs, with a workflow centered on column generation and customizable master/subproblem pipelines. Graph clustering itself is an important task in a lot of traditional optimization, data-mining and machine learning pipelines. In these application areas, constraints on the kind of clusters or structures that are detected naturally occur but generalized workflows / packages for handling them did not exist. Asunder changes that.
+# Asunder
 
-Asunder works by combining traditional solver based optimization with classical machine learning algorithms. In the process, expensive Integer Linear Program (ILP) subproblems are replaced with heuristic clustering algorithms while ensuring that dual information from an LP master problem are respected. This enables the solution of a wide range of constrained structure detection (constrained graph clustering) problems, insofar as a master problem, and any other relevant custom element, can be properly formulated. See the [problem fit section](#problem-fit) and the [Asunder documentation](https://asunder.readthedocs.io/) for more details.
+![Asunder package banner](assets/asunder.gif)
 
-For users who want a pre-configured load balancing workflow, Asunder includes `asunder.load_balancing.LoadBalancer`: a high-level load-balanced graph partitioning workflow with built-in initial column generation, master problem handling, and refinement.
+Asunder is a Python package for constrained network structure detection
+(constrained graph clustering) on undirected graphs. In other words, it
+partitions an undirected graph while respecting hard grouping rules. A
+node can represent a task, mathematical constraint, asset, location, or other
+item; an edge records a relationship between two nodes; and the result assigns
+every node to a community.
 
-Development of Asunder is led by [Andrew Allman's Process Systems Research Team](https://allmanaa.engin.umich.edu/) at the University of Michigan.
+For example, Asunder can keep specified nodes together, prevent other nodes
+from sharing a community, and keep community sizes or workloads within chosen
+bounds. It also provides reusable column-generation tools for applications
+that need custom initial partitions, master problems, pricing, or refinement.
+
+Development is led by [Andrew Allman's Process Systems Research
+Team](https://allmanaa.engin.umich.edu/) at the University of Michigan.
 
 ## Install
 
-Base install:
+Asunder supports Python 3.10 through 3.14 and is distributed on PyPI as
+`put-asunder`:
 
 ```bash
-python3 -m pip install put-asunder
+python -m pip install put-asunder
+python -c "import asunder; print(asunder.__version__)"
 ```
 
-Graph extras (supports ``leidenalg`` and ``igraph`` algorithms):
+The base installation includes NetworkX, NumPy, Pyomo, `python-igraph`, and
+`leidenalg`. Signed Leiden is the default pricing heuristic.
+
+`LoadBalancer`, `NonlinearBranchAndPrice`, and the default reusable
+decomposition workflow require an available Pyomo-compatible optimization
+solver. Asunder selects Gurobi by default. Installing `gurobipy` does **not**
+provide a Gurobi license, so configure a working local, WLS, or other supported
+license before running those workflows. See the [installation
+guide](https://asunder.readthedocs.io/en/latest/getting_started/installation.html)
+for a solver check and alternative-solver setup.
+
+Optional extras are available for visualization and legacy core-periphery
+heuristics:
 
 ```bash
-python3 -m pip install "put-asunder[graph]"
+python -m pip install "put-asunder[viz]"
+python -m pip install "put-asunder[legacy]"
 ```
 
+The `legacy` extra is best-effort on Python 3.13 and 3.14. Current high-level
+workflows do not require it.
 
-Graph and visualization (``matplotlib`` and ``seaborn``) extras:
+## Choose a workflow
 
-```bash
-python3 -m pip install "put-asunder[graph,viz]"
-```
+| Goal | Start with | Solver required? |
+| --- | --- | --- |
+| Create a fixed number of balanced or explicitly bounded communities | `asunder.load_balancing.LoadBalancer` | Yes |
+| Use the NLBNP structural shortcut to isolate one linear-only group and recover independent communities | `asunder.nlbnp.CorePeripheryPartition` | No |
+| Run the packaged nonlinear branch-and-price workflow | `asunder.nlbnp.NonlinearBranchAndPrice` | Yes |
+| Replace initial columns, master logic, pricing, or refinement | `asunder.run_csd_decomposition` | Yes with the default master |
+| Refine an existing partition with extensible hard constraints | `asunder.refine_partition_modular_vfd` | No |
 
-Legacy core periphery heuristics (best-effort on Python 3.13 and 3.14):
+If you are unsure, start with the [problem-fit and workflow-choice
+guide](https://asunder.readthedocs.io/en/latest/learn/guides/problem_fit.html).
 
-```bash
-python3 -m pip install "put-asunder[legacy]"
-```
+## Load-balancing quickstart
 
-## Python Support
-
-- Guaranteed: Python 3.10, 3.11, 3.12, 3.13, 3.14 for core package.
-- Guaranteed: mainstream extras (`graph`, `viz`) on Python 3.10 to 3.14.
-- Best-effort: `legacy` extra on Python 3.13 and 3.14.
-
-## Package Layout
-
-- `asunder`: top-level facade for orchestration, config, solvers, and common convenience entry points.
-- `asunder.base`: reusable algorithms, branch-and-price utilities, column-generation modules, metrics, utilities, and visualization helpers.
-- `asunder.load_balancing`: the built-in load balancing application layer, including load-balanced initial feasible column generation, master problem handling, and refinement.
-- `asunder.nlbnp`: the nonlinear branch-and-price application layer, including a generic high-level workflow, case studies, evaluation flow, and NLBNP-specific refinement.
-
-## Quickstart
+`LoadBalancer` is the most direct workflow when communities must have similar
+node counts or total node loads. This complete example requires a configured
+solver. It asks for two nearly equal communities, keeps `"a"` and `"b"`
+together, and prevents `"a"` and `"f"` from sharing a community.
 
 ```python
-import numpy as np
-from asunder import CSDDecomposition, CSDDecompositionConfig
+from collections import defaultdict
 
-# graph adjacency
-A = np.array([
-    [0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1],
-    [0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1],
-    [0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1],
-    [0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0]
-], dtype=float)
-
-# ifc_params contains function and parameters for generating initial feasible partition(s)
-cfg = CSDDecompositionConfig(
-    ifc_params={"generator": lambda N, **_: [np.ones((N, N))], "num": 1, "args": {"N": A.shape[0]}},
-    extract_dual=False,
-    final_master_solve=False,
-)
-
-result = CSDDecomposition(config=cfg).run(A)
-print(result.metadata)
-```
-
-The example above uses the top-level facade. Canonical reusable imports live under `asunder.base`, the packaged load balancing workflow lives under `asunder.load_balancing`, and the packaged nonlinear branch-and-price workflow lives under `asunder.nlbnp`.
-
-```python
-from asunder.base.column_generation.subproblem import heuristic_subproblem
-from asunder.base.algorithms.modular_VFD import modular_very_fortunate_descent
-from asunder.nlbnp import CorePeripheryPartition, NonlinearBranchAndPrice
-from asunder.nlbnp.algorithms.refinement import refine_partition_linear_group, refine_partition_with_cp
-from asunder.nlbnp.case_studies import run_evaluation
-```
-
-### Load balancing
-The packaged load balancing workflow is the fastest path when you need graph partitions whose community sizes are fixed or bounded. It accepts a `networkx.Graph`, optional `must_link` and `cannot_link` pairs written in the graph's node labels, and either a target number of communities `K` with tolerance `R` or explicit `R_bounds`.
-
-```python
-import numpy as np
 import networkx as nx
+
 from asunder.load_balancing import LoadBalancer
 
-A = np.array([
-    [0, 1, 1, 1, 1, 1, 0, 0],
-    [1, 0, 1, 1, 1, 0, 0, 0],
-    [1, 1, 0, 1, 1, 0, 0, 0],
-    [1, 1, 1, 0, 1, 0, 0, 0],
-    [1, 1, 1, 1, 0, 0, 1, 0],
-    [1, 0, 0, 0, 0, 0, 1, 1],
-    [0, 0, 0, 0, 1, 1, 0, 1],
-    [0, 0, 0, 0, 0, 1, 1, 0]
-], dtype=float)
+graph = nx.Graph(
+    [
+        ("a", "b"),
+        ("a", "c"),
+        ("b", "c"),
+        ("c", "d"),
+        ("d", "e"),
+        ("d", "f"),
+        ("e", "f"),
+    ]
+)
 
-G = nx.from_numpy_array(A)
-
-result = LoadBalancer(G, K=2, R=0, disable_tqdm=True)
-print(f'Detected the partition below with a modularity of {result.metadata["modularity"]} in {result.metadata["execution_time"]:.2f} secs')
-print(result.final_partition)
-```
-
-`result.final_partition` is the detected partition matrix. `result.metadata` includes the modularity score, elapsed time, and label-aware community information so the result can be mapped back to the original graph nodes.
-
-For native modularity pricing with QMETIS, select it as the load-balancing
-algorithm; no QMETIS-specific parameters are added to the high-level API:
-
-```python
 result = LoadBalancer(
-    G,
+    graph,
     K=2,
-    R=2,
-    algorithm="qmetis",
+    R=1,
+    must_link=[("a", "b")],
+    cannot_link=[("a", "f")],
+    final_master_solve=True,
     disable_tqdm=True,
 )
 
-print(result.metadata["qmetis_release"])
+groups = defaultdict(list)
+for node, community in result.metadata["community_map_labels"].items():
+    groups[community].append(node)
+
+print(dict(groups))
+print("community loads:", result.metadata["community_balance_weights"])
+print("modularity:", result.metadata["modularity"])
 ```
 
-QMETIS receives a nonnegative, integer-quantized approximation of the current [augmented] adjacency matrix. 
-It can also be run directly via `asunder.load_balancing.run_qmetis`.
+The numeric community labels are arbitrary; what matters is which nodes share
+a label. `result.final_partition` is an `N x N` binary co-membership matrix in
+the graph's node iteration order. It may be a dense Boolean array or a SciPy
+CSR matrix, while retaining that same logical shape. Entry `[i, j]` is one when
+nodes `i` and `j` belong to the same community. The label-aware metadata maps
+that matrix back to the original NetworkX node labels.
 
-Released Windows x86-64, Linux x86-64, and macOS universal2 wheels contain a
-pinned `idx64-real32` QMETIS build. Each wheel contains only the QMETIS-named
-runtime (`qmetis.dll`, `libqmetis.so`, or `libqmetis.dylib`); it does not
-bundle a generic `metis.dll` or `libmetis` library. Source distributions
-remain usable for the rest of Asunder, but QMETIS requires one of the
-supported platform wheels or a locally staged compatible native library.
+Common controls include:
 
-### Nonlinear branch-and-price
-The generic nonlinear branch-and-price workflow lives under `asunder.nlbnp` and accepts user-provided graphs instead of case-study names.
+- `K` and `R` for the number of communities and the width of their permitted
+  load range;
+- `R_bounds=(lower, upper)` for explicit inclusive community-load bounds;
+- `node_weight_attr="load"` to balance a positive integer node attribute
+  instead of node count;
+- `contract_graph=True` to contract must-linked nodes while preserving their
+  summed balance weights;
+- `resolution` to change modularity resolution; and
+- `refine`, `use_refined_column`, `refine_post_loop`, `check_flat_pricing`, and
+  `stopping_window` to control refinement and termination on large inputs.
 
-```python
-import networkx as nx
-from asunder.nlbnp import NonlinearBranchAndPrice
+Signed Leiden is the default pricing backend. QMETIS is an optional native
+pricing heuristic selected with `algorithm="qmetis"` on a supported platform.
+Its platform and approximation details are kept in the [QMETIS
+reference](https://asunder.readthedocs.io/en/latest/reference/qmetis.html).
 
-G = nx.Graph()
-G.add_edge("u", "v", edge_kind="integer")
-G.add_edge("v", "w", edge_kind="continuous")
+`LoadBalancer` raises `ValueError` for malformed inputs or impossible bound
+definitions. It raises `RuntimeError` if the search does not produce an
+integral feasible partition. Check bounds and pairwise constraints first, then
+consider a larger search budget or `projection_repair=True`.
 
-result = NonlinearBranchAndPrice(
-    G,
-    worthy_edge_attr="edge_kind",
-    worthy_edge_value="integer",
-    algorithm="louvain",
-    package="networkx",
-    disable_tqdm=True,
-)
+See the complete [load-balancing
+guide](https://asunder.readthedocs.io/en/latest/getting_started/quickstart.html)
+for weighted examples, result fields, and runtime controls.
 
-print(result.final_partition)
-print(result.metadata["community_map_labels"])
-```
+## NLBNP structural workflows
 
-For a faster component-level solution, use `CorePeripheryPartition`. It detects
-a core, removes it, and treats each remaining connected component as a final
-community:
+`CorePeripheryPartition` is an NLBNP-specific shortcut for a constraint graph;
+it is not presented as a general-purpose core-periphery partitioner. In its
+intended use, the supplied grouping constraints collect the nonlinear nodes
+into one detection block on the core side. The complementary periphery contains
+only linear nodes. All of those periphery nodes are merged into final community
+`0`, even when they are disconnected, which supplies the NLBNP requirement that
+there be exactly one linear-only community.
 
-```python
-community_labels, metadata = CorePeripheryPartition(
-    G,
-    unworthy_edge_attr="edge_kind",
-    unworthy_edge_value="continuous",
-    cp_algorithm="SPEC",
-)
-```
+The workflow then temporarily excludes that linear-only community from the
+**original input graph** and computes connected components of the remaining
+nonlinear/core-side induced subgraph, adding any supplied nonedge `must_link`
+pairs as virtual edges. It does not perform this final component split on the
+contracted detection graph. Those components are the independent communities;
+all temporarily excluded nodes remain present in the returned labels and
+metadata.
 
-Use `CorePeripheryPartition` when each connected component left after core
-removal is already an appropriate final community. Use `NonlinearBranchAndPrice` 
-when the community structure is beyond the direct core-periphery logic. The
-column-generation workflow can also use `refine_partition_with_cp` through its
-generic `refine_params` hook.
+When `must_group` identifies designated nonlinear nodes, the workflow verifies
+that they were detected on the core side. It raises `RuntimeError` rather than
+returning a partition with the nonlinear block in the linear-only community.
 
-Use `run_evaluation` only when you want the packaged benchmark/case-study evaluation flow.
+Use this solver-free shortcut only when that NLBNP structure is appropriate and
+the exposed components are already the desired independent communities. Use
+`NonlinearBranchAndPrice` when the structural shortcut is insufficient and the
+constraint graph needs the packaged column-generation workflow.
 
-## Solver Setup
+`NonlinearBranchAndPrice` requires at least one worthy edge from the input graph;
+without an active edge rule, the problem is no longer NLBNP. It has three
+cardinality modes. The default, `cardinality_method="reformulated"`, finds the
+exact maximum linear-only set, reduces the result to pairwise constraints, and
+enforces them alongside the edge-based constraint using column generation. An
+explicit cannot-link inside that set is reported as infeasible. The
+`"confidence"` and `"core_periphery"` modes first enforce the edge-based
+constraint and then detect the linear-only group using confidence-score
+clustering and core-periphery detection, respectively. All modes require the
+nonlinear nodes, supplied directly or by a NetworkX node attribute.
 
-Asunder accepts user-provided solver objects. Solver support is configured through your local environment rather than through a dedicated package extra. For Gurobi, `GRB_LICENSE_FILE` is used by your environment. Example:
+The [NLBNP workflow
+guide](https://asunder.readthedocs.io/en/latest/getting_started/nlbnp.html)
+contains complete examples and explains how the three modes differ.
 
-```python
-from asunder import create_solver
+## Reusable decomposition and custom constraints
 
-solver = create_solver("gurobi_direct")
-```
+Use `run_csd_decomposition` when you need Asunder's orchestration but want to
+supply or replace initial columns, the master problem, pricing, or refinement.
+The [reusable decomposition
+guide](https://asunder.readthedocs.io/en/latest/getting_started/base_decomposition.html)
+defines those terms and provides a complete example.
 
-## Problem Fit
+ModularVFD refinement supports pairwise, component-local, community-wide, and
+partition-wide hard constraints. Its [constraint-extension
+guide](https://asunder.readthedocs.io/en/latest/reference/development/extending_modular_vfd.html)
+shows how to implement them. A ModularVFD constraint governs ModularVFD
+refinement only unless the same rule is also enforced in initial-column
+generation, pricing, the master formulation, warm starts, and final validation.
 
-Asunder supports general constrained partitioning when requirements can be expressed as:
+For large sparse inputs, reusable decomposition and NLBNP preserve CSR through
+preprocessing and compatible pricing. Hard columns use dense Boolean or CSR
+Boolean storage according to measured density. Dense-only backends are guarded
+by a configurable estimated working-set limit; see the [matrix-storage
+reference](https://asunder.readthedocs.io/en/latest/reference/matrix_storage.html).
 
-- load balancing constraints
-- community size constraints
-- must-link and cannot-link constraints
-- edge-based constraints
+## Documentation and examples
 
-Asunder works well out of the box when load balancing is needed; start with `asunder.load_balancing.LoadBalancer` for that case. Asunder also works well for optimization problems where coordination or operations are coupled across space (e.g. central coupling) and/or time and those interactions can be represented as a graph over constraints.
+- [Introduction](https://asunder.readthedocs.io/en/latest/getting_started/introduction.html)
+- [Installation and solver setup](https://asunder.readthedocs.io/en/latest/getting_started/installation.html)
+- [Load-balancing quickstart](https://asunder.readthedocs.io/en/latest/getting_started/quickstart.html)
+- [Reusable decomposition guide](https://asunder.readthedocs.io/en/latest/getting_started/base_decomposition.html)
+- [NLBNP workflows](https://asunder.readthedocs.io/en/latest/getting_started/nlbnp.html)
+- [API reference](https://asunder.readthedocs.io/en/latest/api/index.html)
+- [Custom subproblem example](examples/custom_subproblem.py)
+- [Nonlinear branch-and-price example](examples/nonlinear_bp.py)
 
-Sample fit signals:
-
-- load balancing: graph partitions must have equal, near-equal, or explicitly bounded community sizes.
-- load balancing: must-link or cannot-link pairs express operational grouping rules between graph nodes.
-- reusable decomposition: you need to provide custom initial columns, master logic, subproblem logic, or refinement.
-- nonlinear branch and price: coupling across time periods, units, or resources creates meaningful constraint interactions.
-- nonlinear branch and price: there is value from multilevel partitioning or core-periphery structure detection.
-- core-periphery partitioning: removing a central core leaves connected components that are meaningful final communities.
-
-Some representative domains:
-
-- load balancing for decomposition workloads, service territories, team assignment, scenario grouping, and graph-backed resource allocation.
-- nonlinear branch and price for stochastic design and dispatch in energy systems.
-- nonlinear branch and price for scheduling and resource allocation in healthcare systems.
-- nonlinear branch and price for planning, routing, and location in supply chain and logistics.
-- nonlinear branch and price for network configuration and resource management in telecommunications.
-
-As a rule of thumb, reusable decomposition logic belongs in `asunder.base`, load balancing application logic belongs in `asunder.load_balancing`, and nonlinear branch-and-price application logic belongs in `asunder.nlbnp`.
-
-For a fuller guide on where default workflows are sufficient versus where customization helps, see the [problem fit guide](https://asunder.readthedocs.io/en/latest/learn/guides/problem_fit.html).
-
-## Customization Points
-
-For custom problems, typical extension points are:
-
-1. Initial feasible partition generator.
-2. `solve_master_problem` replacement.
-3. Optional heuristic or ILP subproblem replacement.
-4. Optional partition refinement stage.
-
-Reusable extension logic should generally be added under `asunder.base`. `asunder.load_balancing`, for instance, uses modules from `asunder.base`, but defines application specific modules separately. The built-in nonlinear branch-and-price refinement path lives under `asunder.nlbnp.algorithms`.
-
-## Constraint Graph Compatibility
-
-Required structure for `asunder.load_balancing.LoadBalancer`:
-- undirected graph (`networkx.Graph`)
-- node IDs that can be mapped back to the original system; `must_link` and `cannot_link` constraints should use those node labels
-- optional application-specific node attributes; the high-level workflow does not require the NLBNP case-study schema
-- size controls through `K` and `R`, or explicit lower/upper community-size bounds through `R_bounds`
-
-Required structure for `run_evaluation`-style workflows:
-
-For the built-in case-study evaluation workflows (`run_evaluation`, implemented in `asunder.nlbnp.case_studies.runner` and re-exported at top level), Asunder expects a constraint-graph pattern consistent with the provided case studies.
-
-- undirected graph (`networkx.Graph`)
-- node attribute `constraint` (string tag used for ground-truth and role grouping)
-- edge attribute `var_type` with values `"integer"` or `"continuous"`
-
-Commonly present (recommended) attributes:
-
-- node attribute `type` (for example `"constraint"`)
-- node attribute `details` (metadata dict)
-- edge attributes `weight`, `variables`, `var_types`
-
-How these are used:
-
-- `constraint` identifies core/nonlinear tags in built-in case studies
-- `var_type` determines candidate edge sets for core-periphery (CP) and community detection with refinement (CD_Refine) paths
-
-If you are not using `run_evaluation`, use `asunder.nlbnp.CorePeripheryPartition` for component-level communities after core removal or `asunder.nlbnp.NonlinearBranchAndPrice` when the community structure is beyond the direct core-periphery logic. For lower-level customization, call the decomposition APIs directly with an adjacency matrix plus explicit constraints.
-
-## Examples
-
-- Load balancing quickstart: [docs/getting_started/quickstart.rst](docs/getting_started/quickstart.rst)
-- Nonlinear B&P-style decomposition: `examples/nonlinear_bp.py`
-- Custom subproblem wiring: `examples/custom_subproblem.py`
-
-## Documentation
-
-The full documentation is available at [asunder.readthedocs.io](https://asunder.readthedocs.io/). That includes getting started guides, problem-fit guidance, API reference pages for `asunder.base`, `asunder.load_balancing`, `asunder.nlbnp`, and development notes.
-
-## References
-
-Asunder integrates or wraps methods from:
-
-- `networkx`
-- `sklearn`
-- `python-igraph` / `leidenalg`
-- `scikit-network`
-- `signed-louvain` style algorithms
-
-`python-igraph` / `leidenalg` are best for massive networks (millions of edges) requiring highly optimized C++ speeds. `networkx` is best for quick prototyping, small-to-medium networks, and deep integration with native Python environments. See [documentation](https://asunder.readthedocs.io/) to discover what algorithms are available from each package.
+Asunder does not automatically convert an optimization model into a graph. The
+user supplies a NetworkX graph, an adjacency matrix, or application code that
+constructs one. Before tuning algorithms, confirm that node identity, edge
+meaning, edge weights, and hard constraints accurately represent the problem.

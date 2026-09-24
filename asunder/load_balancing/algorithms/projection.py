@@ -12,7 +12,6 @@ from asunder.base.algorithms.modular_VFD import (
     _normalize_pair,
     _objective_B_from_comp_assignment,
     _range_bounds_from_KR,
-    _symmetrize_unitdiag,
 )
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
 from asunder.solvers import get_default_solver
@@ -39,8 +38,12 @@ def _build_gvec_from_components(comp: Dict[str, Any], comp2g: np.ndarray, N: int
     return gvec
 
 
-def _projection_score(pair_weights: Sequence[Tuple[int, int, float]], comp2g: np.ndarray) -> float:
+def _projection_objective(pair_weights: Sequence[Tuple[int, int, float]], comp2g: np.ndarray) -> float:
     return float(sum(weight for c, d, weight in pair_weights if int(comp2g[c]) == int(comp2g[d])))
+
+
+def _projection_distance(wz: np.ndarray, Z: np.ndarray) -> float:
+    return float(np.sum((np.asarray(Z, dtype=float) - np.asarray(wz, dtype=float)) ** 2))
 
 
 def project_partition_ilp(
@@ -54,14 +57,17 @@ def project_partition_ilp(
     R_bounds: Optional[Tuple[int, int]] = None,
     must_link: Sequence[Tuple[int, int]] = (),
     cannot_link: Sequence[Tuple[int, int]] = (),
+    balance_weights: Optional[Sequence[int]] = None,
     seed: int | None = 42,
     solver=None,
 ) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
     """
     Project ``wz`` onto the exact-``K`` load-balanced feasible partition set.
 
-    The model maximizes pairwise agreement with ``wz`` while enforcing hard
-    must-link, cannot-link, and load-balance constraints.
+    The model minimizes squared Frobenius distance to ``wz`` while enforcing
+    hard must-link, cannot-link, exact-``K``, and load-balance constraints. For
+    binary repaired partitions, this is equivalent to maximizing the signed
+    pairwise coefficient ``wz[i, j] + wz[j, i] - 1`` over co-clustered pairs.
     """
     try:
         from pyomo.environ import (
@@ -91,20 +97,42 @@ def project_partition_ilp(
     if K <= 0:
         raise ValueError("K must be positive.")
 
+    if balance_weights is None:
+        node_weights = np.ones(N, dtype=int)
+    else:
+        raw_weights = np.asarray(balance_weights)
+        if raw_weights.shape != (N,):
+            raise ValueError("balance_weights must contain one value per node.")
+        if not np.all(np.isfinite(raw_weights)) or np.any(raw_weights <= 0):
+            raise ValueError("balance_weights must contain finite positive values.")
+        if not np.all(raw_weights == np.rint(raw_weights)):
+            raise ValueError(
+                "balance_weights must contain integer values. Scale weights "
+                "and explicit R_bounds to common integer units before calling; "
+                "node weights are not scaled automatically."
+            )
+        node_weights = np.rint(raw_weights).astype(int)
+    total_balance_weight = int(node_weights.sum())
+
     if R_bounds is None:
-        r_min, r_max = _range_bounds_from_KR(N, K, int(R))
+        r_min, r_max = _range_bounds_from_KR(total_balance_weight, K, int(R))
     else:
         r_min, r_max = int(R_bounds[0]), int(R_bounds[1])
         if r_min > r_max:
             raise ValueError("R_bounds must satisfy r_min <= r_max.")
 
-    if not (K * r_min <= N <= K * r_max):
+    if not (K * r_min <= total_balance_weight <= K * r_max):
         return None
 
     must_link = [_normalize_pair(i, j) for i, j in (must_link or [])]
     cannot_link = [_normalize_pair(i, j) for i, j in (cannot_link or [])]
 
-    comp = _build_components(N, must_link, cannot_link)
+    comp = _build_components(
+        N,
+        must_link,
+        cannot_link,
+        node_weights=node_weights,
+    )
     if comp is None:
         return None
 
@@ -120,7 +148,8 @@ def project_partition_ilp(
         }
 
     csz = np.asarray(comp["csz"], dtype=int)
-    if int(csz.max()) > r_max or K > Cn:
+    cweight = np.asarray(comp["cweight"], dtype=int)
+    if int(cweight.max()) > r_max or K > Cn:
         return None
 
     cid = np.asarray(comp["cid"], dtype=int)
@@ -133,12 +162,12 @@ def project_partition_ilp(
     )
 
     W_B = _component_sum_matrix_B(A, a, m, comp)
-    C_wz = _component_sum_matrix_from_node_matrix(_symmetrize_unitdiag(wz), comp)
+    C_wz = _component_sum_matrix_from_node_matrix(wz, comp)
     pair_weights = [
-        (c, d, float(C_wz[c, d] + C_wz[d, c]))
+        (c, d, float(C_wz[c, d] + C_wz[d, c] - int(csz[c]) * int(csz[d])))
         for c in range(Cn)
         for d in range(c + 1, Cn)
-        if float(C_wz[c, d] + C_wz[d, c]) != 0.0
+        if float(C_wz[c, d] + C_wz[d, c] - int(csz[c]) * int(csz[d])) != 0.0
     ]
 
     if solver is None:
@@ -160,7 +189,7 @@ def project_partition_ilp(
         model.constraints.add(sum(model.x[c, g] for g in model.G) == 1)
 
     for g in range(K):
-        group_size = sum(int(csz[c]) * model.x[c, g] for c in model.C)
+        group_size = sum(int(cweight[c]) * model.x[c, g] for c in model.C)
         model.constraints.add(group_size >= int(r_min))
         model.constraints.add(group_size <= int(r_max))
 
@@ -204,7 +233,7 @@ def project_partition_ilp(
     if not np.isfinite(Q):
         return None
 
-    projection_score = _projection_score(pair_weights, comp2g)
+    projection_objective = _projection_objective(pair_weights, comp2g)
     Z = partition_vector_to_2d_matrix(_build_gvec_from_components(comp, comp2g, N))
     meta = {
         "r_min": int(r_min),
@@ -213,9 +242,11 @@ def project_partition_ilp(
         "requested_K": int(K),
         "objective_B_sum": float(Q),
         "objective_total": float(Q),
-        "projection_wz_score": float(projection_score),
+        "projection_objective": float(projection_objective),
+        "projection_distance": _projection_distance(wz, Z),
         "feasibility_fallback": "projection_ilp",
         "solver_termination_condition": str(term),
         "seed": int(seed or 0),
+        "total_balance_weight": total_balance_weight,
     }
     return Z, meta

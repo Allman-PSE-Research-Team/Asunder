@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
+
+from numpy.typing import ArrayLike
+
+from asunder.base.utils.matrix import (
+    DEFAULT_MAX_DENSE_WORKING_BYTES,
+    DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD,
+)
 
 
 @dataclass
@@ -13,8 +20,9 @@ class CSDDecompositionConfig:
     
     Attributes
     ----------
-    columns : list[ndarray of int] or None
-        Existing columns. This parameter is typically active during Branch and Price.
+    columns : list[numpy.ndarray or scipy.sparse.csr_matrix] or None
+        Existing binary co-association columns. This parameter is typically
+        active during branch-and-price.
     f_stars : list[float] or None
         Objective values of the existing columns. 
         This parameter is typically active during Branch and Price.
@@ -22,14 +30,18 @@ class CSDDecompositionConfig:
         List of node pairs that must be together.
     cannot_link : list[tuple[int, int]]
         List of node pairs that must not be together.
+    node_weights : array-like of float, shape (N,), optional
+        Shared finite real node weights, defaulting to unit weights. Hooks
+        declaring ``node_weights`` or ``balance_weights`` receive the same
+        vector, summed by component after contraction. Consumer-specific
+        restrictions still apply; this does not reweight the adjacency.
     additional_constraints : dict[str, Any]
         Constraints beyond must- and cannot-links. For example, worthy edges (edges that can connect communities), community size, and balance constraints.
     contract_graph : bool
         Whether must-links are handled through graph contraction. Compatible
-        cannot-links, initial-column constraints, and warm starts are mapped
-        to contracted components automatically. Contraction is currently
-        unsupported for load-balancing decompositions because component-size
-        vertex weights are not yet propagated.
+        cannot-links, initial-column constraints, warm starts, refinement
+        constraints, and shared node weights are mapped to contracted
+        components automatically.
     stopping_window : int
         Maximum number of allowed stagnant CG iterations. After this, CG is terminated.
     check_flat_pricing : bool
@@ -59,23 +71,46 @@ class CSDDecompositionConfig:
             ``"signed_louvain"``, ``"spinglass"``
 
         Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
+    resolution : float
+        Modularity resolution parameter. Pricing algorithms that do not
+        implement non-default resolution reject values other than ``1``.
+    column_storage : {"auto", "dense", "csr"}
+        Physical storage policy for binary co-association columns. Automatic mode
+        preserves supplied dense/CSR representations, including mixed pools.
+    sparse_column_density_threshold : float
+        Maximum density for newly constructed automatic CSR columns; CSR must
+        also have a smaller estimated footprint than dense Boolean storage.
+    max_dense_working_bytes : int or None
+        Maximum operation-specific estimate for package-created dense work
+        arrays. Sparse-compatible operations retain CSR; dense-only boundaries
+        raise ``MemoryError`` when the estimate is exceeded. ``None`` disables
+        the guard, and existing dense caller input is not rejected merely
+        because of its size.
     seed : int or None
         Random seed value.
-    extract_dual : bool
-        Boolean that determines whether we extract duals from the master problem or not.
     ifc_params : dict[str, callable or dict or int]
-        Number of initial feasible columns (ifc), initial feasible column generator, and its corresponding arguments.
+        Initial-column generator, column count, and search arguments.
+        Only ``must_link`` and ``cannot_link`` are rejected in ``args``.
+        Repeated standard weight arguments must match ``node_weights``.
     refine_params : dict[str, callable or dict]
-        Refinement function and its corresponding arguments.
+        Refinement function and arguments. Only ``must_link`` and
+        ``cannot_link`` are rejected in ``kwargs``; non-pairwise constraints
+        and search settings remain configurable here. Standard weight
+        arguments must match ``node_weights``.
     subproblem_params : dict[str, Any]
         Keyword arguments supplied only to the selected pricing/subproblem
-        callable.
+        callable, excluding ``must_link`` and ``cannot_link``.
+        Standard weight arguments must match ``node_weights``.
     use_refined_column : bool
         Boolean that determines whether refined columns are used in the main column generation loop or not.
     refine_post_loop : bool
         Boolean that determines whether post-loop refinement is run after column generation terminates.
     final_master_solve : bool
         Boolean that determines whether a final master solve is executed or not.
+    persistent_master : bool
+        Whether to reuse and incrementally extend one Gurobi restricted-master
+        model. Disabled by default and limited to the built-in base and
+        load-balancing masters.
     max_iterations : int
         Maximum number of column generation iterations.
     disable_tqdm : bool
@@ -97,10 +132,9 @@ class CSDDecompositionConfig:
     contract_graph: bool = False
     stopping_window: int = 5
     check_flat_pricing: bool = True
-    algo: str = "louvain"
-    package: str = "sknetwork"
+    algo: str = "signed_leiden"
+    package: str = "leidenalg"
     seed: int | None = 42
-    extract_dual: bool = False
     ifc_params: Dict[str, Any] = field(default_factory=dict)
     refine_params: Dict[str, Any] = field(default_factory=dict)
     subproblem_params: Dict[str, Any] = field(default_factory=dict)
@@ -111,3 +145,9 @@ class CSDDecompositionConfig:
     disable_tqdm: bool = False
     tolerance: float = 1e-10
     verbose: int | bool = 1
+    resolution: float = 1.0
+    column_storage: Literal["auto", "dense", "csr"] = "auto"
+    sparse_column_density_threshold: float = DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES
+    node_weights: ArrayLike | None = None
+    persistent_master: bool = False

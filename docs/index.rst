@@ -2,39 +2,84 @@ Asunder Documentation
 =====================
 
 .. image:: ../assets/asunder.gif
-   :alt: A banner image for the asunder package.
+   :alt: A banner image for the Asunder package.
 
-Asunder is a package for constrained structure detection on undirected graphs.
-In machine learning terms, this is constrained graph clustering; in other
-communities, it is constrained graph partitioning.
+Asunder partitions an undirected graph while respecting grouping rules. A node
+can represent a task, constraint, asset, or other item; an edge records a
+relationship between two nodes; and the result assigns every node to a
+community.
 
-The fastest built-in workflow is load-balanced graph partitioning:
+For example, the load-balancing workflow can require two nodes to stay
+together, prevent another pair from sharing a community, and keep community
+sizes nearly equal. This example requires an available Pyomo-compatible
+solver. Asunder uses Gurobi by default; see
+:doc:`getting_started/installation` for license and alternative-solver setup.
 
 .. code-block:: python
 
+   import networkx as nx
+
    from asunder.load_balancing import LoadBalancer
 
-   result = LoadBalancer(G, K=4, R=1)
+   graph = nx.Graph(
+       [
+           ("a", "b"),
+           ("a", "c"),
+           ("b", "c"),
+           ("c", "d"),
+           ("d", "e"),
+           ("d", "f"),
+           ("e", "f"),
+       ]
+   )
 
-Use ``asunder.load_balancing`` when you have a graph and need communities whose
-sizes are equal, near-equal, or bounded by explicit lower and upper limits. The
-workflow includes initial feasible partition generation, load balancing
-constraints, master problem handling, and refinement.
+   result = LoadBalancer(
+       graph,
+       K=2,
+       R=1,
+       must_link=[("a", "b")],
+       cannot_link=[("a", "f")],
+       final_master_solve=True,
+       disable_tqdm=True,
+   )
 
-Asunder also provides ``asunder.base`` for reusable decomposition and
-column-generation building blocks, plus ``asunder.nlbnp`` for nonlinear
-branch-and-price workflows. Use ``CorePeripheryPartition`` when core removal
-exposes final connected-component communities, or ``NonlinearBranchAndPrice``
-when those components require finer subdivision through column generation.
+   print(result.metadata["community_map_labels"])
 
-Start here:
+Choose a workflow
+-----------------
 
-- :doc:`getting_started/quickstart` for load balancing and decomposition
-  examples.
-- :doc:`learn/guides/problem_fit` to decide between the load balancing,
-  reusable base, and nonlinear branch-and-price workflows.
-- :doc:`api/load_balancing/index` for the load balancing API reference.
-- :doc:`api/nlbnp/index` for the NLBNP workflows and API reference.
+.. list-table:: Start from your goal
+   :header-rows: 1
+   :widths: 38 28 34
+
+   * - Goal
+     - Start with
+     - Guide
+   * - Create balanced or bounded graph communities
+     - ``LoadBalancer``
+     - :doc:`getting_started/quickstart`
+   * - Assemble custom master, pricing, or refinement logic
+     - ``run_csd_decomposition``
+     - :doc:`getting_started/base_decomposition`
+   * - Use the NLBNP linear-only-separator structural shortcut
+     - ``CorePeripheryPartition``
+     - :doc:`getting_started/nlbnp`
+   * - Run the nonlinear branch-and-price workflow
+     - ``NonlinearBranchAndPrice``
+     - :doc:`getting_started/nlbnp`
+   * - Decide whether Asunder fits a problem
+     - Workflow-selection guidance
+     - :doc:`learn/guides/problem_fit`
+
+Start here
+----------
+
+- Install the package and configure a solver in
+  :doc:`getting_started/installation`.
+- Learn the basic terminology and package choices in
+  :doc:`getting_started/introduction`.
+- Follow one complete workflow under :doc:`getting_started/index`.
+- Use the :doc:`api/index` only after choosing a workflow.
 
 .. toctree::
    :maxdepth: 2
