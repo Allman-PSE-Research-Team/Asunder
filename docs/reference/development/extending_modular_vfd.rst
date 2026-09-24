@@ -8,11 +8,11 @@ repair logic and the high-performance local protocol.
 What ModularVFD does
 --------------------
 
-ModularVFD is a partition-refinement heuristic. It starts from a proposed
-partition, searches for a partition with a better modularity objective, and
-returns only a result that satisfies every configured hard constraint. It
-returns ``None`` when it cannot find a feasible result within the configured
-search budget.
+ModularVFD is a partition-refinement heuristic. It uses a proposed partition
+as co-association evidence, constructs new candidate partitions, and searches
+for a better modularity objective. It returns only a result that satisfies
+every configured hard constraint, or ``None`` when it cannot find a feasible
+result within the configured search budget.
 
 The easiest entry point for an existing partition is
 :func:`~asunder.base.algorithms.modular_VFD.refine_partition_modular_vfd`.
@@ -58,6 +58,40 @@ constraint data.
 ModularVFD requires positive integer weights even when balance is disabled;
 there is no automatic fractional-weight scaling. See
 :doc:`../load_balancing` for explicit conversion of weights and load bounds.
+
+Choosing the output community count
+-----------------------------------
+
+The input partition does not fix the number of communities in the output.
+For a hard input partition, ModularVFD uses its co-membership pattern as search
+evidence rather than preserving its labels or community count. A fractional
+co-association matrix may not have a meaningful input community count at all.
+
+When ``use_K_constraint=False`` (the default), ``candidate_Ks`` is the clearest
+way to specify the output counts to evaluate. ModularVFD constructs and
+optimizes a fresh partition for every listed count, then returns the best
+feasible result. For example, ``candidate_Ks=(4,)`` requests exactly four
+communities, while ``candidate_Ks=range(3, 9)`` searches from three through
+eight communities. This is especially important for unconstrained structure
+detection, where neither ``R_bounds`` nor ``K`` and ``R`` restrict community
+sizes.
+
+If ``candidate_Ks`` is omitted, ``K_search_radius`` defines a symmetric window
+around the baseline ``K``. With ``K=5`` and ``K_search_radius=2``, ModularVFD
+tests community counts three through seven. The default radius is zero. In
+this unconstrained mode, explicit ``candidate_Ks`` always takes precedence
+over the window. If both ``K`` and ``candidate_Ks`` are ``None``, ModularVFD
+falls back to counts one through eight, limited by the number of movable
+must-link components.
+
+When ``use_K_constraint=True``, ``K`` and ``R`` (or explicit ``R_bounds``)
+first define the load limits. ``K_search_radius`` then permits feasible counts
+on either side of ``K`` while retaining those same load limits. A zero radius
+requires exactly ``K`` communities within ModularVFD.
+
+Do not confuse ``clustering_Ks`` with output-count selection. It controls the
+clusterings used to build co-association evidence; it does not select the
+number of communities returned by ModularVFD.
 
 First complete example
 ----------------------
@@ -133,8 +167,8 @@ one community at a time:
 
 ``refined`` is a binary co-membership matrix: entry ``[i, j]`` is one when
 nodes ``i`` and ``j`` share a community. The ``candidate_Ks=(2,)`` argument
-keeps this example to one fixed community count. Supply other candidate counts
-when the number of communities is part of the search.
+keeps this example to one fixed output community count. Supply other candidate
+counts when the number of communities is part of the search.
 
 Choosing the constraint type
 ----------------------------

@@ -386,7 +386,7 @@ def LoadBalancer(
         #         candidate_Ks=None,
         #         fingerprint_decimals=6,
         #         allow_block_splitting=True,
-        #         max_K_increase=0,
+        #         K_search_radius=0,
         #         restarts=6,
         #         local_iters=60,
         #         w_coassoc=0.0,

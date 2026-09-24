@@ -963,8 +963,7 @@ def _resolve_k_control(
     K: Optional[int],
     R: Optional[int],
     use_K_constraint: bool,
-    max_K_increase: int,
-    clustering_Ks: Sequence[int],
+    K_search_radius: int,
     candidate_Ks: Optional[Sequence[int]],
     R_bounds: Optional[Tuple[int, int]] = None,
 ) -> Tuple[int, int, List[int]]:
@@ -985,11 +984,10 @@ def _resolve_k_control(
         balanced range rule. Used when the K-constraint is active.
     use_K_constraint : bool
         If True, use K/R-derived balance bounds and only test K-neighborhood values.
-        If False, remove K-derived balance bounds and instead test ``candidate_Ks``.
-    max_K_increase : int
-        Maximum allowed increase over the baseline K when the K-constraint is active.
-    clustering_Ks : sequence of int
-        Clustering sizes used to build co-association information.
+        If False, remove K-derived balance bounds and test ``candidate_Ks`` or
+        the K search window when no explicit candidates are supplied.
+    K_search_radius : int
+        Maximum distance below or above the baseline K to search.
     candidate_Ks : sequence of int or None
         Explicit K values to test when the K-constraint is inactive.
 
@@ -1021,8 +1019,8 @@ def _resolve_k_control(
         if k_lo > k_hi:
             return int(r_min), int(r_max), []
 
-        K0 = max(int(K), int(k_lo))
-        K_end = min(int(k_hi), int(K) + int(max_K_increase))
+        K0 = max(1, int(k_lo), int(K) - int(K_search_radius))
+        K_end = min(int(Cn), int(k_hi), int(K) + int(K_search_radius))
 
         K_values = [
             int(k)
@@ -1034,14 +1032,12 @@ def _resolve_k_control(
     r_min, r_max = 1, N
 
     if candidate_Ks is None:
-        ks = {int(k) for k in (clustering_Ks or ()) if 1 <= int(k) <= Cn}
-        if K is not None:
-            lo = max(1, int(K) - 2)
-            hi = min(int(Cn), int(K) + int(max_K_increase) + 2)
-            ks.update(range(lo, hi + 1))
-        if not ks:
-            ks.update(range(1, min(int(Cn), 8) + 1))
-        candidate_Ks = sorted(ks)
+        if K is None:
+            candidate_Ks = range(1, min(int(Cn), 8) + 1)
+        else:
+            lo = max(1, int(K) - int(K_search_radius))
+            hi = min(int(Cn), int(K) + int(K_search_radius))
+            candidate_Ks = range(lo, hi + 1)
 
     K_values = sorted({int(k) for k in candidate_Ks if 1 <= int(k) <= int(Cn)})
     return int(r_min), int(r_max), K_values
@@ -1086,7 +1082,7 @@ def modular_very_fortunate_descent(
     seed: Optional[int] = 42,
     fingerprint_decimals: int = 6,
     allow_block_splitting: bool = True,
-    max_K_increase: int = 0,
+    K_search_radius: int = 0,
     use_K_constraint: bool = False,
     candidate_Ks: Optional[Sequence[int]] = None,
     restarts: int = 6,
@@ -1162,13 +1158,20 @@ def modular_very_fortunate_descent(
         Decimal rounding used to form fingerprint blocks.
     allow_block_splitting : bool, default=True
         If True, allow refinement of coarse fingerprint blocks.
-    max_K_increase : int, default=0
-        Maximum increase above the baseline K when the K-constraint is active.
+    K_search_radius : int, default=0
+        Maximum distance below or above the baseline ``K`` to search. With
+        ``use_K_constraint=True``, every candidate uses the load bounds
+        resolved from the original ``K`` and ``R`` or from ``R_bounds``.
+        With ``use_K_constraint=False``, explicit ``candidate_Ks`` take
+        precedence over this search window.
     use_K_constraint : bool, default=False
         If True, enforce K/R-derived balance bounds.
         If False, ignore K/R-derived balance bounds and search over ``candidate_Ks``.
     candidate_Ks : sequence of int or None, default=None
-        K values to test when ``use_K_constraint=False``.
+        Output community counts to test when ``use_K_constraint=False``.
+        ModularVFD treats ``wz`` as co-association evidence and does not infer
+        or preserve the input partition's community count. Supply this
+        argument whenever the desired output count is not the baseline ``K``.
     restarts : int, default=6
         Number of constructive restarts.
     local_iters : int, default=60
@@ -1197,8 +1200,8 @@ def modular_very_fortunate_descent(
     """
     if int(restarts) < 1:
         raise ValueError("restarts must be at least 1.")
-    if int(max_K_increase) < 0:
-        raise ValueError("max_K_increase must be nonnegative.")
+    if int(K_search_radius) < 0:
+        raise ValueError("K_search_radius must be nonnegative.")
     if int(local_iters) < 0 or int(tabu_max_steps) < 0 or int(shake_rounds) < 0:
         raise ValueError(
             "local_iters, tabu_max_steps, and shake_rounds must be nonnegative."
@@ -1373,8 +1376,7 @@ def modular_very_fortunate_descent(
         K=K,
         R=R,
         use_K_constraint=use_K_constraint,
-        max_K_increase=max_K_increase,
-        clustering_Ks=clustering_Ks,
+        K_search_radius=K_search_radius,
         candidate_Ks=candidate_Ks,
         R_bounds=R_bounds,
     )
@@ -2982,45 +2984,6 @@ def modular_very_fortunate_descent(
                     best_improving = candidate
 
     best = best_improving if best_improving is not None else best_feasible
-    if best is None:
-        if use_K_constraint:
-            alt_Ks = tuple(sorted({k for k in range(max(2, int(K or 2)), max(3, int(K or 2) + 8), 2)}))
-            if tuple(clustering_Ks) == alt_Ks:
-                return None
-            return modular_very_fortunate_descent(
-                wz=wz,
-                A=A,
-                a=a,
-                m=m,
-                K=K,
-                R=R,
-                must_link=must_link,
-                cannot_link=cannot_link,
-                R_bounds=R_bounds,
-                balance_weights=balance_weights,
-                gamma=gamma,
-                constraints=constraint_specs,
-                component_members=input_component_members,
-                constraint_repair_steps=constraint_repair_steps,
-                max_dense_working_bytes=max_dense_working_bytes,
-                seed=seed,
-                fingerprint_decimals=fingerprint_decimals,
-                allow_block_splitting=allow_block_splitting,
-                max_K_increase=max_K_increase,
-                use_K_constraint=use_K_constraint,
-                candidate_Ks=candidate_Ks,
-                restarts=restarts,
-                local_iters=local_iters,
-                w_coassoc=w_coassoc,
-                clustering_Ks=alt_Ks,
-                clustering_seeds=clustering_seeds,
-                clustering_methods=clustering_methods,
-                wz_is_C_node=wz_is_C_node,
-                tabu_max_steps=tabu_max_steps,
-                shake_rounds=shake_rounds,
-                orbit_fallback=orbit_fallback,
-            )
-        return None
 
     return best
 
@@ -3038,6 +3001,8 @@ def refine_partition_modular_vfd(
     must_link: Sequence[Tuple[int, int]] = (),
     cannot_link: Sequence[Tuple[int, int]] = (),
     use_K_constraint: bool = False,
+    K_search_radius: int = 0,
+    candidate_Ks: Optional[Sequence[int]] = None,
     shake_rounds: int = 3,
     gamma: float = 1.0,
     constraints: Sequence[VFDConstraint] = (),
@@ -3061,6 +3026,13 @@ def refine_partition_modular_vfd(
         Adjacency matrix.
     partition : ndarray or scipy.sparse.spmatrix, shape (N, N)
         Initial hard or fractional co-association matrix.
+    K_search_radius : int, default=0
+        Maximum distance below or above ``K`` to search when explicit
+        ``candidate_Ks`` are not supplied.
+    candidate_Ks : sequence of int or None, default=None
+        Output community counts to evaluate when load balancing is disabled.
+        The input partition supplies co-association evidence; its community
+        count is not inferred or preserved automatically.
     max_dense_working_bytes : int or None, default=536870912
         Maximum operation-specific dense working-set estimate, including
         additional workspaces for dense input. ``None`` disables the guard.
@@ -3101,6 +3073,8 @@ def refine_partition_modular_vfd(
         must_link=must_link,
         cannot_link=cannot_link,
         use_K_constraint=use_K_constraint,
+        K_search_radius=K_search_radius,
+        candidate_Ks=candidate_Ks,
         shake_rounds=shake_rounds,
         gamma=gamma,
         constraints=constraints,
@@ -3119,11 +3093,11 @@ def refine_partition_modular_vfd(
 # A=A,
 # a=a,
 # m=m,
-# K=5,              # optional search hint here
-# R=2,              # ignored here
+# K=5,              # baseline count used to resolve the load bounds
+# R=2,
 # must_link=[],#unworthy_edges,
 # cannot_link=[],
 # use_K_constraint=True,
-# # candidate_Ks=[4, 5, 6, 7, 8, 9, 10],
+# K_search_radius=1,
 # shake_rounds=2
 # )

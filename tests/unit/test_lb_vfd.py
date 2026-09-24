@@ -2,6 +2,7 @@ import inspect
 
 import networkx as nx
 import numpy as np
+import pytest
 
 from asunder.base.algorithms.modular_VFD import modular_very_fortunate_descent
 from asunder.load_balancing.algorithms.VFD import (
@@ -66,23 +67,69 @@ def test_lb_vfd_enforces_weighted_balance_links_and_resolution():
     assert np.isclose(metadata["objective_B_sum"], expected)
 
 
-def test_lb_vfd_exact_k_is_not_silently_clamped():
+@pytest.mark.parametrize(
+    ("K", "R_bounds", "expected_K"),
+    ((2, (2, 2), 3), (3, (3, 3), 2)),
+)
+def test_lb_vfd_k_search_radius_checks_both_directions(K, R_bounds, expected_K):
     A = _cycle_adjacency(6)
     common = dict(
         wz=np.eye(6),
         A=A,
         a=A.sum(axis=1),
         m=float(A.sum()),
-        K=2,
+        K=K,
         R=0,
-        R_bounds=(2, 2),
+        R_bounds=R_bounds,
         **_small_search_kwargs(),
     )
 
-    assert very_fortunate_descent(max_K_increase=0, **common) is None
-    increased = very_fortunate_descent(max_K_increase=1, **common)
-    assert increased is not None
-    _, metadata = increased
+    assert very_fortunate_descent(K_search_radius=0, **common) is None
+    result = very_fortunate_descent(K_search_radius=1, **common)
+    assert result is not None
+    _, metadata = result
+    assert metadata["K_used"] == expected_K
+
+
+def test_modular_vfd_k_search_radius_checks_both_directions():
+    A = _cycle_adjacency(6)
+    common = dict(
+        wz=np.eye(6),
+        A=A,
+        a=A.sum(axis=1),
+        m=float(A.sum()),
+        K=3,
+        R=0,
+        R_bounds=(3, 3),
+        use_K_constraint=True,
+        **_small_search_kwargs(),
+    )
+
+    assert modular_very_fortunate_descent(K_search_radius=0, **common) is None
+    result = modular_very_fortunate_descent(K_search_radius=1, **common)
+    assert result is not None
+    _, metadata = result
+    assert metadata["K_used"] == 2
+
+
+def test_modular_vfd_explicit_candidate_ks_override_search_window():
+    A = _cycle_adjacency(6)
+    input_labels = np.array([0, 0, 0, 1, 1, 1])
+    coassociation = np.equal.outer(input_labels, input_labels).astype(float)
+
+    result = modular_very_fortunate_descent(
+        wz=coassociation,
+        A=A,
+        a=A.sum(axis=1),
+        m=float(A.sum()),
+        K=2,
+        K_search_radius=0,
+        candidate_Ks=(3,),
+        **_small_search_kwargs(),
+    )
+
+    assert result is not None
+    _, metadata = result
     assert metadata["K_used"] == 3
 
 

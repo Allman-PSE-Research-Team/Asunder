@@ -40,7 +40,7 @@ def very_fortunate_descent(
     seed: int | None = 42,
     fingerprint_decimals: int = 6,
     allow_block_splitting: bool = True,
-    max_K_increase: int = 0,  # If 0, keep K_used == K
+    K_search_radius: int = 0,  # If 0, keep K_used == K
     # greediness-defining parameters
     restarts: int = 6,
     local_iters: int = 60,
@@ -77,7 +77,7 @@ def very_fortunate_descent(
     m : float
         Modularity scaling constant.
     K : int
-        Baseline number of communities. With ``max_K_increase=0``, exactly
+        Baseline number of communities. With ``K_search_radius=0``, exactly
         this many communities are required.
     R : int or None
         Width of the allowed community-load range. Also corresponds to the
@@ -96,8 +96,10 @@ def very_fortunate_descent(
         Decimal rounding used to form fingerprint blocks.
     allow_block_splitting : bool, default=True
         If True, allow refinement of coarse fingerprint blocks.
-    max_K_increase : int, default=0
-        Maximum community-count increase above the baseline K.
+    K_search_radius : int, default=0
+        Maximum distance below or above the baseline K to search. Every
+        candidate uses the load bounds resolved from the original ``K`` and
+        ``R`` or from ``R_bounds``.
     restarts : int, default=6
         Number of constructive restarts.
     local_iters : int, default=60
@@ -134,8 +136,8 @@ def very_fortunate_descent(
 
     if int(restarts) < 1:
         raise ValueError("restarts must be at least 1.")
-    if int(max_K_increase) < 0:
-        raise ValueError("max_K_increase must be nonnegative.")
+    if int(K_search_radius) < 0:
+        raise ValueError("K_search_radius must be nonnegative.")
     if int(local_iters) < 0 or int(tabu_max_steps) < 0 or int(shake_rounds) < 0:
         raise ValueError("local_iters, tabu_max_steps, and shake_rounds must be nonnegative.")
     if int(fingerprint_decimals) < 0:
@@ -227,9 +229,9 @@ def very_fortunate_descent(
         raise ValueError("R is required when R_bounds is not provided.")
 
     k_lo, k_hi = _feasible_K_range(total_balance_weight, r_min, r_max)
-    K_candidates = tuple(
-        k for k in range(int(K), int(K) + int(max_K_increase) + 1) if k_lo <= k <= k_hi and k <= Cn
-    )
+    K_start = max(1, int(k_lo), int(K) - int(K_search_radius))
+    K_end = min(int(Cn), int(k_hi), int(K) + int(K_search_radius))
+    K_candidates = tuple(range(K_start, K_end + 1))
     if not K_candidates:
         return None
 
@@ -1125,39 +1127,7 @@ def very_fortunate_descent(
                     best_improving = candidate
 
     best = best_improving if best_improving is not None else best_feasible
-    if best is None:
-        # Retry co-association construction with a wider set of cluster counts.
-        # This does not alter the exact load-balancing K candidates above.
-        alternate_clustering_Ks = tuple(range(int(K), int(K) + 8, 2))
-        if tuple(clustering_Ks) == alternate_clustering_Ks:
-            return None
-        return very_fortunate_descent(
-            wz=wz,
-            A=A,
-            a=a,
-            m=m,
-            K=K,
-            R=R,
-            R_bounds=R_bounds,
-            must_link=must_link,
-            cannot_link=cannot_link,
-            seed=seed,
-            fingerprint_decimals=fingerprint_decimals,
-            allow_block_splitting=allow_block_splitting,
-            max_K_increase=max_K_increase,
-            restarts=restarts,
-            local_iters=local_iters,
-            w_coassoc=w_coassoc,
-            clustering_Ks=alternate_clustering_Ks,
-            clustering_seeds=clustering_seeds,
-            clustering_methods=clustering_methods,
-            wz_is_C_node=wz_is_C_node,
-            tabu_max_steps=tabu_max_steps,
-            shake_rounds=shake_rounds,
-            orbit_fallback=orbit_fallback,
-            balance_weights=balance_weights,
-            gamma=gamma,
-        )
+
     return best
 
 
@@ -1183,7 +1153,7 @@ def very_fortunate_descent(
 #     seed: int | None = 42,
 #     fingerprint_decimals: int = 6,
 #     allow_block_splitting: bool = True,
-#     max_K_increase: int = 0,
+#     K_search_radius: int = 0,
 #     restarts: int = 6,
 #     local_iters: int = 60,
 #     w_coassoc: float = 0.05,
@@ -1210,7 +1180,7 @@ def very_fortunate_descent(
 #         seed=seed,
 #         fingerprint_decimals=fingerprint_decimals,
 #         allow_block_splitting=allow_block_splitting,
-#         max_K_increase=max_K_increase,
+#         K_search_radius=K_search_radius,
 #         use_K_constraint=True,
 #         candidate_Ks=None,
 #         restarts=restarts,
@@ -1243,7 +1213,7 @@ def refine_partition(
     seed: int | None = 42,
     fingerprint_decimals: int = 6,
     allow_block_splitting: bool = True,
-    max_K_increase: int = 0,  # If 0, keep K_used == K
+    K_search_radius: int = 0,  # If 0, keep K_used == K
     # greediness-defining parameters
     restarts: int = 6,
     local_iters: int = 60,
@@ -1292,7 +1262,7 @@ def refine_partition(
         seed=seed,
         fingerprint_decimals=fingerprint_decimals,
         allow_block_splitting=allow_block_splitting,
-        max_K_increase=max_K_increase,
+        K_search_radius=K_search_radius,
         restarts=restarts,
         local_iters=local_iters,
         w_coassoc=w_coassoc,
