@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install build tooling
-        run: python -m pip install --upgrade pip build wheel auditwheel
+        run: python -m pip install --upgrade pip build wheel auditwheel 'patchelf>=0.14.5'
       - name: Stage pinned QMETIS asset
         run: python tools/fetch_qmetis.py --platform linux-x86_64
       - name: Build and validate Linux compatibility
