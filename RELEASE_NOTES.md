@@ -48,7 +48,7 @@
   records now expose read-only column and score prefix views instead of
   copying growing lists at every iteration.
 - QMETIS now uses an Asunder-specific native binding and bundled
-  `qmetis-v5.2.1-modularity.2` assets; the external `metis` Python dependency
+  `qmetis-v5.2.1-modularity.3` assets; the external `metis` Python dependency
   is removed. The `graph` extra is also removed, with `python-igraph` and
   `leidenalg` required by the base package.
 - The README and narrative documentation now lead with complete workflow

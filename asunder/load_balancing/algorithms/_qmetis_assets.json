@@ -1,5 +1,5 @@
 {
-  "release_tag": "qmetis-v5.2.1-modularity.2",
+  "release_tag": "qmetis-v5.2.1-modularity.3",
   "library_version": "5.2.1",
   "repository": "Allman-PSE-Research-Team/QMETIS",
   "idx_width": 64,
@@ -7,35 +7,35 @@
   "assets": {
     "linux-x86_64": {
       "filename": "qmetis-5.2.1-linux-x86_64-idx64-real32.tar.gz",
-      "sha256": "9587b2583c5596921cb4326e54bfbc9ef74eb0b8d5b1d4fe108fec6e9dc745c6",
+      "sha256": "2546e6999aadc481c979cd259c9269d118385597d43fc444fee2b614e85bbbdf",
       "libraries": [
         "libqmetis.so"
       ]
     },
     "macos-arm64": {
       "filename": "qmetis-5.2.1-macos-arm64-idx64-real32.tar.gz",
-      "sha256": "a4800cc2f278591c8caeb189837db2c35215987595e46d6ab1f38a48ff9ab03c",
+      "sha256": "e49ccb38816cc879c227c304ec228800d9210ca819f1cb47f938befc7a346432",
       "libraries": [
         "libqmetis.dylib"
       ]
     },
     "macos-universal2": {
       "filename": "qmetis-5.2.1-macos-universal2-idx64-real32.tar.gz",
-      "sha256": "e5c57a795a5515e3ec286a6f8b773982e816d4a746e9aa3d3695d795ddbebe1e",
+      "sha256": "c6fbcda6cebc352a2a96cceb2897725b3f7b49c2208570c81ea1bdf006951493",
       "libraries": [
         "libqmetis.dylib"
       ]
     },
     "macos-x86_64": {
       "filename": "qmetis-5.2.1-macos-x86_64-idx64-real32.tar.gz",
-      "sha256": "b232e3f273ecfd66a25e9b3ff7abe0801dea409ca3387e9c59159ba8b649e7b2",
+      "sha256": "fee2655f2055bd04ff6de76e324ad1b5182070125a5bb5a9fc55fcf8b3f07d12",
       "libraries": [
         "libqmetis.dylib"
       ]
     },
     "windows-x86_64": {
       "filename": "qmetis-5.2.1-windows-x86_64-idx64-real32.zip",
-      "sha256": "f617fa1afc2f73e0a9e60a6548c50f4fc89c7d8d1fee8731b7ed3d73ecfa5159",
+      "sha256": "5018d070a0b3e05fa7dd0c5bc41b7cc3ce8642f1faf7035a5614a51f11b846fd",
       "libraries": [
         "qmetis.dll"
       ]

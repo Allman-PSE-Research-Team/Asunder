@@ -34,7 +34,7 @@ Platform packaging
 ------------------
 
 Released Windows x86-64, Linux x86-64, and macOS universal2 wheels bundle the
-pinned ``qmetis-v5.2.1-modularity.2`` native library with an ``idx64-real32``
+pinned ``qmetis-v5.2.1-modularity.3`` native library with an ``idx64-real32``
 ABI. Each wheel contains the appropriate ``qmetis.dll``, ``libqmetis.so``, or
 ``libqmetis.dylib``. Generic ``metis``-named libraries are deliberately
 excluded.
