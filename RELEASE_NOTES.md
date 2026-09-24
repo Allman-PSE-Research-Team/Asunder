@@ -1,5 +1,79 @@
 # Release Notes
 
+## v0.4.0 - 2026-09-24
+
+### Added
+
+- ModularVFD now supports custom component-local, community-wide, and
+  partition-wide constraints, including quantified predicates, original-node
+  provenance, and guided repair. These constraints apply to ModularVFD
+  refinement; other column-generation stages require their own enforcement.
+- `NonlinearBranchAndPrice` now offers reformulated, assignment-confidence,
+  and core-periphery cardinality modes. The reformulated mode is the default:
+  it derives the maximum feasible linear-only set and contracts its exact
+  must-link components.
+- Column generation can retain CSR adjacency and mixed dense/CSR column pools.
+  New columns use Boolean dense or CSR storage according to the storage policy
+  and measured density. Incompatible dense operations have a configurable
+  estimated working-set cap, 512 MiB by default.
+- An opt-in `persistent_master` mode incrementally updates one Gurobi
+  restricted master for the built-in base and load-balancing workflows.
+- Added a pairwise feasibility projection and DSATUR-based initial columns for
+  constrained partitions.
+- Core-periphery detection now supports contracted or original-graph targets,
+  named fit diagnostics, and optional rank-2 spectral embedding.
+
+### Changed
+
+- Signed Leiden is now the default pricing heuristic. Top-level `resolution`
+  applies across pricing, scoring, and QMETIS; backends that cannot honor a
+  non-default value reject it.
+- Load balancing uses an independent, weight-aware LB VFD again, with modularity
+  resolution support. Explicit `R_bounds` are the primary load constraint;
+  `K` and `R` derive convenient bounds. LB/VFD node loads require positive
+  integers, while generic CSD can forward real weights to custom hooks.
+- CSD owns shared `must_link`, `cannot_link`, and `node_weights` inputs. It
+  resolves and forwards them through contraction and compatible hooks;
+  duplicating standard pairwise constraints in hook kwargs now raises an error.
+- VFD replaces `max_K_increase` with symmetric `K_search_radius` and removes
+  `very_fortunate_descent_legacy`. ModularVFD uses `candidate_Ks` for explicit
+  output-count searches and `clustering_Ks` for co-association construction.
+- NLBNP requires at least one worthy edge present in the input graph. Stage 1
+  refinement is configured separately from cardinality refinement, and the
+  ambiguous top-level `refine` switch is removed. `must_group` identifies the
+  nonlinear detection block without merging independent original-graph
+  communities.
+- The public `extract_dual` decomposition option is removed: relaxed master
+  solves provide pricing duals, while final integer solves do not. Iteration
+  records now expose read-only column and score prefix views instead of
+  copying growing lists at every iteration.
+- QMETIS now uses an Asunder-specific native binding and bundled
+  `qmetis-v5.2.1-modularity.2` assets; the external `metis` Python dependency
+  is removed. The `graph` extra is also removed, with `python-igraph` and
+  `leidenalg` required by the base package.
+- The README and narrative documentation now lead with complete workflow
+  examples; backend, sparse-storage, load-unit, and constraint-extension
+  details are collected in reference guides.
+
+### Fixed
+
+- Enforced unworthy-edge must-links, pairwise feasibility, and contracted
+  warm-start consistency through CSD refinement and final selection.
+- Corrected sparse-dual aggregation, reduced-cost reporting, and one-level
+  ModifiedLouvain resolution handling in pricing.
+- Preserved supplied dense/CSR column representations, including mixed pools;
+  bounded dense scratch, contraction, and expansion without forcing CSR after
+  a dense-cap failure.
+- Corrected NLBNP core-periphery roles: the detected periphery becomes the
+  linear-only group, and independent core-side communities are recovered from
+  the original graph. Nonlinear detection blocks remain intact.
+- Single-component contraction now reports `feasibility_unchecked` when custom
+  master, pricing, and refinement hooks were skipped, rather than claiming
+  those custom constraints were checked.
+- Base, load-balancing, and persistent master solves now reject non-optimal
+  termination instead of using potentially invalid values or duals;
+  infeasibility still returns the existing `None` result.
+
 ## v0.3.0 - 2026-07-24
 
 ### Added
@@ -112,7 +186,8 @@
 ### Added
 - Added `asunder.load_balancing.LoadBalancer`, a high-level load-balanced graph partitioning workflow.
 - Added `asunder.nlbnp.NonlinearBranchAndPrice` for generic nonlinear branch-and-price problems.
-- Added `asunder.nlbnp.CorePeripheryPartition` for component-level partitioning after core removal.
+- Added `asunder.nlbnp.CorePeripheryPartition` for the NLBNP structural
+  shortcut that separates one linear-only group from independent components.
 - Added core-periphery detection and NLBNP refinement utilities.
 - Added regression and integration coverage for load-balancing, decomposition, constraint, and large sparse-graph edge cases.
 - Added `__version__` attribute.

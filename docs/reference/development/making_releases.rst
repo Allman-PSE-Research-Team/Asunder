@@ -17,7 +17,7 @@ Release Checklist
 5. Optionally run it with ``publish-testpypi`` enabled and install the release
    candidate from TestPyPI on all supported platforms.
 6. Review the diff, commit, and create a tag matching the project version,
-   such as ``v0.3.0``.
+   such as ``v0.4.0``.
 7. Push the tag. GitHub Actions rebuilds and validates every artifact,
    publishes through the protected ``pypi`` environment, attests the
    distributions, and creates the GitHub Release with ``SHA256SUMS``.
