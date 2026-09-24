@@ -94,6 +94,12 @@ def solve_master_problem(
         Dual values computed from the master problem. This could be a 1D array, 2D array or a float.
     master_obj_val: float
         The objective value of the master problem.
+
+    Raises
+    ------
+    RuntimeError
+        If the solver terminates without optimality for a reason other than
+        infeasibility.
     """
     _require_pyomo()
     cannot_link = [] if cannot_link is None else cannot_link
@@ -211,8 +217,11 @@ def solve_master_problem(
         model.dual = Suffix(direction=Suffix.IMPORT)
 
     res = solver.solve(model, tee=bool(verbose is True))
-    if res.solver.termination_condition == TerminationCondition.infeasible:
+    condition = res.solver.termination_condition
+    if condition == TerminationCondition.infeasible:
         return (None, None, None) if extract_dual else (None, None)
+    if condition != TerminationCondition.optimal:
+        raise RuntimeError(f"Master solve ended without optimality: {condition}")
     lambda_sol = [value(model.lmbd[c]) for c in model.C]
     master_obj_val = value(model.OBJ)
 
