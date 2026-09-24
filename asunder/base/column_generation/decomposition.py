@@ -5,8 +5,10 @@ import copy
 import inspect
 import sys
 from collections import deque
+from collections.abc import Sequence
 from contextvars import ContextVar
 from functools import wraps
+from itertools import islice
 
 import numpy as np
 from scipy import sparse
@@ -39,6 +41,29 @@ _PERSISTENT_SESSION_HOLDER: ContextVar[list | None] = ContextVar(
     "asunder_persistent_master_sessions",
     default=None,
 )
+
+
+class _PrefixView(Sequence):
+    """Read-only snapshot of an append-only list without copying its entries."""
+
+    def __init__(self, items: list, length: int):
+        self._items = items
+        self._length = length
+
+    def __len__(self):
+        return self._length
+
+    def __iter__(self):
+        return islice(self._items, self._length)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self._items[i] for i in range(*index.indices(self._length))]
+        if not -self._length <= index < self._length:
+            raise IndexError(index)
+        if index < 0:
+            index += self._length
+        return self._items[index]
 
 
 def _close_persistent_master_sessions(func):
@@ -756,6 +781,13 @@ def CSD_decomposition(
 
     results = []
 
+    def pool_snapshot():
+        count = len(Z_star)
+        return {
+            "columns": _PrefixView(Z_star, count),
+            "f_stars": _PrefixView(f_stars, count),
+        }
+
     # main column generation loop
     # for iteration in tqdm(range(max_iterations)):
     with tqdm(total=max_iterations, disable=disable_tqdm) as pbar:
@@ -839,8 +871,7 @@ def CSD_decomposition(
                 **duals,
                 "master_obj_val": master_obj_val,
                 "z_sol": expand_z_matrix(z_sol, node2comp, max_dense_working_bytes=max_dense_working_bytes) if contract_graph else z_sol,
-                "sub_obj_val": sub_obj_val, "columns": Z_star.copy(),
-                "f_stars": f_stars.copy(),
+                "sub_obj_val": sub_obj_val, **pool_snapshot(),
                 "partition_source": "pricing_candidate",
             })
 
@@ -979,8 +1010,7 @@ def CSD_decomposition(
                 "z_sol": expand_z_matrix(heuristic_col, node2comp, max_dense_working_bytes=max_dense_working_bytes) if contract_graph else heuristic_col,
                 "heuristic_col": heuristic_col,
                 "sub_obj_val": None,
-                "columns": Z_star.copy(),
-                "f_stars": f_stars.copy(),
+                **pool_snapshot(),
                 "partition_source": "post_loop_refinement",
             })
 
@@ -1004,8 +1034,7 @@ def CSD_decomposition(
             "z_sol": expand_z_matrix(z_sol, node2comp, max_dense_working_bytes=max_dense_working_bytes) if contract_graph else z_sol,
             "heuristic_col": None,
             "sub_obj_val": None,
-            "columns": Z_star.copy(),
-            "f_stars": f_stars.copy(),
+            **pool_snapshot(),
             "partition_source": "integer_master",
         })
     if node2comp is not None:

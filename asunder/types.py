@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, TypeAlias
 
@@ -75,12 +76,13 @@ class IterationRecord:
         with ``z_sol`` or the convex combinations of all columns.
     sub_obj_val : float
         The reduced cost of the current column.
-    columns : list[ndarray or scipy.sparse.csr_matrix]
+    columns : sequence[ndarray or scipy.sparse.csr_matrix]
         All columns used in the most recent RMP solve. When graph contraction is active,
         these remain in contracted component dimensions even though ``z_sol``
-        is expanded to original-node dimensions.
-    f_stars : list[float]
-        List of objective values computed using each column in ``columns``.
+        is expanded to original-node dimensions. Column-generation histories
+        may be read-only prefix views of a shared column pool.
+    f_stars : sequence[float]
+        Objective values corresponding to ``columns``.
     partition_source : str or None
         Role of ``z_sol`` in this record, such as ``"pricing_candidate"``,
         ``"post_loop_refinement"``, or ``"integer_master"``.
@@ -98,8 +100,8 @@ class IterationRecord:
     z_sol: Optional[MatrixLike] = None
     heuristic_col: Optional[MatrixLike] = None
     sub_obj_val: Optional[float] = None
-    columns: List[MatrixLike] = field(default_factory=list)
-    f_stars: List[float] = field(default_factory=list)
+    columns: Sequence[MatrixLike] = field(default_factory=list)
+    f_stars: Sequence[float] = field(default_factory=list)
     partition_source: Optional[str] = None
 
 
