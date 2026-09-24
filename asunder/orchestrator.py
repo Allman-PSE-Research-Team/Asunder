@@ -284,6 +284,7 @@ def run_csd_decomposition(
     config: CSDDecompositionConfig | None = None,
     master_fn: MasterProblemFn = solve_master_problem,
     subproblem_fn: SubproblemFn = heuristic_subproblem,
+    persistent_master: bool | None = None,
     **kwargs: Any,
 ) -> DecompositionResult:
     """
@@ -304,6 +305,10 @@ def run_csd_decomposition(
         Master problem function.
     subproblem_fn : SubproblemFn
         Subproblem function.
+    persistent_master : bool or None
+        Opt into an incrementally updated Gurobi master. ``None`` preserves
+        the value stored in ``config``. Only the built-in base and
+        load-balancing masters are supported.
     **kwargs : Any
         Configuration overrides. Supply shared ``node_weights`` here or in
         ``config``, with one finite real value per input row. Compatible hooks
@@ -316,5 +321,7 @@ def run_csd_decomposition(
     DecompositionResult
         Computed decomposition result object.
     """
+    if persistent_master is not None:
+        kwargs["persistent_master"] = persistent_master
     orchestrator = CSDDecomposition(config=config, master_fn=master_fn, subproblem_fn=subproblem_fn)
     return orchestrator.run(A, a=a, m=m, **kwargs)

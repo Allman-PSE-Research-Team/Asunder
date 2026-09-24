@@ -92,6 +92,9 @@ Understand the result
 when no integral final partition is available. ``result.final_master_obj`` is
 the final master objective when one was solved. ``result.records`` contains an
 :class:`~asunder.types.IterationRecord` for each decomposition iteration.
+During column generation, each record's ``columns`` and ``f_stars`` are
+read-only views of the pool as it stood at that iteration; use ``list(...)``
+if an independent mutable list is needed.
 
 The metadata status distinguishes common outcomes:
 
@@ -147,6 +150,20 @@ For large sparse graphs, ``column_storage="auto"`` stores low-density hard
 columns as CSR and dense columns as Boolean arrays. See
 :doc:`../reference/matrix_storage` for memory controls and custom-callable
 requirements.
+
+Persistent master (optional)
+----------------------------
+
+Set ``persistent_master=True`` in the config or pass it to
+``run_csd_decomposition`` when rebuilding the restricted master each iteration
+becomes costly. Asunder then keeps one master model for the run, adds new
+columns to it, and switches to binary variables for the final integer solve.
+This is opt-in, uses the same master formulation, and closes the model at the
+end of the run. It supports only the built-in base and load-balancing masters
+with a configured ``gurobi_direct`` or ``gurobi_persistent`` solver and a
+working Gurobi license; custom masters and other solvers are rejected.
+Benchmark it against the default rebuild mode: the retained solver model may
+use more memory. ``LoadBalancer`` also accepts ``persistent_master=True``.
 
 Custom constraints
 ------------------

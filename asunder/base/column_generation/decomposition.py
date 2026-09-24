@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import copy
 import inspect
+import sys
 from collections import deque
+from contextvars import ContextVar
+from functools import wraps
 
 import numpy as np
 from scipy import sparse
@@ -31,6 +34,36 @@ from asunder.base.utils.matrix import (
     structural_edge_pairs,
     validate_storage_options,
 )
+
+_PERSISTENT_SESSION_HOLDER: ContextVar[list | None] = ContextVar(
+    "asunder_persistent_master_sessions",
+    default=None,
+)
+
+
+def _close_persistent_master_sessions(func):
+    """Close run-local persistent solvers on every exit path."""
+
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        sessions = []
+        token = _PERSISTENT_SESSION_HOLDER.set(sessions)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            active_exception = sys.exc_info()[0] is not None
+            close_error = None
+            try:
+                for session in reversed(sessions):
+                    session.close()
+            except Exception as exc:  # pragma: no cover - defensive cleanup
+                close_error = exc
+            finally:
+                _PERSISTENT_SESSION_HOLDER.reset(token)
+            if close_error is not None and not active_exception:
+                raise close_error
+
+    return wrapped
 
 
 def _weighted_column_sum(
@@ -82,6 +115,7 @@ def _weighted_column_sum(
     return result
 
 
+@_close_persistent_master_sessions
 def CSD_decomposition(
     A, a, m,
     mp_function,
@@ -111,6 +145,7 @@ def CSD_decomposition(
     max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
     *,
     node_weights=None,
+    persistent_master=False,
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
@@ -149,6 +184,10 @@ def CSD_decomposition(
         integer loads. ``balance_weights`` also supplies this
         vector when ``node_weights`` is omitted. Repeated weight arguments
         must agree; application-specific vectors need distinct argument names.
+    persistent_master : bool, default=False
+        Reuse and incrementally extend one restricted-master model during the
+        run. This opt-in path currently supports the built-in base and
+        load-balancing masters with a configured Gurobi solver.
     additional_constraints : dict[str, Any]
         Additional settings passed to the master, such as worthy edges or
         balance bounds. Non-pairwise hook settings must also be supplied in
@@ -257,6 +296,14 @@ def CSD_decomposition(
         sparse_column_density_threshold,
         max_dense_working_bytes,
     )
+    if not isinstance(persistent_master, (bool, np.bool_)):
+        raise TypeError("persistent_master must be a boolean.")
+    if persistent_master:
+        from asunder.base.column_generation.persistent_master import (
+            validate_persistent_master_function,
+        )
+
+        validate_persistent_master_function(mp_function)
     input_adjacency_storage = matrix_storage(A)
     if not sparse.issparse(A):
         A = checked_to_dense(
@@ -378,6 +425,12 @@ def CSD_decomposition(
     additional_constraints = (
         {} if additional_constraints is None else dict(additional_constraints)
     )
+    if persistent_master:
+        from asunder.base.column_generation.persistent_master import (
+            validate_persistent_solver,
+        )
+
+        validate_persistent_solver(additional_constraints.get("solver"))
     # normalize node weights
     if node_weights is None:
         node_weights = additional_constraints.get("node_weights")
@@ -662,6 +715,45 @@ def CSD_decomposition(
                 for col in Z_star
             ]
 
+    persistent_session = None
+    if persistent_master:
+        from asunder.base.column_generation.persistent_master import (
+            create_persistent_master_session,
+        )
+
+        persistent_session = create_persistent_master_session(
+            mp_function,
+            A,
+            Z_star,
+            f_stars,
+            cannot_link=cannot_link,
+            must_link=[] if contract_graph else must_link,
+            additional_constraints=additional_constraints,
+            verbose=verbose,
+        )
+        sessions = _PERSISTENT_SESSION_HOLDER.get()
+        if sessions is None:  # pragma: no cover - decorator invariant
+            persistent_session.close()
+            raise RuntimeError("Persistent master ownership was not initialized.")
+        sessions.append(persistent_session)
+
+    def solve_master(*, extract_dual):
+        if persistent_session is not None:
+            persistent_session.sync(Z_star, f_stars)
+            return persistent_session.solve(extract_dual=extract_dual)
+        return mp_function(
+            A,
+            a,
+            m,
+            Z_star,
+            f_stars,
+            cannot_link=cannot_link,
+            must_link=[] if contract_graph else must_link,
+            **additional_constraints,
+            verbose=verbose,
+            extract_dual=extract_dual,
+        )
+
     results = []
 
     # main column generation loop
@@ -677,15 +769,7 @@ def CSD_decomposition(
             (lambda_sol,
             duals,
             master_obj_val
-            ) = mp_function(
-                A, a, m,
-                Z_star, f_stars,
-                cannot_link=cannot_link,
-                must_link=[] if contract_graph else must_link,
-                **additional_constraints,
-                verbose=verbose,
-                extract_dual=True,
-            )
+            ) = solve_master(extract_dual=True)
 
             # call it a day if RMP is infeasible
             if master_obj_val is None:
@@ -903,15 +987,7 @@ def CSD_decomposition(
     if final_master_solve:
         if verbose != -1:
             print("Final Integer Master Solve...")
-        (lambda_sol, master_obj_val) = mp_function(
-            A, a, m,
-            Z_star, f_stars,
-            cannot_link=cannot_link,
-            must_link=[] if contract_graph else must_link,
-            **additional_constraints,
-            verbose=verbose,
-            extract_dual=False,
-        )
+        (lambda_sol, master_obj_val) = solve_master(extract_dual=False)
         if lambda_sol is not None:
             z_sol = Z_star[np.argmax(lambda_sol)]
         else:

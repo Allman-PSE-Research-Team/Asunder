@@ -425,6 +425,7 @@ def run_nonlinear_branch_and_price(
     use_refined_column: bool = False,
     refine_post_loop: bool = False,
     final_master_solve: bool = False,
+    persistent_master: bool = False,
     check_flat_pricing: bool = True,
     stopping_window: int = 5,
     contract_graph: bool | None = None,
@@ -536,6 +537,9 @@ def run_nonlinear_branch_and_price(
         independent of the Stage 2 confidence and core-periphery refiners.
     final_master_solve : bool
         Whether to run a final integer master solve.
+    persistent_master : bool, default=False
+        Reuse and incrementally extend one Gurobi restricted-master model.
+        This requires the built-in base master.
     check_flat_pricing : bool
         Whether to terminate after a window of stagnant reduced costs.
     stopping_window : int
@@ -789,6 +793,7 @@ def run_nonlinear_branch_and_price(
     cfg.use_refined_column = use_refined_column
     cfg.refine_post_loop = refine_post_loop
     cfg.final_master_solve = final_master_solve
+    cfg.persistent_master = persistent_master
     cfg.check_flat_pricing = check_flat_pricing
     cfg.stopping_window = stopping_window
     cfg.contract_graph = resolved_contract_graph

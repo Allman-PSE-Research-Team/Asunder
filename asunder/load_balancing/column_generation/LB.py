@@ -187,6 +187,7 @@ def LoadBalancer(
     disable_tqdm=False,
     verbose=-1,
     resolution=1.0,
+    persistent_master=False,
 ) -> DecompositionResult:
     """
     Solve the load-balanced structure detection problem using Asunder's column generation workflow.
@@ -270,6 +271,8 @@ def LoadBalancer(
         Whether to run post-loop refinement after column generation terminates.
     final_master_solve : bool
         Whether to solve the final integer restricted master.
+    persistent_master : bool, default=False
+        Reuse and incrementally extend one Gurobi load-balancing master model.
     check_flat_pricing : bool
         Whether to stop when reduced costs remain flat.
     stopping_window : int
@@ -451,6 +454,7 @@ def LoadBalancer(
         use_refined_column=bool(refine and use_refined_column),
         refine_post_loop=bool(refine and refine_post_loop),
         final_master_solve=final_master_solve,
+        persistent_master=persistent_master,
         column_storage="dense",
         max_iterations=max_iterations, tolerance=1e-8, verbose=verbose,
     )
