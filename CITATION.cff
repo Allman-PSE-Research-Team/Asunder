@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Adekogbe"
+  given-names: "Fortune Tolulope"
+  orcid: "https://orcid.org/0009-0008-9000-991X"
+- family-names: "Allman"
+  given-names: "Andrew"
+  orcid: "https://orcid.org/0000-0003-3531-2840"
+title: "Asunder: A Python Package for Constrained Network Structure Detection"
+version: 0.4.0
+doi: https://doi.org/10.5281/zenodo.23488523
+date-released: 2026-09-24
+url: "https://github.com/Allman-PSE-Research-Team/Asunder"
