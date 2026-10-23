@@ -181,7 +181,12 @@ Pricing or subproblem callable
 
 A pricing callable receives the graph data and the master's dual dictionary,
 then returns ``(sub_obj_val, z_sol)``. ``sub_obj_val`` is the reduced cost and
-``z_sol`` is a valid ``(N, N)`` partition matrix.
+``z_sol`` is a valid ``(N, N)`` partition matrix. Note that this definition of
+the reduced cost subtracts the dual contribution to ``sub_obj_val`` from the 
+structure quality contribution. As such, we seek columns with positive reduced
+cost. The reduced cost could equivalently be defined as the dual contribution
+minus the structure quality contribution (``- sub_obj_val``). Then, an improving
+column would have negative reduced cost.
 
 .. code-block:: python
 

@@ -454,9 +454,9 @@ def spec_part_extra_bisect(
 
     B_g = restricted_modularity_matrix(B, group)
     evvals, evvecs = np.linalg.eigh(B_g)
-    idx_max = int(np.argmax(evvals))
-    leading_value = float(evvals[idx_max])
-    evmax = evvecs[:, idx_max]
+    # eigh() returns eigenvalues in ascending order # idx_max = int(np.argmax(evvals))
+    leading_value = float(evvals[-1])
+    evmax = evvecs[:, -1]
 
     # # Alt idea: Grouping by the sum of the eigenvector instead of the sign because the vector is changed by the duals.
     # threshold = np.sum(evmax)
