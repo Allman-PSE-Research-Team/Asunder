@@ -522,6 +522,10 @@ def CSD_decomposition(
         )
         a = np.asarray(A.sum(axis=0)).reshape(-1)
         m = float(np.sum(a))
+        # Refresh a and m after contraction.
+        for name, value in (("a", a), ("m", m)):
+            if name in refine_kwargs:
+                refine_kwargs[name] = value
         if edge_constraints_active:
             additional_constraints["worthy_edges"] = None
         node_weights = np.bincount(
