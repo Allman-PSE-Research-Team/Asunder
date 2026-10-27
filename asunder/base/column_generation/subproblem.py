@@ -86,7 +86,7 @@ _ZERO_ROW_SUM_BACKENDS = {
     ("leidenalg", "cpm_leiden"),
     ("leidenalg", "signed_surprise_leiden"),
     (None, "signed_louvain"),
-    (None, "spinglass"),
+    ("igraph", "spinglass"),
 }
 
 
@@ -264,7 +264,7 @@ def heuristic_subproblem(
             operation="internal signed-Louvain pricing",
         )
 
-    if package == "igraph" and algo not in {"greedy", "leiden"}:
+    if package == "igraph" and algo not in {"greedy", "leiden", "spinglass"}:
         zii, metric = run_igraph(
             graph_modA if algo == "cpm_leiden" else modA_positive,
             algo=algo,
@@ -286,7 +286,7 @@ def heuristic_subproblem(
             sparse_column_density_threshold=sparse_column_density_threshold,
             max_dense_working_bytes=max_dense_working_bytes,
         )
-    elif algo == "spinglass":
+    elif package == "igraph" and algo == "spinglass":
         zii = run_igraph_spinglass(
             graph_modA,
             column_storage=column_storage,

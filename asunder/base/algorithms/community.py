@@ -432,7 +432,7 @@ def run_igraph_spinglass(
     Parameters
     ----------
     modified_A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
-        Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
+        Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights.
         The original adjacency / weight matrix can also be parsed.
     column_storage : {"auto", "dense", "csr"}, default="dense"
         Physical storage used for the returned hard partition.
