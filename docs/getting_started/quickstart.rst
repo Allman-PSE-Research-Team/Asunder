@@ -83,10 +83,12 @@ Understand the result
 Balance controls
 ----------------
 
-Load balancing primarily enforces community-load bounds (``R_bounds``), which 
-reduce to community-size bounds for unit node weights. Supplying ``K`` and ``R`` 
-conveniently derives these bounds. The workflow attempts to match ``K`` where 
-possible, but does not guarantee exactly ``K`` communities.
+Load balancing enforces community-load bounds, which reduce to community-size
+bounds for unit node weights. Supplying ``K`` and ``R`` derives these bounds
+and targets ``K`` during initialization and default refinement. Supplying
+``R_bounds`` instead lets initialization search admissible community counts
+and default refinement compare them by modularity. Wide bounds can increase
+search time. The final result does not guarantee exactly ``K`` communities.
 
 .. list-table:: Common options
    :header-rows: 1
@@ -98,7 +100,7 @@ possible, but does not guarantee exactly ``K`` communities.
      - Request four communities whose allowed load range has width one.
    * - ``R_bounds=(10, 14)``
      - Require every community to have total load between 10 and 14,
-       inclusive.
+       inclusive, and search the community counts admitted by these bounds.
    * - ``node_weight_attr="load"``
      - Balance a positive integer node attribute instead of node count.
        Missing attribute values default to one.

@@ -118,7 +118,9 @@ Common controls include:
 
 - `K` and `R` for the number of communities and the width of their permitted
   load range;
-- `R_bounds=(lower, upper)` for explicit inclusive community-load bounds;
+- `R_bounds=(lower, upper)` for explicit inclusive community-load bounds,
+  with initialization and default refinement searching admissible community
+  counts (wide bounds can increase search time);
 - `node_weight_attr="load"` to balance a positive integer node attribute
   instead of node count;
 - `contract_graph=True` to contract must-linked nodes while preserving their

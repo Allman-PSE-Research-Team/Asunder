@@ -614,12 +614,12 @@ def CSD_decomposition(
 
         if A.shape == (1, 1):
             if additional_constraints.get("LB"):
-                requested_k = int(additional_constraints.get("K", 1))
-                if requested_k != 1:
-                    return None
                 total_weight = float(node_weights[0])
                 bounds = additional_constraints.get("R_bounds")
                 if bounds is None:
+                    requested_k = int(additional_constraints.get("K", 1))
+                    if requested_k != 1:
+                        return None
                     width = int(additional_constraints.get("R", 0))
                     lower = max(1, int(np.floor(total_weight - width / 2 + 0.5)))
                     upper = lower + width
