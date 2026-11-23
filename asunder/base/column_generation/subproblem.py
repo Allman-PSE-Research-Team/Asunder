@@ -30,7 +30,7 @@ from asunder.base.utils.matrix import (
     ensure_dense_working_set,
     matrix_scalar,
 )
-from asunder.solvers import get_default_solver
+from asunder.solvers import _solve_fresh_model, get_default_solver
 from asunder.types import MatrixLike
 
 try:
@@ -473,7 +473,7 @@ def solve_subproblem(
         return M - constant_terms
 
     model.OBJ = Objective(rule=sub_objective_rule, sense=maximize)
-    res = solver.solve(model, tee=False)
+    res = _solve_fresh_model(solver, model, tee=False)
     if verbose != -1 and res.solver.termination_condition != TerminationCondition.optimal:
         lb = getattr(res.problem, "lower_bound", None)
         ub = getattr(res.problem, "upper_bound", None)

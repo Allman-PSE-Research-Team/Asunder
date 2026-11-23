@@ -539,8 +539,9 @@ def run_nonlinear_branch_and_price(
         Whether to run a final integer master solve.
     persistent_master : bool or None, default=None
         ``None`` uses the setting in ``config``, which defaults to automatic
-        reuse with a built-in master and ``gurobi_direct`` or
-        ``gurobi_persistent``. ``True`` requires a supported combination.
+        reuse with a built-in master and ``gurobi_direct``,
+        ``gurobi_persistent``, or ``cplex_persistent``. ``True`` requires a
+        supported combination.
         ``False`` always rebuilds the master.
     check_flat_pricing : bool
         Whether to terminate after a window of stagnant reduced costs.

@@ -5,17 +5,20 @@ import pytest
 from scipy import sparse
 
 from asunder import solvers
+from asunder.base.algorithms.projection import project_partition_pairwise_ilp
 from asunder.base.column_generation import decomposition as decomposition_module
 from asunder.base.column_generation import persistent_master as persistent_module
 from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import solve_master_problem as base_master
 from asunder.base.column_generation.pricing import build_dual_weight_matrix
+from asunder.base.column_generation.subproblem import solve_subproblem
 from asunder.config import CSDDecompositionConfig
+from asunder.load_balancing.algorithms.projection import project_partition_ilp
 from asunder.load_balancing.column_generation.master import (
     solve_master_problem as load_balancing_master,
 )
 from asunder.orchestrator import run_csd_decomposition
-from asunder.solvers import create_solver
+from asunder.solvers import _solve_fresh_model, create_solver
 
 
 def _partition(labels):
@@ -71,33 +74,37 @@ def _assert_master_results_compatible(adjacency, columns, scores, actual, expect
     _assert_dual_solution_valid(adjacency, columns, scores, expected)
 
 
-@pytest.fixture(scope="module")
-def gurobi_direct_solver():
-    try:
-        from pyomo.environ import ConcreteModel, Objective, Var, maximize
+@pytest.fixture(scope="module", params=("gurobi_direct", "cplex_persistent"))
+def master_solver(request):
+    from pyomo.environ import ConcreteModel, Objective, Var, maximize
 
-        solver = create_solver("gurobi_direct", manage_env=True)
+    solver_name = request.param
+    is_gurobi = solver_name == "gurobi_direct"
+    solver_options = {"manage_env": True} if is_gurobi else {}
+    solver = create_solver(solver_name, **solver_options)
+    try:
         if not solver.available(False):
-            pytest.skip("The Gurobi direct solver is unavailable.")
+            pytest.skip(f"The {solver_name} solver is unavailable.")
         probe = ConcreteModel()
         probe.x = Var(bounds=(0, 1))
         probe.objective = Objective(expr=probe.x, sense=maximize)
-        solver.solve(probe, tee=False)
-    except Exception as exc:
-        if "solver" in locals() and hasattr(solver, "close"):
-            solver.close()
-        pytest.skip(f"A usable Gurobi license is unavailable: {exc}")
-    try:
+        try:
+            _solve_fresh_model(solver, probe, tee=False)
+        except Exception as exc:
+            pytest.skip(f"Unable to run {solver_name}: {exc}")
         yield solver
     finally:
-        solver.close()
+        if is_gurobi:
+            solver.close()
+        elif solver._solver_model is not None:
+            solver._solver_model.end()
 
 
 @pytest.mark.solver
 def test_base_persistent_master_matches_rebuild_before_and_after_append(
-    gurobi_direct_solver, monkeypatch,
+    master_solver, monkeypatch,
 ):
-    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", gurobi_direct_solver)
+    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", master_solver)
     adjacency = _path_adjacency(5)
     strengths = adjacency.sum(axis=1)
     volume = float(strengths.sum())
@@ -122,7 +129,7 @@ def test_base_persistent_master_matches_rebuild_before_and_after_append(
         cannot_link=cannot_link,
         must_link=must_link,
         additional_constraints=master_kwargs,
-        source_solver=gurobi_direct_solver,
+        source_solver=master_solver,
         verbose=-1,
     )
     try:
@@ -193,9 +200,9 @@ def test_base_persistent_master_matches_rebuild_before_and_after_append(
 
 @pytest.mark.solver
 def test_load_balancing_persistent_master_matches_rebuild_after_append(
-    gurobi_direct_solver, monkeypatch,
+    master_solver, monkeypatch,
 ):
-    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", gurobi_direct_solver)
+    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", master_solver)
     adjacency = _path_adjacency(5)
     strengths = adjacency.sum(axis=1)
     volume = float(strengths.sum())
@@ -223,7 +230,7 @@ def test_load_balancing_persistent_master_matches_rebuild_after_append(
         cannot_link=cannot_link,
         must_link=must_link,
         additional_constraints=master_kwargs,
-        source_solver=gurobi_direct_solver,
+        source_solver=master_solver,
         verbose=-1,
     )
     try:
@@ -269,8 +276,44 @@ def test_load_balancing_persistent_master_matches_rebuild_after_append(
             session.solve(extract_dual=True),
             rebuilt,
         )
+        persistent_integer = session.solve(extract_dual=False)
+        rebuilt_integer = load_balancing_master(
+            adjacency,
+            strengths,
+            volume,
+            columns,
+            scores,
+            cannot_link=cannot_link,
+            must_link=must_link,
+            extract_dual=False,
+            verbose=-1,
+            **master_kwargs,
+        )
+        np.testing.assert_allclose(persistent_integer[0], rebuilt_integer[0], atol=1e-8)
+        assert persistent_integer[1] == pytest.approx(rebuilt_integer[1])
     finally:
         session.close()
+
+
+@pytest.mark.solver
+def test_default_solver_supports_exact_pricing_and_projections(master_solver, monkeypatch):
+    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", master_solver)
+    adjacency = _path_adjacency()
+    strengths = adjacency.sum(axis=1)
+    volume = float(strengths.sum())
+    partition = _partition([0, 0, 1, 1])
+    constraints = {"must_link": [(0, 1)], "cannot_link": [(0, 3)]}
+
+    objective, priced = solve_subproblem(adjacency, strengths, volume, {}, verbose=-1)
+    assert np.isfinite(objective)
+    assert priced.shape == adjacency.shape
+
+    projected, _ = project_partition_pairwise_ilp(partition, **constraints)
+    np.testing.assert_array_equal(projected, partition)
+    projected, _ = project_partition_ilp(
+        wz=partition, A=adjacency, a=strengths, m=volume, K=2, R=0, **constraints,
+    )
+    np.testing.assert_array_equal(projected, partition)
 
 
 class _ModelUpdatingSolver:
@@ -313,7 +356,7 @@ def test_persistent_session_appends_only_suffix_then_switches_to_binary(monkeypa
     solver = _ModelUpdatingSolver()
     monkeypatch.setattr(
         persistent_module,
-        "_configured_gurobi_solver",
+        "_configured_persistent_solver",
         lambda source_solver=None: solver,
     )
     adjacency = _path_adjacency()
@@ -537,7 +580,7 @@ def test_persistent_master_rejects_custom_master_even_on_trivial_contraction():
 
 def test_persistent_master_rejects_unsupported_package_solver(monkeypatch):
     monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", SimpleNamespace(type="appsi_highs"))
-    with pytest.raises(ValueError, match="gurobi_direct or gurobi_persistent"):
+    with pytest.raises(ValueError, match="gurobi_direct, gurobi_persistent, or cplex_persistent"):
         run_csd_decomposition(_path_adjacency(), persistent_master=True)
 
 
@@ -557,9 +600,13 @@ def test_decomposition_configures_built_in_master_solver_through_package_default
     [
         (base_master, "gurobi_direct", None, True),
         (load_balancing_master, "gurobi_persistent", None, True),
+        (base_master, "cplex_persistent", None, True),
+        (load_balancing_master, "cplex_persistent", None, True),
         (base_master, "appsi_highs", None, False),
         (base_master, "gurobi_persistent", False, False),
         (load_balancing_master, "gurobi_persistent", False, False),
+        (base_master, "cplex_persistent", False, False),
+        (load_balancing_master, "cplex_persistent", False, False),
     ],
 )
 def test_decomposition_selects_persistence_from_the_package_solver(
@@ -577,7 +624,7 @@ def test_decomposition_selects_persistence_from_the_package_solver(
             self.instance = model
 
         def solve(self, model, **kwargs):
-            if self.type == "gurobi_persistent":
+            if self.type in {"gurobi_persistent", "cplex_persistent"}:
                 assert self.instance is model
             self.models.append(model)
             return SimpleNamespace(

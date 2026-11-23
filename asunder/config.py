@@ -110,8 +110,9 @@ class CSDDecompositionConfig:
         Boolean that determines whether a final master solve is executed or not.
     persistent_master : bool or None
         ``None`` automatically reuses the built-in base and load-balancing
-        masters with ``gurobi_direct`` or ``gurobi_persistent``. ``True`` requires
-        a supported combination. ``False`` always rebuilds the master.
+        masters with ``gurobi_direct``, ``gurobi_persistent``, or
+        ``cplex_persistent``. ``True`` requires a supported combination.
+        ``False`` always rebuilds the master.
     max_iterations : int
         Maximum number of column generation iterations.
     disable_tqdm : bool

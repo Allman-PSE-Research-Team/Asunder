@@ -307,8 +307,9 @@ def run_csd_decomposition(
         Subproblem function.
     persistent_master : bool or None
         ``None`` uses the setting in ``config``, which defaults to automatic
-        reuse with a built-in master and ``gurobi_direct`` or
-        ``gurobi_persistent``. ``True`` requires a supported combination.
+        reuse with a built-in master and ``gurobi_direct``,
+        ``gurobi_persistent``, or ``cplex_persistent``. ``True`` requires a
+        supported combination.
         ``False`` always rebuilds the master.
     **kwargs : Any
         Configuration overrides. Supply shared ``node_weights`` here or in

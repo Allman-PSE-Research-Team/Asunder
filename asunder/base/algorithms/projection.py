@@ -16,7 +16,7 @@ from asunder.base.utils.matrix import (
     ensure_dense_working_set,
 )
 from asunder.base.utils.partition_generation import _build_components_links_only
-from asunder.solvers import get_default_solver
+from asunder.solvers import _solve_fresh_model, get_default_solver
 from asunder.types import MatrixLike
 
 
@@ -236,7 +236,7 @@ def project_partition_pairwise_ilp(
     )
 
     try:
-        result = solver.solve(model, tee=False)
+        result = _solve_fresh_model(solver, model, tee=False)
     except Exception:
         return None
 

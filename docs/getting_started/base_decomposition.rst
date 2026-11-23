@@ -155,7 +155,8 @@ Persistent master
 -----------------
 
 Asunder automatically reuses the built-in base and load-balancing restricted
-masters when the package default is ``gurobi_direct`` or ``gurobi_persistent``.
+masters when the package default is ``gurobi_direct``, ``gurobi_persistent``, or
+``cplex_persistent``. The CPLEX interface requires the IBM CPLEX Python package.
 Use :func:`asunder.solvers.set_default_solver` to change the package default.
 With a custom master or another solver, automatic mode rebuilds the model for
 each solve.

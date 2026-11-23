@@ -36,7 +36,9 @@ MasterKind = Literal["base", "load_balancing"]
 
 
 def _supports_persistent_solver(source_solver: Any) -> bool:
-    return _solver_type(source_solver) in {"gurobi_direct", "gurobi_persistent"}
+    return _solver_type(source_solver) in {
+        "gurobi_direct", "gurobi_persistent", "cplex_persistent",
+    }
 
 
 def validate_persistent_solver(source_solver: Any = None) -> Any:
@@ -45,7 +47,7 @@ def validate_persistent_solver(source_solver: Any = None) -> Any:
     if not _supports_persistent_solver(source_solver):
         raise ValueError(
             "persistent_master=True currently requires a configured "
-            "gurobi_direct or gurobi_persistent solver."
+            "gurobi_direct, gurobi_persistent, or cplex_persistent solver."
         )
     return source_solver
 
@@ -58,10 +60,12 @@ def select_persistent_solver(mp_function: Any) -> Any | None:
     return source_solver if _supports_persistent_solver(source_solver) else None
 
 
-def _configured_gurobi_solver(source_solver: Any = None):
-    """Create an owned persistent solver from a configured Gurobi solver."""
+def _configured_persistent_solver(source_solver: Any = None):
+    """Create a run-local persistent solver from the configured solver."""
     source_solver = validate_persistent_solver(source_solver)
     options = dict(getattr(source_solver, "options", {}) or {})
+    if _solver_type(source_solver) == "cplex_persistent":
+        return create_solver("cplex_persistent", options=options)
     return create_solver(
         "gurobi_persistent",
         manage_env=True,
@@ -162,7 +166,7 @@ class PersistentMasterSession:
             self.balance_weights = weights
 
         self.model = self._build_model()
-        self.solver = _configured_gurobi_solver(solver)
+        self.solver = _configured_persistent_solver(solver)
         try:
             self.solver.set_instance(
                 self.model,
@@ -457,12 +461,19 @@ class PersistentMasterSession:
         return lambda_sol, duals, master_obj_val
 
     def close(self) -> None:
-        """Release the owned Gurobi model and environment."""
+        """Release the owned solver resources."""
         if self._closed:
             return
         self._closed = True
         solver = getattr(self, "solver", None)
-        if solver is not None:
+        if solver is None:
+            return
+        if _solver_type(solver) == "cplex_persistent":
+            # Pyomo's CPLEX interface has no public method to close the native model.
+            native_model = getattr(solver, "_solver_model", None)
+            if native_model is not None:
+                native_model.end()
+        else:
             solver.close()
 
 

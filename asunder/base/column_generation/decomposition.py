@@ -210,8 +210,9 @@ def CSD_decomposition(
         vector when ``node_weights`` is omitted. Repeated weight arguments
         must agree; application-specific vectors need distinct argument names.
     persistent_master : bool or None, default=None
-        Automatically reuse the built-in base or load-balancing master with
-        a package default of ``gurobi_direct`` or ``gurobi_persistent``.
+        Automatically reuse the built-in base or load-balancing master with a
+        package default of ``gurobi_direct``, ``gurobi_persistent``, or
+        ``cplex_persistent``.
         ``True`` requires a supported combination. ``False`` always rebuilds.
     additional_constraints : dict[str, Any]
         Additional settings passed to the master, such as worthy edges or

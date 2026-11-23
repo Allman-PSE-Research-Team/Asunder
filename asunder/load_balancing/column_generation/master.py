@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from asunder.base.column_generation.master import _require_pyomo, _solve_rebuilt_master
+from asunder.base.column_generation.master import _require_pyomo
 from asunder.base.utils.matrix import matrix_scalar
 from asunder.load_balancing.utils.balance import resolve_balance_bounds
-from asunder.solvers import get_default_solver
+from asunder.solvers import _solve_fresh_model, get_default_solver
 
 try:
     from pyomo.environ import (
@@ -216,7 +216,7 @@ def solve_master_problem(
     if extract_dual:
         model.dual = Suffix(direction=Suffix.IMPORT)
 
-    res = _solve_rebuilt_master(solver, model, tee=bool(verbose is True))
+    res = _solve_fresh_model(solver, model, tee=bool(verbose is True))
     condition = res.solver.termination_condition
     if condition == TerminationCondition.infeasible:
         return (None, None, None) if extract_dual else (None, None)

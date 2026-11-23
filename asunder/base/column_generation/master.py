@@ -6,7 +6,7 @@ import numpy as np
 from scipy import sparse
 
 from asunder.base.utils.matrix import matrix_scalar, structural_edge_pairs
-from asunder.solvers import _solver_type, get_default_solver
+from asunder.solvers import _solve_fresh_model, get_default_solver
 from asunder.types import MatrixLike
 
 try:
@@ -26,12 +26,6 @@ try:
     )
 except Exception:  # pragma: no cover - optional dependency
     ConcreteModel = None
-
-
-def _solve_rebuilt_master(solver, model, *, tee):
-    if _solver_type(solver) == "gurobi_persistent":
-        solver.set_instance(model)
-    return solver.solve(model, tee=tee)
 
 
 def _require_pyomo():
@@ -259,7 +253,7 @@ def solve_master_problem(
     if extract_dual:
         model.dual = Suffix(direction=Suffix.IMPORT)
 
-    res = _solve_rebuilt_master(solver, model, tee=bool(verbose is True))
+    res = _solve_fresh_model(solver, model, tee=bool(verbose is True))
     condition = res.solver.termination_condition
     if condition == TerminationCondition.infeasible:
         return (None, None, None) if extract_dual else (None, None)

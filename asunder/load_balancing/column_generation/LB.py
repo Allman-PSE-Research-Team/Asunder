@@ -308,9 +308,9 @@ def LoadBalancer(
     final_master_solve : bool
         Whether to solve the final integer restricted master.
     persistent_master : bool or None, default=None
-        Automatically reuse the load-balancing master with ``gurobi_direct``
-        or ``gurobi_persistent``. ``True`` requires a supported solver.
-        ``False`` always rebuilds the master.
+        Automatically reuse the load-balancing master with ``gurobi_direct``,
+        ``gurobi_persistent``, or ``cplex_persistent``. ``True`` requires a
+        supported solver. ``False`` always rebuilds the master.
     max_dense_working_bytes : int or None, default=536870912
         Maximum estimated dense working set per operation, in bytes.
         Forwarded to decomposition and pricing. ``None`` disables the guard.
