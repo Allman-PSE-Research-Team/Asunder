@@ -378,7 +378,7 @@ def _build_coassociation_matrix(
         Random seeds for repeated runs.
     methods : sequence of str, optional
         Clustering methods to use. Supported values are ``"kmeans"``,
-        ``"gmm"``, and ``"spectral"``.
+        ``"gmm"``, ``"gmm_diag"``, and ``"spectral"``.
 
     Returns
     -------
@@ -418,6 +418,8 @@ def _build_coassociation_matrix(
                         labels = KMeans(n_clusters=k, n_init=10, random_state=int(sd)).fit_predict(X)
                     elif meth == "gmm":
                         labels = GaussianMixture(n_components=k, random_state=int(sd)).fit(X).predict(X)
+                    elif meth == "gmm_diag":
+                        labels = GaussianMixture(n_components=k, covariance_type="diag", random_state=int(sd)).fit(X).predict(X)
                     elif meth == "spectral":
                         n_components, _ = connected_components(A, directed=False)
                         if n_components > 1:
@@ -1213,7 +1215,7 @@ def modular_very_fortunate_descent(
     gamma = float(gamma)
     if not np.isfinite(gamma) or gamma < 0:
         raise ValueError("gamma must be a finite nonnegative value.")
-    unknown_methods = set(clustering_methods or ()) - {"kmeans", "gmm", "spectral"}
+    unknown_methods = set(clustering_methods or ()) - {"kmeans", "gmm", "gmm_diag", "spectral"}
     if unknown_methods:
         raise ValueError(f"Unknown clustering methods: {sorted(unknown_methods)}.")
 

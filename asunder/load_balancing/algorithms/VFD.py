@@ -152,7 +152,7 @@ def very_fortunate_descent(
     gamma = float(gamma)
     if not np.isfinite(gamma) or gamma < 0:
         raise ValueError("gamma must be a finite nonnegative value.")
-    unknown_methods = set(clustering_methods or ()) - {"kmeans", "gmm", "spectral"}
+    unknown_methods = set(clustering_methods or ()) - {"kmeans", "gmm", "gmm_diag", "spectral"}
     if unknown_methods:
         raise ValueError(f"Unknown clustering methods: {sorted(unknown_methods)}.")
 
