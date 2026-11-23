@@ -1,6 +1,6 @@
 # Asunder
 
-![Asunder package banner](assets/asunder.gif)
+![Asunder package banner](https://raw.githubusercontent.com/Allman-PSE-Research-Team/Asunder/main/assets/asunder.gif)
 
 Asunder is a Python package for constrained network structure detection
 (constrained graph clustering) on undirected graphs. In other words, it
@@ -16,6 +16,8 @@ that need custom initial partitions, master problems, pricing, or refinement.
 
 Development is led by [Andrew Allman's Process Systems Research
 Team](https://allmanaa.engin.umich.edu/) at the University of Michigan.
+
+![Asunder partitioning workflow](https://raw.githubusercontent.com/Allman-PSE-Research-Team/Asunder/main/assets/Asunder_Workflow.svg)
 
 ## Install
 
