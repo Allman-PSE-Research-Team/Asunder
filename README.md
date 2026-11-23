@@ -62,6 +62,23 @@ workflows do not require it.
 If you are unsure, start with the [problem-fit and workflow-choice
 guide](https://asunder.readthedocs.io/en/latest/learn/guides/problem_fit.html).
 
+## Choose a pricing algorithm
+
+| Algorithm / backend | Use | Signed edge weights | GPU |
+| --- | --- | --- | --- |
+| **Signed Leiden / leidenalg (default)** | General pricing | Yes | No |
+| Louvain / NetworkX | Unsigned pricing | Clipped to zero | Via nx-cugraph |
+| Leiden / NetworkX | Pricing with an activated Leiden backend | Clipped to zero | Via nx-cugraph |
+| QMETIS | Native load-balancing pricing | Clipped to zero | No |
+
+NetworkX Leiden requires a compatible NetworkX version and an activated backend,
+such as `nx-cugraph`. QMETIS scales and rounds edge weights for its search.
+Candidates are rescored using the original weights and master duals.
+Node loads in the built-in load-balancing workflow must be positive integers.
+
+See the [full algorithm comparison](docs/reference/algorithm_comparison.rst)
+for objectives, weight support, and theoretical scalability.
+
 ## Load-balancing quickstart
 
 `LoadBalancer` is the most direct workflow when communities must have similar

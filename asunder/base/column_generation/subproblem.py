@@ -60,6 +60,7 @@ def _validate_resolution_support(
 
     supported = {
         ("networkx", "louvain"),
+        ("networkx", "leiden"),
         ("networkx", "greedy"),
         ("sknetwork", "louvain"),
         ("sknetwork", "leiden"),

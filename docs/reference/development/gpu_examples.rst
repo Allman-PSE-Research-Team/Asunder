@@ -1,5 +1,12 @@
 :orphan:
 
+.. note::
+
+   Built-in pricing supports ``package="networkx", algo="leiden"`` with an
+   activated Leiden backend. For nx-cugraph, install compatible versions and
+   set ``nx.config.backend_priority.algos = ["cugraph"]`` before pricing.
+   The custom Leiden example below shows additional checks and controls.
+
 .. code-block:: python
 
    import os

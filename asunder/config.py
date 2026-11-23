@@ -60,7 +60,8 @@ class CSDDecompositionConfig:
         Package from which non-custom heuristic subproblem is selected. Package and algorithm options include:
 
         ``"networkx"``:
-            ``"louvain"``, ``"greedy"``, ``"girvan_newman"``
+            ``"louvain"``, ``"leiden"``, ``"greedy"``, ``"girvan_newman"``.
+            Leiden requires an activated backend such as ``nx-cugraph``.
         ``"sknetwork"``:
             ``"louvain"``, ``"leiden"``, ``"lpa"``
         ``"igraph"``:
