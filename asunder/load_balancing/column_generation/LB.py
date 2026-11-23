@@ -218,6 +218,8 @@ def LoadBalancer(
     resolution=1.0,
     persistent_master: bool | None = None,
     max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
+    *,
+    refinement_backend: str = "python",
 ) -> DecompositionResult:
     """
     Solve the load-balanced structure detection problem using Asunder's column generation workflow.
@@ -293,9 +295,12 @@ def LoadBalancer(
         preserving their summed balance weights.
     refine : bool
         Master switch for LB VFD refinement.
+    refinement_backend : {"python", "cpp"}, default="python"
+        Implementation of the built-in load-balancing VFD search. Release
+        wheels include the C++ library. A custom ``refine_func`` takes precedence.
     refine_params : dict or None
-        Optional custom refinement hook configuration. By default the
-        independent load-balancing VFD adapter is used. Pairwise keys in
+        Optional refinement configuration. Supply ``kwargs`` to tune the selected
+        built-in backend, or ``refine_func`` to select a custom hook. Pairwise keys in
         ``kwargs`` are rejected. This wrapper supplies balance defaults to
         declared hook parameters; explicit non-pairwise kwargs are preserved.
         With explicit ``R_bounds``, the default ``K_search_radius`` covers all
@@ -341,6 +346,9 @@ def LoadBalancer(
         Column generation result. The final co-clustering matrix is available
         as ``final_partition`` and load-balancing summaries are in ``metadata``.
     """
+    if refinement_backend not in ("python", "cpp"):
+        raise ValueError("refinement_backend must be 'python' or 'cpp'.")
+
     nodes = list(G.nodes())
     A = nx.to_numpy_array(G, nodelist=nodes)
     a = np.sum(A, axis=1)
@@ -410,9 +418,15 @@ def LoadBalancer(
     else:
         raise ValueError("ifc_generator must be either 'random' or 'ordered'.")
 
-    if refine_params is None:
+    if not refine:
+        resolved_refine_params = {}
+    elif refine_params is None or "refine_func" not in refine_params:
+        refiner = refine_partition
+        if refinement_backend == "cpp":
+            from asunder.load_balancing.algorithms.VFD_cpp import refine_partition as refiner
+
         resolved_refine_params = {
-            "refine_func": refine_partition,
+            "refine_func": refiner,
             "kwargs": dict(
                 K=K,
                 R=R,
@@ -423,35 +437,13 @@ def LoadBalancer(
             ),
         }
 
-        # Illustrative ModularVFD replacement (intentionally inactive).  This is
-        # equivalent to the LB adapter above when both searches receive the same
-        # seed/defaults and ModularVFD's optional balance constraint is enabled.
-        # CSD supplies pairwise settings and shared node weights.
-        # from asunder.base.algorithms.modular_VFD import refine_partition_modular_vfd
-        # resolved_refine_params = {
-        #     "refine_func": refine_partition_modular_vfd,
-        #     "kwargs": dict(
-        #         K=K,
-        #         R=R,
-        #         R_bounds=R_bounds,
-        #         gamma=resolution,
-        #         use_K_constraint=True,
-        #         candidate_Ks=None,
-        #         fingerprint_decimals=6,
-        #         allow_block_splitting=True,
-        #         K_search_radius=0,
-        #         restarts=6,
-        #         local_iters=60,
-        #         w_coassoc=0.0,
-        #         clustering_Ks=None,
-        #         clustering_seeds=(seed,),
-        #         clustering_methods=("kmeans", "gmm", "spectral"),
-        #         wz_is_C_node=False,
-        #         tabu_max_steps=60,
-        #         shake_rounds=3,
-        #         orbit_fallback=False,
-        #     ),
-        # }
+        if refine_params:
+            resolved_refine_params["kwargs"].update(refine_params.get("kwargs") or {})
+        if refinement_backend == "cpp" and resolved_refine_params["kwargs"].get("return_metadata"):
+            raise ValueError(
+                "return_metadata=True is available on direct VFD_cpp calls. "
+                "LoadBalancer requires a partition matrix."
+            )
     else:
         resolved_refine_params = dict(refine_params)
         resolved_refine_params["kwargs"] = dict(refine_params.get("kwargs") or {})
@@ -468,9 +460,6 @@ def LoadBalancer(
         refiner = resolved_refine_params.get("refine_func")
         if callable(refiner) and "K_search_radius" in inspect.signature(refiner).parameters:
             resolved_refine_params["kwargs"].setdefault("K_search_radius", refinement_radius)
-    if not refine:
-        resolved_refine_params = {}
-
     additional_constraints={
         "LB": True,
         "R": R,
