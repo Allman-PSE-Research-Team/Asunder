@@ -1,2 +1,6 @@
 include asunder/load_balancing/algorithms/_qmetis_assets.json
 include tools/fetch_qmetis.py
+include tools/build_vfd.py
+include native/vfd/CMakeLists.txt native/vfd/LICENSE
+recursive-include native/vfd *.cpp *.h *.hpp
+recursive-exclude asunder/load_balancing/algorithms/_native *.dll *.dylib *.so VFD-LICENSE QMETIS-LICENSE QMETIS-BUILD-INFO.txt _qmetis_bundle.json

@@ -8,6 +8,17 @@ from typing import Any
 _DEFAULT_SOLVER = None
 
 
+def _solver_type(solver: Any) -> str:
+    return str(getattr(solver, "type", getattr(solver, "name", ""))).lower()
+
+
+def _solve_fresh_model(solver: Any, model: Any, *, tee: bool):
+    """Solve a fresh model, attaching it first for legacy persistent interfaces."""
+    if _solver_type(solver) in {"gurobi_persistent", "cplex_persistent"}:
+        solver.set_instance(model)
+    return solver.solve(model, tee=tee)
+
+
 def create_solver(solver_name: str = "gurobi_direct", **solver_kwargs: Any):
     """
     Create a pyomo solver instance.

@@ -23,6 +23,8 @@ from asunder.base.utils.matrix import (
 )
 from asunder.types import MatrixLike
 
+_CLUSTERING_METHODS = frozenset({"kmeans", "gmm", "gmm_diag", "spectral"})
+
 
 class _Feas:
     """
@@ -378,7 +380,7 @@ def _build_coassociation_matrix(
         Random seeds for repeated runs.
     methods : sequence of str, optional
         Clustering methods to use. Supported values are ``"kmeans"``,
-        ``"gmm"``, and ``"spectral"``.
+        ``"gmm"``, ``"gmm_diag"``, and ``"spectral"``.
 
     Returns
     -------
@@ -418,6 +420,8 @@ def _build_coassociation_matrix(
                         labels = KMeans(n_clusters=k, n_init=10, random_state=int(sd)).fit_predict(X)
                     elif meth == "gmm":
                         labels = GaussianMixture(n_components=k, random_state=int(sd)).fit(X).predict(X)
+                    elif meth == "gmm_diag":
+                        labels = GaussianMixture(n_components=k, covariance_type="diag", random_state=int(sd)).fit(X).predict(X)
                     elif meth == "spectral":
                         n_components, _ = connected_components(A, directed=False)
                         if n_components > 1:
@@ -609,7 +613,7 @@ def _fingerprint_blocks_from_rounded_rows(
     forb = comp["forb_mask"]
     csz = np.asarray(
         comp["csz"] if component_weights is None else component_weights,
-        dtype=int,
+        dtype=np.int64,
     )
 
     if r_max is None:
@@ -835,9 +839,9 @@ def _target_sizes_from_bounds(N: int, K_used: int, r_min: int, r_max: int) -> np
     partition-equality requirement.
     """
     if K_used == 0:
-        return np.zeros(0, dtype=int)
+        return np.zeros(0, dtype=np.int64)
 
-    base = np.full(K_used, r_min, dtype=int)
+    base = np.full(K_used, r_min, dtype=np.int64)
     extra = N - K_used * r_min
     if extra < 0:
         raise ValueError("Infeasible: N < K_used * r_min")
@@ -1213,7 +1217,7 @@ def modular_very_fortunate_descent(
     gamma = float(gamma)
     if not np.isfinite(gamma) or gamma < 0:
         raise ValueError("gamma must be a finite nonnegative value.")
-    unknown_methods = set(clustering_methods or ()) - {"kmeans", "gmm", "spectral"}
+    unknown_methods = set(clustering_methods or ()) - _CLUSTERING_METHODS
     if unknown_methods:
         raise ValueError(f"Unknown clustering methods: {sorted(unknown_methods)}.")
 

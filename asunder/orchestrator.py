@@ -306,9 +306,11 @@ def run_csd_decomposition(
     subproblem_fn : SubproblemFn
         Subproblem function.
     persistent_master : bool or None
-        Opt into an incrementally updated Gurobi master. ``None`` preserves
-        the value stored in ``config``. Only the built-in base and
-        load-balancing masters are supported.
+        ``None`` uses the setting in ``config``, which defaults to automatic
+        reuse with a built-in master and ``gurobi_direct``,
+        ``gurobi_persistent``, or ``cplex_persistent``. ``True`` requires a
+        supported combination.
+        ``False`` always rebuilds the master.
     **kwargs : Any
         Configuration overrides. Supply shared ``node_weights`` here or in
         ``config``, with one finite real value per input row. Compatible hooks

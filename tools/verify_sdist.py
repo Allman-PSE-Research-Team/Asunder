@@ -20,7 +20,7 @@ def verify_sdist(archive_path: Path) -> None:
     Raises
     ------
     RuntimeError
-        If native code is present or a required QMETIS build input is absent.
+        If a binary is present or a required QMETIS or VFD build input is absent.
     """
 
     with tarfile.open(archive_path, mode="r:gz") as archive:
@@ -42,6 +42,11 @@ def verify_sdist(archive_path: Path) -> None:
             "asunder/load_balancing/algorithms/_qmetis_wrapper.py"
         ),
         PurePosixPath("tools/fetch_qmetis.py"),
+        PurePosixPath("tools/build_vfd.py"),
+        *(PurePosixPath("native/vfd") / name for name in (
+            "CMakeLists.txt", "vfd.cpp", "vfd.hpp", "vfd_c.cpp", "vfd_c.h",
+            "LICENSE",
+        )),
     }
     for suffix in required_suffixes:
         if not any(name.parts[-len(suffix.parts) :] == suffix.parts for name in names):

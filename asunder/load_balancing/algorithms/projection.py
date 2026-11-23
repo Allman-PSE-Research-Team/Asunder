@@ -14,7 +14,7 @@ from asunder.base.algorithms.modular_VFD import (
     _range_bounds_from_KR,
 )
 from asunder.base.utils.graph import partition_vector_to_2d_matrix
-from asunder.solvers import get_default_solver
+from asunder.solvers import _solve_fresh_model, get_default_solver
 
 
 def _component_sum_matrix_from_node_matrix(M: np.ndarray, comp: Dict[str, Any]) -> np.ndarray:
@@ -209,7 +209,7 @@ def project_partition_ilp(
     )
 
     try:
-        result = solver.solve(model, tee=False)
+        result = _solve_fresh_model(solver, model, tee=False)
     except Exception:
         return None
 

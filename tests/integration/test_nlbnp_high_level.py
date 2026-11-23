@@ -7,6 +7,7 @@ from scipy import sparse
 
 import asunder.nlbnp.algorithms.refinement as refinement_module
 import asunder.nlbnp.workflow as workflow_module
+from asunder.config import CSDDecompositionConfig
 from asunder.nlbnp import (
     CorePeripheryPartition,
     NonlinearBranchAndPrice,
@@ -36,6 +37,24 @@ def _master(A, a, m, Z_star, f_stars, extract_dual=False, **_):
 
 def _subproblem(A, a, m, duals, **_):
     return 0.0, np.eye(A.shape[0], dtype=int)
+
+
+def test_nonlinear_branch_and_price_honors_persistent_master_config():
+    graph = nx.path_graph(4)
+    kwargs = dict(
+        worthy_edges=list(graph.edges()),
+        nonlinear_nodes=[0],
+        config=CSDDecompositionConfig(persistent_master=True),
+        master_fn=_master,
+        subproblem_fn=_subproblem,
+        disable_tqdm=True,
+    )
+
+    with pytest.raises(ValueError, match="built-in base and load-balancing"):
+        NonlinearBranchAndPrice(graph, **kwargs)
+
+    result = NonlinearBranchAndPrice(graph, persistent_master=False, **kwargs)
+    assert result.final_partition is not None
 
 
 def test_nonlinear_branch_and_price_accepts_labeled_graph_constraints():

@@ -151,19 +151,23 @@ columns as CSR and dense columns as Boolean arrays. See
 :doc:`../reference/matrix_storage` for memory controls and custom-callable
 requirements.
 
-Persistent master (optional)
-----------------------------
+Persistent master
+-----------------
 
-Set ``persistent_master=True`` in the config or pass it to
-``run_csd_decomposition`` when rebuilding the restricted master each iteration
-becomes costly. Asunder then keeps one master model for the run, adds new
-columns to it, and switches to binary variables for the final integer solve.
-This is opt-in, uses the same master formulation, and closes the model at the
-end of the run. It supports only the built-in base and load-balancing masters
-with a configured ``gurobi_direct`` or ``gurobi_persistent`` solver and a
-working Gurobi license; custom masters and other solvers are rejected.
-Benchmark it against the default rebuild mode: the retained solver model may
-use more memory. ``LoadBalancer`` also accepts ``persistent_master=True``.
+Asunder automatically reuses the built-in base and load-balancing restricted
+masters when the package default is ``gurobi_direct``, ``gurobi_persistent``, or
+``cplex_persistent``. The CPLEX interface requires the IBM CPLEX Python package.
+Use :func:`asunder.solvers.set_default_solver` to change the package default.
+With a custom master or another solver, automatic mode rebuilds the model for
+each solve.
+
+The persistent model adds new columns as they arrive, switches to binary
+variables for the optional final integer solve, and closes at the end of the
+run. Set ``persistent_master=False`` to always rebuild, or
+``persistent_master=True`` to require a supported master and solver. Omitting
+the argument in ``run_csd_decomposition`` or ``NonlinearBranchAndPrice`` uses
+the supplied config, whose default is automatic mode. ``LoadBalancer`` also
+defaults to automatic mode.
 
 Custom constraints
 ------------------

@@ -49,6 +49,8 @@ jobs:
         run: python -m pip install --upgrade build wheel auditwheel 'patchelf>=0.14.5'
       - name: Stage pinned QMETIS asset
         run: python tools/fetch_qmetis.py --platform linux-x86_64
+      - name: Build VFD
+        run: python tools/build_vfd.py
       - name: Build and validate Linux compatibility
         run: |
           python -m build --wheel --outdir dist
@@ -56,11 +58,6 @@ jobs:
           mkdir repaired
           auditwheel repair --wheel-dir repaired dist/*.whl
           python tools/verify_wheel.py repaired/*.whl --platform linux-x86_64
-      - name: Test installed wheel
-        run: |
-          python -m pip install repaired/*.whl highspy
-          cd "${RUNNER_TEMP}"
-          python "${GITHUB_WORKSPACE}/tools/qmetis_smoke.py"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-wheel
@@ -82,6 +79,8 @@ jobs:
         run: python -m pip install --upgrade build wheel delvewheel
       - name: Stage pinned QMETIS asset
         run: python tools/fetch_qmetis.py --platform windows-x86_64
+      - name: Build VFD
+        run: python tools/build_vfd.py
       - name: Build and inspect Windows wheel
         shell: pwsh
         run: |
@@ -89,13 +88,6 @@ jobs:
           $wheel = (Get-ChildItem dist\*.whl).FullName
           python tools\verify_wheel.py $wheel --platform windows-x86_64
           delvewheel show $wheel
-      - name: Test installed wheel
-        shell: pwsh
-        run: |
-          $wheel = (Get-ChildItem dist\*.whl).FullName
-          python -m pip install $wheel highspy
-          Set-Location $env:RUNNER_TEMP
-          python "$env:GITHUB_WORKSPACE\tools\qmetis_smoke.py"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-wheel
@@ -119,43 +111,54 @@ jobs:
         run: python -m pip install --upgrade build wheel delocate
       - name: Stage pinned universal QMETIS asset
         run: python tools/fetch_qmetis.py --platform macos-universal2
+      - name: Build universal VFD
+        run: python tools/build_vfd.py --universal2
       - name: Build and repair universal wheel
         run: |
           python -m build --wheel --outdir dist
           mkdir repaired
           delocate-wheel --require-archs x86_64,arm64 -w repaired -v dist/*.whl
           python tools/verify_wheel.py repaired/*.whl --platform macos-universal2
-      - name: Test installed ARM64 slice
-        run: |
-          python -m pip install repaired/*.whl highspy
-          cd "${RUNNER_TEMP}"
-          python "${GITHUB_WORKSPACE}/tools/qmetis_smoke.py"
       - uses: actions/upload-artifact@v4
         with:
           name: macos-wheel
           path: repaired/*.whl
           if-no-files-found: error
 
-  macos-intel-smoke:
-    needs: macos-wheel
-    runs-on: macos-15-intel
+  wheel-smoke:
+    needs: [linux-wheel, windows-wheel, macos-wheel]
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.14"]
+        target:
+          - {os: ubuntu-22.04, artifact: linux-wheel}
+          - {os: windows-2022, artifact: windows-wheel}
+          - {os: macos-15, artifact: macos-wheel}
+          - {os: macos-15-intel, artifact: macos-wheel}
+    runs-on: ${{ matrix.target.os }}
+    env:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - uses: actions/download-artifact@v4
         with:
-          name: macos-wheel
+          name: ${{ matrix.target.artifact }}
           path: wheelhouse
       - name: Securely upgrade pip
         run: |
           python -m pip install "pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
-      - name: Test installed Intel slice
+      - name: Test installed QMETIS and VFD outside the checkout
+        shell: bash
         run: |
           python -m pip install wheelhouse/*.whl highspy
           cd "${RUNNER_TEMP}"
           python "${GITHUB_WORKSPACE}/tools/qmetis_smoke.py"
+          python "${GITHUB_WORKSPACE}/tools/vfd_smoke.py"
 
   source-distribution:
     needs: validate-version
@@ -168,11 +171,23 @@ jobs:
       - name: Securely upgrade pip
         run: |
           python -m pip install "pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
-      - name: Build source distribution without native binaries
+      - name: Verify the source archive excludes staged native binaries
         run: |
           python -m pip install --upgrade build
+          python tools/build_vfd.py
           python -m build --sdist --outdir dist
           python tools/verify_sdist.py dist/*.tar.gz
+      - name: Install from source without a compiler and exercise Python VFD
+        env:
+          CC: "false"
+          CXX: "false"
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+        run: |
+          python -m pip wheel --no-deps --wheel-dir "${RUNNER_TEMP}/sdist-wheel" dist/*.tar.gz
+          python -m pip install "${RUNNER_TEMP}"/sdist-wheel/*-py3-none-any.whl highspy
+          cd "${RUNNER_TEMP}"
+          python "${GITHUB_WORKSPACE}/tools/vfd_smoke.py" --python-only
       - uses: actions/upload-artifact@v4
         with:
           name: source-distribution
@@ -184,7 +199,7 @@ jobs:
       - linux-wheel
       - windows-wheel
       - macos-wheel
-      - macos-intel-smoke
+      - wheel-smoke
       - source-distribution
     runs-on: ubuntu-22.04
     steps:

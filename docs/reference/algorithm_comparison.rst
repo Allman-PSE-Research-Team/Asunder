@@ -388,9 +388,10 @@ master-model construction or repeated restricted-master solves can account
 for a larger share of the total work.
 
 Asunder defaults to Gurobi through Pyomo and can use other compatible solvers
-for supported workflows. ``persistent_master=True`` reuses and extends one
-Gurobi model for the built-in base and load-balancing masters, addressing
-repeated model construction and allowing solver reoptimization.
+for supported workflows. The built-in base and load-balancing masters reuse
+and extend one model by default with ``gurobi_direct``, ``gurobi_persistent``,
+or ``cplex_persistent``. This avoids repeated model construction and allows
+solver reoptimization. Set ``persistent_master=False`` to rebuild each solve.
 
 Gurobi 13 provides a primal-dual hybrid gradient (PDHG) LP algorithm. GPU
 execution requires ``Method=6`` and ``PDHGGPU=1`` plus a GPU-enabled build.

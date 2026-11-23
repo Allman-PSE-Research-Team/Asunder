@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "put-asunder"
-version = "0.4.0"
+version = "0.4.2"
 description = "Asunder: Constrained Network Structure Detection on Undirected Graphs."
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -66,6 +66,10 @@ include = ["asunder*"]
 [tool.setuptools.package-data]
 "asunder.load_balancing.algorithms" = ["_qmetis_assets.json"]
 "asunder.load_balancing.algorithms._native" = [
+  "asunder_vfd.dll",
+  "libasunder_vfd.dylib",
+  "libasunder_vfd.so",
+  "VFD-LICENSE",
   "qmetis.dll",
   "libqmetis.dylib",
   "libqmetis.so",
@@ -86,7 +90,7 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
   "legacy: tests that require best-effort legacy dependencies",
-  "native: tests that require a bundled QMETIS native library",
+  "native: tests that require a built VFD or bundled QMETIS library",
   "solver: tests that require an available Pyomo solver backend",
 ]
 

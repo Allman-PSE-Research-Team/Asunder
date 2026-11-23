@@ -139,6 +139,57 @@ def test_kr_only_keeps_existing_search_defaults(workflow):
     assert "K_search_radius" not in workflow[0].refine_params["kwargs"]
 
 
+def test_builtin_cpp_receives_in_loop_and_post_loop_settings(monkeypatch):
+    from asunder.load_balancing.algorithms import VFD_cpp
+
+    calls = []
+
+    @functools.wraps(VFD_cpp.refine_partition)
+    def record(**kwargs):
+        calls.append(kwargs)
+        return np.equal.outer(np.arange(6) // 2, np.arange(6) // 2)
+
+    def improving_pricing(A, a, m, duals, **_):
+        return 1.0, np.eye(len(a), dtype=int)
+
+    def run(A, *, a, m, config, **_):
+        return run_csd_decomposition(
+            A, a=a, m=m, config=config, master_fn=_one_hot_master,
+            subproblem_fn=improving_pricing,
+        )
+
+    monkeypatch.setattr(VFD_cpp, "refine_partition", record)
+    monkeypatch.setattr(lb_module, "run_csd_decomposition", run)
+    graph = nx.path_graph(6)
+    nx.set_node_attributes(graph, 2, "load")
+    lb_module.LoadBalancer(
+        graph, K=2, R_bounds=(4, 4), resolution=1.25, node_weight_attr="load",
+        must_link=[(0, 1)], cannot_link=[(0, 3)], refinement_backend="cpp",
+        refine_params={"kwargs": {"shake_rounds": 2}}, seed=7,
+        max_iterations=1, disable_tqdm=True,
+    )
+    assert [kwargs["shake_rounds"] for kwargs in calls] == [0, 2]
+    for kwargs in calls:
+        assert (kwargs["K"], kwargs["K_search_radius"], kwargs["R_bounds"]) == (2, 1, (4, 4))
+        assert kwargs["gamma"] == 1.25 and kwargs["w_coassoc"] == 0.0
+        assert kwargs["seed"] == 7 and kwargs["clustering_seeds"] == (7,)
+        assert kwargs["must_link"] == [(0, 1)] and kwargs["cannot_link"] == [(0, 3)]
+        assert np.array_equal(kwargs["balance_weights"], np.full(6, 2))
+
+
+def test_cpp_selector_obeys_disabled_refinement(workflow):
+    lb_module.LoadBalancer(
+        nx.path_graph(6), K=2, R=0, refine=False, refinement_backend="cpp",
+        max_iterations=1, disable_tqdm=True,
+    )
+    assert workflow[0].refine_params == {}
+
+
+def test_unknown_refinement_backend_is_rejected():
+    with pytest.raises(ValueError, match="refinement_backend"):
+        lb_module.LoadBalancer(nx.path_graph(4), refinement_backend="gpu")
+
+
 @pytest.mark.parametrize("requested_radius", [None, 0])
 def test_custom_refiner_receives_bounds_default_without_overwriting_limit(workflow, requested_radius):
     observed = []
@@ -150,7 +201,7 @@ def test_custom_refiner_receives_bounds_default_without_overwriting_limit(workfl
     kwargs = {} if requested_radius is None else {"K_search_radius": requested_radius}
     lb_module.LoadBalancer(
         nx.cycle_graph(6), K=2, R_bounds=(2, 2),
-        refine_params={"refine_func": refiner, "kwargs": kwargs},
+        refinement_backend="cpp", refine_params={"refine_func": refiner, "kwargs": kwargs},
         max_iterations=1, disable_tqdm=True,
     )
 

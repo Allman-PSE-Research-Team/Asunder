@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from asunder.base.algorithms.modular_VFD import (
+    _CLUSTERING_METHODS,
     _build_coassociation_matrix,
     _build_components,
     _component_matrices_from_node_matrix,
@@ -152,7 +153,7 @@ def very_fortunate_descent(
     gamma = float(gamma)
     if not np.isfinite(gamma) or gamma < 0:
         raise ValueError("gamma must be a finite nonnegative value.")
-    unknown_methods = set(clustering_methods or ()) - {"kmeans", "gmm", "spectral"}
+    unknown_methods = set(clustering_methods or ()) - _CLUSTERING_METHODS
     if unknown_methods:
         raise ValueError(f"Unknown clustering methods: {sorted(unknown_methods)}.")
 

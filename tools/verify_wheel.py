@@ -8,6 +8,12 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 NATIVE_SUFFIXES = {".dll", ".dylib", ".so"}
+VFD_LIBRARY = {
+    "linux": "libasunder_vfd.so",
+    "macos": "libasunder_vfd.dylib",
+    "windows": "asunder_vfd.dll",
+}
+VFD_SOURCE = Path(__file__).resolve().parents[1] / "native" / "vfd"
 MANIFEST_PATH = (
     Path(__file__).resolve().parents[1]
     / "asunder"
@@ -25,7 +31,7 @@ def load_manifest() -> dict:
 
 
 def verify_wheel(wheel: Path, platform_key: str) -> None:
-    """Validate a platform wheel's libraries, provenance, and wheel tags.
+    """Validate a platform wheel's libraries, QMETIS metadata, VFD license, and tags.
 
     Parameters
     ----------
@@ -43,7 +49,9 @@ def verify_wheel(wheel: Path, platform_key: str) -> None:
 
     manifest = load_manifest()
     asset = manifest["assets"][platform_key]
-    expected_libraries = set(asset["libraries"])
+    qmetis_libraries = set(asset["libraries"])
+    vfd_library = VFD_LIBRARY[platform_key.split("-", 1)[0]]
+    expected_libraries = qmetis_libraries | {vfd_library}
 
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
@@ -68,15 +76,18 @@ def verify_wheel(wheel: Path, platform_key: str) -> None:
             raise RuntimeError("Wheel contains the wrong QMETIS release.")
         if bundle["sha256"] != asset["sha256"]:
             raise RuntimeError("Wheel QMETIS checksum metadata is incorrect.")
-        if set(bundle["libraries"]) != expected_libraries:
+        if set(bundle["libraries"]) != qmetis_libraries:
             raise RuntimeError(
                 "Wheel QMETIS bundle metadata lists unexpected libraries."
             )
 
+        algorithms = PurePosixPath("asunder/load_balancing/algorithms")
+        runtime_dir = algorithms / "_native"
         required_runtime_suffixes = {
-            PurePosixPath(
-                "asunder/load_balancing/algorithms/_qmetis_wrapper.py"
-            ),
+            algorithms / "_qmetis_wrapper.py",
+            algorithms / "_vfd_wrapper.py",
+            algorithms / "VFD_cpp.py",
+            *(runtime_dir / library for library in expected_libraries),
         }
         wheel_paths = [PurePosixPath(name) for name in names]
         for suffix in required_runtime_suffixes:
@@ -85,6 +96,13 @@ def verify_wheel(wheel: Path, platform_key: str) -> None:
                 for name in wheel_paths
             ):
                 raise RuntimeError(f"Wheel is missing required file {suffix}.")
+
+        license_path = runtime_dir / "VFD-LICENSE"
+        licenses = [
+            name for name in wheel_paths if name.parts[-len(license_path.parts):] == license_path.parts
+        ]
+        if len(licenses) != 1 or archive.read(str(licenses[0])) != (VFD_SOURCE / "LICENSE").read_bytes():
+            raise RuntimeError("Wheel VFD license does not match the source license.")
 
         wheel_metadata_names = [
             name for name in names if name.endswith(".dist-info/WHEEL")

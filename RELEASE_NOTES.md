@@ -1,5 +1,48 @@
 # Release Notes
 
+## v0.4.2 - 2026-11-23
+
+### Added
+
+- Added optional C++ load-balancing VFD with
+  `LoadBalancer(..., refinement_backend="cpp")`. Python is the default.
+  Direct C++ calls can return timing and search diagnostics.
+- Added `gmm_diag`, a diagonal-covariance Gaussian mixture option for VFD
+  co-association in load-balancing refinement and ModularVFD.
+- Added NetworkX Leiden pricing with an activated backend such as
+  `nx-cugraph`.
+
+#### Documentation
+- Added a pricing algorithm comparison, clarified the reduced-cost
+  convention, and added an Asunder workflow diagram and citation metadata.
+
+### Changed
+- Restricted masters now reuse one model by default for the built-in base and
+  load-balancing formulations with `gurobi_direct`, `gurobi_persistent`, or
+  `cplex_persistent`.
+  Set `persistent_master=False` to always rebuild, or `True` to require reuse.
+  Configure the solver for built-in masters with `set_default_solver(...)`.
+
+### Fixed
+- `spinglass` now requires defining `package="igraph"`.
+- Explicit `R_bounds` now drive `LoadBalancer` initialization and default
+  refinement across admissible community counts. K/R-only calls keep their
+  existing search defaults, and explicit custom refinement limits are preserved.
+- Explicit bounds also govern single-component contraction, projection repair,
+  and the QMETIS pricing count hint. Projection attempts share the configured
+  time budget and retain the closest repair found across candidate counts.
+- Exposed `max_dense_working_bytes` on `LoadBalancer` and forwarded it through
+  CSD and QMETIS dual assembly and reduced-cost scoring.
+- Refresh cached refinement `a` and `m` values after graph contraction.
+- Exact pricing and feasibility projection attach fresh models when using
+  `gurobi_persistent` or `cplex_persistent`.
+
+### Packaging
+
+- The Python-ABI-independent wheels for Linux x86-64, Windows x64, and macOS
+  universal2 bundle C++ VFD alongside QMETIS. Source archives include the
+  C++ sources and `tools/build_vfd.py`.
+
 ## v0.4.0 - 2026-09-24
 
 ### Added

@@ -4,6 +4,48 @@ Weighted Load Balancing
 Start with :doc:`../getting_started/quickstart` for a complete ``LoadBalancer``
 example. This page explains the units behind its balance settings.
 
+Choosing the VFD refinement backend
+-----------------------------------
+
+``LoadBalancer`` uses Python VFD by default. To select the bundled C++ search,
+set ``refinement_backend="cpp"``. This selects refinement independently of the
+pricing algorithm and solver. For example, the following call targets three
+equally loaded communities and runs two tabu rounds during post-loop refinement.
+
+.. code-block:: python
+
+   from asunder.load_balancing import LoadBalancer
+
+   result = LoadBalancer(
+       graph, K=3, R=0, refinement_backend="cpp",
+       refine_params={"kwargs": {"shake_rounds": 2}},
+   )
+
+Both backends use the workflow's constraints, seeds and balance settings.
+In-loop refinement uses construction and repair with ``shake_rounds=0``.
+A custom ``refine_params["refine_func"]`` takes precedence over the selector.
+The native search uses its own random generator, so partitions and scores can
+differ between backends for the same seed.
+
+For direct refinement and timing information, import
+:func:`asunder.load_balancing.algorithms.VFD_cpp.refine_partition` and pass
+``return_metadata=True``. A feasible result is a pair containing the partition
+matrix and metadata such as ``native_search_seconds``, ``objective_B_sum``,
+and ``community_loads``. A search that exhausts its budget without finding a
+feasible partition returns ``None``. Native search accepts sparse inputs by
+converting them at the configured dense-memory limit.
+
+For direct native calls, integer ``balance_weights`` are summed exactly up to
+a total of ``2**63 - 1``. Pass integer arrays when exact loads above ``2**53``
+matter. The full column-generation workflow uses floating-point weights in
+its master problem.
+
+The Linux x86-64, Windows x64 and macOS universal2 release wheels include the
+VFD library. For an editable install, run ``python tools/build_vfd.py`` from
+the source root with CMake and a C++17 compiler installed. For a local wheel,
+run that command before ``python -m build --wheel``. Python refinement works
+directly from a source installation.
+
 Counts versus loads
 -------------------
 
@@ -11,7 +53,7 @@ With unit node weights, balancing means balancing node counts. With supplied
 weights, each community's load is the sum of its members' weights. Contracting
 must-linked nodes sums their weights, so total load does not change.
 
-``LoadBalancer``, both VFD implementations, and QMETIS require positive integer
+``LoadBalancer``, its VFD backends, ModularVFD, and QMETIS require positive integer
 node weights. ModularVFD retains this requirement even when
 ``use_K_constraint=False``. Fractional node weights are rejected, not silently
 rounded or scaled.

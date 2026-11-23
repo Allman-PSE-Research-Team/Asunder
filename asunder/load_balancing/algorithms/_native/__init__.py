@@ -1,1 +1,1 @@
-"""Runtime location for the QMETIS library staged into platform wheels."""
+"""Bundled QMETIS and VFD shared libraries for this platform."""
