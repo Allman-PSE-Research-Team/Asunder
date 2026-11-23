@@ -91,6 +91,22 @@ def resolve_balance_bounds(
     return R_min, R_max
 
 
+def _feasible_balance_count_range(
+    total_weight: int,
+    n_nodes: int,
+    bounds: tuple[int, int],
+) -> tuple[int, int]:
+    """Bound the number of nonempty communities using resolved load bounds."""
+    lower, upper = bounds
+    if upper <= 0 or total_weight <= 0:
+        raise ValueError("R_bounds admit no feasible positive community count.")
+    k_min = max(1, (total_weight + upper - 1) // upper)
+    k_max = min(n_nodes, total_weight // lower) if lower > 0 else n_nodes
+    if k_min > k_max:
+        raise ValueError("R_bounds admit no feasible positive community count.")
+    return int(k_min), int(k_max)
+
+
 def epsilon_for_upper_bound(n_nodes: int, K: int, R_max: int) -> float:
     """Map an allowed maximum part size to QMETIS's upper imbalance slack.
 

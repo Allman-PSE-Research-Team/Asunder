@@ -24,12 +24,11 @@ under distinct hook argument names.
 The K/R rule
 -------------
 
-Load balancing primarily enforces community-load bounds (``R_bounds``), which 
-reduce to community-size bounds for unit node weights. Supplying ``K`` and ``R`` 
-conveniently derives these bounds. The workflow attempts to match ``K`` where 
-possible, but prioritizes maximizing modularity within the provided bounds.
-As such, it does not guarantee exactly ``K`` communities when better modularity 
-can be obtained with a different ``K``.
+Load balancing enforces community-load bounds, which reduce to community-size
+bounds for unit node weights. Without explicit ``R_bounds``, supplying ``K``
+and ``R`` derives these bounds, and initialization and default refinement
+target ``K``. The master enforces community loads rather than an exact count,
+so the final result is not guaranteed to contain exactly ``K`` communities.
 
 Let :math:`W=\sum_i w_i` be total node weight. ``K`` is the requested number of
 communities; ``R`` is an absolute load-window width in the same units as the
@@ -49,6 +48,43 @@ count and the original size-balancing rule is recovered.
 the same integer units as node weights. ``R=0`` without explicit bounds asks
 for equal loads; divisibility of ``W`` by ``K`` is necessary but does not
 guarantee feasibility because nodes and must-link components are indivisible.
+
+Community counts with explicit bounds
+--------------------------------------
+
+Supplying ``R_bounds=(L, U)`` makes ``LoadBalancer`` search the community counts
+admitted by those bounds. For total load ``W`` and ``N`` nodes, this interval is
+``ceil(W / U)`` through ``min(N, floor(W / L))``, inclusive. When ``L=0``, the
+upper count is ``N``. An empty interval raises ``ValueError``. Individual node
+loads and pairwise constraints can further restrict feasibility.
+
+Initialization searches this interval until it finds a feasible column.
+Default VFD refinement compares candidates across the interval by modularity;
+``K`` remains a heuristic hint. For example,
+``LoadBalancer(graph, R_bounds=(2, 2))`` can produce three communities on a
+six-node graph even though the default ``K`` is two.
+
+Broad intervals can increase refinement time because each admitted count is
+searched. An explicit ``K_search_radius`` in compatible ``refine_params``
+kwargs takes precedence over the wrapper's automatic radius. Direct VFD calls
+retain their own search defaults. Calls that omit ``R_bounds`` retain the
+existing K/R initialization and refinement behavior.
+
+With explicit bounds, ``projection_repair=True`` also tries admitted counts,
+starting nearest the requested ``K``, and retains the smallest projection
+distance found. ``projection_time_limit`` is shared across these attempts;
+supported solvers receive the remaining time for each solve. Repair metadata
+reports the original ``requested_K`` and the actual ``K_used``. The standalone
+``project_partition_ilp`` API continues to project onto an exact-count set.
+
+Dense workspace limit
+---------------------
+
+``LoadBalancer(..., max_dense_working_bytes=4 * 1024**3)`` raises the estimated
+dense working-set cap per operation from its default 512 MiB to 4 GiB. The
+setting is forwarded to decomposition and pricing, including QMETIS dual
+assembly and reduced-cost scoring. ``None`` disables the guard; actual memory
+requirements are unchanged.
 
 Choosing integer units
 ----------------------

@@ -14,6 +14,7 @@ from asunder.base.utils.graph import (
     group_nodes_by_community,
     map_community_labels,
 )
+from asunder.base.utils.matrix import DEFAULT_MAX_DENSE_WORKING_BYTES
 from asunder.config import CSDDecompositionConfig
 from asunder.load_balancing.algorithms.projection import project_partition_ilp
 from asunder.load_balancing.algorithms.qmetis import bundled_qmetis_release
@@ -22,7 +23,10 @@ from asunder.load_balancing.column_generation.master import solve_master_problem
 from asunder.load_balancing.column_generation.subproblem import (
     qmetis_pricing_subproblem,
 )
-from asunder.load_balancing.utils.balance import resolve_balance_bounds
+from asunder.load_balancing.utils.balance import (
+    _feasible_balance_count_range,
+    resolve_balance_bounds,
+)
 from asunder.load_balancing.utils.partition_generation import (
     make_partitions,
     make_partitions_random,
@@ -130,34 +134,59 @@ def _project_after_failed_post_loop_refinement(
     except Exception:
         return None
 
-    restore_time_limit, time_limit_applied = _temporarily_apply_projection_time_limit(
-        solver,
-        projection_time_limit,
-    )
-    try:
-        projected = project_partition_ilp(
-            wz=wz,
-            A=A,
-            a=a,
-            m=m,
-            K=K,
-            R=R,
-            R_bounds=R_bounds,
-            must_link=must_link,
-            cannot_link=cannot_link,
-            balance_weights=balance_weights,
-            seed=seed,
-            solver=solver,
+    K_candidates = (K,)
+    deadline = None
+    if R_bounds is not None:
+        k_min, k_max = _feasible_balance_count_range(
+            int(np.sum(balance_weights)), A.shape[0], R_bounds,
         )
-    finally:
-        restore_time_limit()
+        K_candidates = sorted(range(k_min, k_max + 1), key=lambda k: (abs(k - K), k))
+        if projection_time_limit is not None:
+            deadline = time.perf_counter() + float(projection_time_limit)
 
-    if projected is None:
+    best_projection = None
+    best_distance = float("inf")
+    best_time_limit_applied = False
+    for candidate_K in K_candidates:
+        attempt_limit = projection_time_limit
+        if deadline is not None:
+            attempt_limit = deadline - time.perf_counter()
+            if attempt_limit <= 0:
+                break
+        restore_time_limit, time_limit_applied = _temporarily_apply_projection_time_limit(
+            solver, attempt_limit,
+        )
+        try:
+            projected = project_partition_ilp(
+                wz=wz,
+                A=A,
+                a=a,
+                m=m,
+                K=candidate_K,
+                R=R,
+                R_bounds=R_bounds,
+                must_link=must_link,
+                cannot_link=cannot_link,
+                balance_weights=balance_weights,
+                seed=seed,
+                solver=solver,
+            )
+        finally:
+            restore_time_limit()
+        if projected is not None:
+            distance = float(projected[1]["projection_distance"])
+            if distance < best_distance:
+                best_projection = projected
+                best_distance = distance
+                best_time_limit_applied = time_limit_applied
+
+    if best_projection is None:
         return None
 
-    repaired_z, meta = projected
+    repaired_z, meta = best_projection
+    meta["requested_K"] = int(K)
     meta["projection_time_limit"] = None if projection_time_limit is None else float(projection_time_limit)
-    meta["projection_time_limit_applied"] = bool(time_limit_applied)
+    meta["projection_time_limit_applied"] = bool(best_time_limit_applied)
     return repaired_z, meta
 
 
@@ -188,6 +217,7 @@ def LoadBalancer(
     verbose=-1,
     resolution=1.0,
     persistent_master=False,
+    max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> DecompositionResult:
     """
     Solve the load-balanced structure detection problem using Asunder's column generation workflow.
@@ -201,14 +231,18 @@ def LoadBalancer(
         For a selected cluster count, the lower and upper bounds are computed from the corresponding
         balanced range rule.
     K : int
-        Number of communities. Load balancing primarily enforces community-load bounds (``R_bounds``), which reduce to community-size bounds
-        for unit node weights. Supplying ``K`` with ``R`` conveniently derives these bounds. The workflow attempts to match ``K`` where 
-        possible, but does not aim to guarantee exactly ``K``.
+        Requested number of communities. Without explicit ``R_bounds``, ``K``
+        and ``R`` derive the load bounds, and initialization and default
+        refinement target ``K``. With explicit bounds, ``K`` is a heuristic
+        hint and default refinement compares all admissible community counts.
+        The workflow does not guarantee exactly ``K`` communities.
     resolution : float, default=1.0
         Modularity resolution parameter used by pricing and column scoring.
         Algorithms that cannot apply non-default resolution reject it.
     R_bounds : tuple[int, int] | None
-        Minimum and maximum total node weight per community.
+        Inclusive minimum and maximum total node weight per community.
+        Supplying these bounds enables initialization and default refinement
+        across admissible community counts, which can increase search time.
     algo : str
         Name of heuristic subproblem used to replace the ILP subproblem. Third-party algorithms combine adjacency and dual information into a 
         unified input while custom algorithms treat adjacency and duals as separate inputs. Supported third-party algorithms are listed under the ``package`` parameter.
@@ -233,11 +267,11 @@ def LoadBalancer(
         ``"sknetwork"``:
             ``"louvain"``, ``"leiden"``, ``"lpa"``
         ``"igraph"``:
-            ``"leiden"``, ``"greedy"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
+            ``"leiden"``, ``"greedy"``, ``"spinglass"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
         ``"leidenalg"``:
             ``"leiden"``,  ``"signed_leiden"``, ``"cpm_leiden"``, ``"surprise_leiden"``, ``"signed_surprise_leiden"``
         ``None``:
-            ``"signed_louvain"``, ``"spinglass"``
+            ``"signed_louvain"``
 
         Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
     ifc_generator : str
@@ -264,6 +298,8 @@ def LoadBalancer(
         independent load-balancing VFD adapter is used. Pairwise keys in
         ``kwargs`` are rejected. This wrapper supplies balance defaults to
         declared hook parameters; explicit non-pairwise kwargs are preserved.
+        With explicit ``R_bounds``, the default ``K_search_radius`` covers all
+        admissible counts unless the caller supplies a search limit.
         Standard weights must match the weights selected by ``node_weight_attr``.
     use_refined_column : bool
         Whether to run and add refinement columns inside the main loop.
@@ -273,6 +309,9 @@ def LoadBalancer(
         Whether to solve the final integer restricted master.
     persistent_master : bool, default=False
         Reuse and incrementally extend one Gurobi load-balancing master model.
+    max_dense_working_bytes : int or None, default=536870912
+        Maximum estimated dense working set per operation, in bytes.
+        Forwarded to decomposition and pricing. ``None`` disables the guard.
     check_flat_pricing : bool
         Whether to stop when reduced costs remain flat.
     stopping_window : int
@@ -282,6 +321,7 @@ def LoadBalancer(
         load-balanced partition when VFD refinement returns ``None``.
     projection_time_limit : float or None
         Best-effort solver time limit in seconds for ``projection_repair``.
+        Shared across candidate community counts when ``R_bounds`` is supplied.
         Applied only to supported solver backends.
     max_iterations : int or None
         Maximum number of column-generation iterations. ``None`` runs until convergence.
@@ -336,6 +376,8 @@ def LoadBalancer(
     if projection_time_limit is not None and float(projection_time_limit) < 0:
         raise ValueError("projection_time_limit must be nonnegative or None.")
 
+    initial_K = K
+    max_K_increase = 0
     if R_bounds is not None:
         R_bounds = resolve_balance_bounds(
             int(balance_weights.sum()),
@@ -343,20 +385,26 @@ def LoadBalancer(
             R,
             R_bounds,
         )
+        k_min, k_max = _feasible_balance_count_range(
+            int(balance_weights.sum()), A.shape[0], R_bounds,
+        )
+        initial_K = k_min
+        max_K_increase = k_max - k_min
+        refinement_radius = max(abs(K - k_min), abs(K - k_max))
 
     ifc_params = {
         "num": 1,
         "args": {
             "R_bounds": R_bounds,
-            "max_K_increase": 0,
+            "max_K_increase": max_K_increase,
         }
     }
     if ifc_generator == "ordered":
         ifc_params["generator"] = make_partitions
-        ifc_params["args"] = dict(G=G, K=K, R=R, n_cols=1, **ifc_params["args"])
+        ifc_params["args"] = dict(G=G, K=initial_K, R=R, n_cols=1, **ifc_params["args"])
     elif ifc_generator == "random":
         ifc_params["generator"] = make_partitions_random
-        ifc_params["args"] = dict(N=A.shape[0], K=K, R=R,  **ifc_params["args"])
+        ifc_params["args"] = dict(N=A.shape[0], K=initial_K, R=R, **ifc_params["args"])
     else:
         raise ValueError("ifc_generator must be either 'random' or 'ordered'.")
 
@@ -414,6 +462,10 @@ def LoadBalancer(
             }.items():
                 if name in parameters:
                     resolved_refine_params["kwargs"].setdefault(name, value)
+    if R_bounds is not None:
+        refiner = resolved_refine_params.get("refine_func")
+        if callable(refiner) and "K_search_radius" in inspect.signature(refiner).parameters:
+            resolved_refine_params["kwargs"].setdefault("K_search_radius", refinement_radius)
     if not refine:
         resolved_refine_params = {}
 
@@ -456,6 +508,7 @@ def LoadBalancer(
         final_master_solve=final_master_solve,
         persistent_master=persistent_master,
         column_storage="dense",
+        max_dense_working_bytes=max_dense_working_bytes,
         max_iterations=max_iterations, tolerance=1e-8, verbose=verbose,
     )
     if algorithm == "qmetis":

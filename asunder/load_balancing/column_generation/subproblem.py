@@ -11,11 +11,13 @@ from asunder.base.column_generation.pricing import (
     build_dual_weight_matrix,
     compute_reduced_cost,
 )
+from asunder.base.utils.matrix import DEFAULT_MAX_DENSE_WORKING_BYTES
 from asunder.load_balancing.algorithms.qmetis import (
     QMETISApproximationWarning,
     run_qmetis,
 )
 from asunder.load_balancing.utils.balance import (
+    _feasible_balance_count_range,
     epsilon_for_upper_bound,
     resolve_balance_bounds,
 )
@@ -88,6 +90,7 @@ def qmetis_pricing_subproblem(
     verbose: int | bool = False,
     seed: int | None = None,
     balance_weights: np.ndarray | None = None,
+    max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES,
     **_: Any,
 ) -> tuple[float, np.ndarray]:
     """Generate and exactly score a pricing candidate with QMETIS.
@@ -109,7 +112,8 @@ def qmetis_pricing_subproblem(
     duals : dict[str, Any]
         Scalar, node-level, and pair-level master dual values.
     K : int
-        Requested number of load-balanced communities.
+        Requested number of load-balanced communities. With explicit bounds,
+        used as a pricing hint clamped to the current graph's admissible range.
     R : int
         Width of the permitted community-size range.
     R_bounds : tuple[int or None, int or None] or None
@@ -125,6 +129,9 @@ def qmetis_pricing_subproblem(
         Emit pricing diagnostics when enabled.
     seed : int or None
         QMETIS random seed.
+    max_dense_working_bytes : int or None, default=536870912
+        Dense working-set cap for dual assembly and reduced-cost scoring.
+        ``None`` disables the guard.
     **_ : Any
         Ignored compatibility keywords from generic pricing dispatch.
 
@@ -170,16 +177,27 @@ def qmetis_pricing_subproblem(
             )
         node_weights = np.rint(raw_weights).astype(int)
     total_balance_weight = int(node_weights.sum())
-    _, R_max = resolve_balance_bounds(total_balance_weight, K, R, R_bounds)
+    R_min, R_max = resolve_balance_bounds(total_balance_weight, K, R, R_bounds)
+    if R_bounds is not None:
+        k_min, k_max = _feasible_balance_count_range(
+            total_balance_weight, adjacency.shape[0], (R_min, R_max),
+        )
+        K = min(max(K, k_min), k_max)
     epsilon = epsilon_for_upper_bound(total_balance_weight, K, R_max)
     has_ignored_internal_mass = bool(np.any(np.diag(adjacency) != 0))
 
-    dual_weight, _ = build_dual_weight_matrix(adjacency, duals)
+    dual_weight, _ = build_dual_weight_matrix(
+        adjacency, duals, max_dense_working_bytes=max_dense_working_bytes,
+    )
     pricing_weights = adjacency - float(m) * dual_weight
     qmetis_weights = np.maximum(pricing_weights, 0.0)
     np.fill_diagonal(qmetis_weights, 0.0)
 
-    if np.any(qmetis_weights > 0):
+    if R_bounds is not None and K == 1:
+        # The native backend requires at least two parts. This candidate is
+        # exact and is rescored below using the original objective and duals.
+        z_sol = np.ones(adjacency.shape, dtype=int)
+    elif np.any(qmetis_weights > 0):
         if has_ignored_internal_mass:
             _warn_about_ignored_internal_mass()
         z_sol, _native_metric = run_qmetis(
@@ -224,6 +242,7 @@ def qmetis_pricing_subproblem(
         z_sol,
         duals,
         gamma=gamma,
+        max_dense_working_bytes=max_dense_working_bytes,
     )
 
     if verbose not in (-1, False, 0):

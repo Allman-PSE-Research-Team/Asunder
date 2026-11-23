@@ -4,6 +4,7 @@ Reference
 .. toctree::
    :maxdepth: 2
 
+   algorithm_comparison
    qmetis
    load_balancing
    matrix_storage

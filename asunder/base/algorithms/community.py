@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import itertools
 
 import networkx as nx
@@ -248,6 +249,28 @@ def best_girvan_newman_partition(G, max_levels=10):
     return best_communities, best_mod
 
 
+def _run_networkx_leiden(graph, *, resolution, seed):
+    """Run Leiden only through an activated NetworkX backend."""
+    message = "NetworkX Leiden requires an active Leiden backend (e.g. nx-cugraph)."
+    leiden = getattr(nx.community, "leiden_communities", None)
+    priorities = getattr(getattr(nx, "config", None), "backend_priority", None)
+    if not callable(leiden) or priorities is None:
+        raise RuntimeError(message)
+    active = priorities.get("leiden_communities", priorities.algos)
+    supported = getattr(leiden, "backends", ())
+    backend = next((name for name in active if name != "networkx" and name in supported), None)
+    if backend is None:
+        raise RuntimeError(message)
+    kwargs = dict(weight="weight", resolution=resolution, seed=seed, backend=backend)
+    # Older NetworkX Leiden APIs optimize modularity without a metric option.
+    if "metric" in inspect.signature(leiden).parameters:
+        kwargs["metric"] = "modularity"
+    try:
+        return leiden(graph, **kwargs)
+    except (ImportError, NotImplementedError):
+        raise RuntimeError(message) from None
+
+
 def run_modularity(
     modified_A: MatrixLike,
     algo="louvain",
@@ -320,7 +343,9 @@ def run_modularity(
         else:
             raise NotImplementedError(f"Invalid package: {package}")
     elif algo == "leiden":
-        if package == "sknetwork":
+        if package == "networkx":
+            communities = _run_networkx_leiden(modG, resolution=resolution, seed=seed)
+        elif package == "sknetwork":
             _, Leiden, _, _, _, _ = _import_sknetwork()
             partition = Leiden(resolution=resolution).fit_predict(modified_A)
             communities = {}
@@ -432,7 +457,7 @@ def run_igraph_spinglass(
     Parameters
     ----------
     modified_A : numpy.ndarray or scipy.sparse.spmatrix, shape (N, N)
-        Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights. Negative weights are not allowed.
+        Augmented adjacency / weight matrix reflecting the original adjacency / weight matrix with dual-modified weights.
         The original adjacency / weight matrix can also be parsed.
     column_storage : {"auto", "dense", "csr"}, default="dense"
         Physical storage used for the returned hard partition.

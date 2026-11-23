@@ -504,11 +504,11 @@ def run_nonlinear_branch_and_price(
         ``"sknetwork"``:
             ``"louvain"``, ``"leiden"``, ``"lpa"``
         ``"igraph"``:
-            ``"leiden"``, ``"greedy"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
+            ``"leiden"``, ``"greedy"``, ``"spinglass"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
         ``"leidenalg"``:
             ``"leiden"``,  ``"signed_leiden"``, ``"cpm_leiden"``, ``"surprise_leiden"``, ``"signed_surprise_leiden"``
         ``None``:
-            ``"signed_louvain"``, ``"spinglass"``
+            ``"signed_louvain"``
 
         Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
     resolution : float, default=1.0

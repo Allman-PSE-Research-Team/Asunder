@@ -1,6 +1,6 @@
 # Asunder
 
-![Asunder package banner](assets/asunder.gif)
+![Asunder package banner](https://raw.githubusercontent.com/Allman-PSE-Research-Team/Asunder/main/assets/asunder.gif)
 
 Asunder is a Python package for constrained network structure detection
 (constrained graph clustering) on undirected graphs. In other words, it
@@ -16,6 +16,8 @@ that need custom initial partitions, master problems, pricing, or refinement.
 
 Development is led by [Andrew Allman's Process Systems Research
 Team](https://allmanaa.engin.umich.edu/) at the University of Michigan.
+
+![Asunder partitioning workflow](https://raw.githubusercontent.com/Allman-PSE-Research-Team/Asunder/main/assets/Asunder_Workflow.svg)
 
 ## Install
 
@@ -61,6 +63,23 @@ workflows do not require it.
 
 If you are unsure, start with the [problem-fit and workflow-choice
 guide](https://asunder.readthedocs.io/en/latest/learn/guides/problem_fit.html).
+
+## Choose a pricing algorithm
+
+| Algorithm / backend | Use | Signed edge weights | GPU |
+| --- | --- | --- | --- |
+| **Signed Leiden / leidenalg (default)** | General pricing | Yes | No |
+| Louvain / NetworkX | Unsigned pricing | Clipped to zero | Via nx-cugraph |
+| Leiden / NetworkX | Pricing with an activated Leiden backend | Clipped to zero | Via nx-cugraph |
+| QMETIS | Native load-balancing pricing | Clipped to zero | No |
+
+NetworkX Leiden requires a compatible NetworkX version and an activated backend,
+such as `nx-cugraph`. QMETIS scales and rounds edge weights for its search.
+Candidates are rescored using the original weights and master duals.
+Node loads in the built-in load-balancing workflow must be positive integers.
+
+See the [full algorithm comparison](docs/reference/algorithm_comparison.rst)
+for objectives, weight support, and theoretical scalability.
 
 ## Load-balancing quickstart
 
@@ -118,7 +137,9 @@ Common controls include:
 
 - `K` and `R` for the number of communities and the width of their permitted
   load range;
-- `R_bounds=(lower, upper)` for explicit inclusive community-load bounds;
+- `R_bounds=(lower, upper)` for explicit inclusive community-load bounds,
+  with initialization and default refinement searching admissible community
+  counts (wide bounds can increase search time);
 - `node_weight_attr="load"` to balance a positive integer node attribute
   instead of node count;
 - `contract_graph=True` to contract must-linked nodes while preserving their

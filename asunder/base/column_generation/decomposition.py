@@ -240,15 +240,16 @@ def CSD_decomposition(
         Package from which non-custom heuristic subproblem is selected. Package and algorithm options include:
 
         ``"networkx"``:
-            ``"louvain"``, ``"greedy"``, ``"girvan_newman"``
+            ``"louvain"``, ``"leiden"``, ``"greedy"``, ``"girvan_newman"``.
+            Leiden requires an activated backend such as ``nx-cugraph``.
         ``"sknetwork"``:
             ``"louvain"``, ``"leiden"``, ``"lpa"``
         ``"igraph"``:
-            ``"leiden"``, ``"greedy"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
+            ``"leiden"``, ``"greedy"``, ``"spinglass"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
         ``"leidenalg"``:
             ``"leiden"``,  ``"signed_leiden"``, ``"cpm_leiden"``, ``"surprise_leiden"``, ``"signed_surprise_leiden"``
         ``None``:
-            ``"signed_louvain"``, ``"spinglass"``
+            ``"signed_louvain"``
 
         Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
     resolution : float, default=1.0
@@ -522,6 +523,10 @@ def CSD_decomposition(
         )
         a = np.asarray(A.sum(axis=0)).reshape(-1)
         m = float(np.sum(a))
+        # Refresh a and m after contraction.
+        for name, value in (("a", a), ("m", m)):
+            if name in refine_kwargs:
+                refine_kwargs[name] = value
         if edge_constraints_active:
             additional_constraints["worthy_edges"] = None
         node_weights = np.bincount(
@@ -610,12 +615,12 @@ def CSD_decomposition(
 
         if A.shape == (1, 1):
             if additional_constraints.get("LB"):
-                requested_k = int(additional_constraints.get("K", 1))
-                if requested_k != 1:
-                    return None
                 total_weight = float(node_weights[0])
                 bounds = additional_constraints.get("R_bounds")
                 if bounds is None:
+                    requested_k = int(additional_constraints.get("K", 1))
+                    if requested_k != 1:
+                        return None
                     width = int(additional_constraints.get("R", 0))
                     lower = max(1, int(np.floor(total_weight - width / 2 + 0.5)))
                     upper = lower + width

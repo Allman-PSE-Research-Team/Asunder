@@ -60,15 +60,16 @@ class CSDDecompositionConfig:
         Package from which non-custom heuristic subproblem is selected. Package and algorithm options include:
 
         ``"networkx"``:
-            ``"louvain"``, ``"greedy"``, ``"girvan_newman"``
+            ``"louvain"``, ``"leiden"``, ``"greedy"``, ``"girvan_newman"``.
+            Leiden requires an activated backend such as ``nx-cugraph``.
         ``"sknetwork"``:
             ``"louvain"``, ``"leiden"``, ``"lpa"``
         ``"igraph"``:
-            ``"leiden"``, ``"greedy"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
+            ``"leiden"``, ``"greedy"``, ``"spinglass"``, ``"infomap"``, ``"lpa"``, ``"multilevel"``, ``"voronoi"``, ``"walktrap"``, ``"cpm_leiden"``
         ``"leidenalg"``:
             ``"leiden"``,  ``"signed_leiden"``, ``"cpm_leiden"``, ``"surprise_leiden"``, ``"signed_surprise_leiden"``
         ``None``:
-            ``"signed_louvain"``, ``"spinglass"``
+            ``"signed_louvain"``
 
         Algorithms that start with ``"cpm"``, ``"signed"``, and ``"spinglass"`` are signed.
     resolution : float

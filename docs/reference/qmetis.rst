@@ -100,6 +100,13 @@ contain one finite positive integer per row. Graph-level node attributes also
 must be finite positive integers; a missing selected attribute defaults to
 one.
 
+With explicit ``R_bounds``, the adapter clamps the requested ``K`` to the
+admissible count interval for the current graph, including after contraction.
+This count guides pricing; the master and refinement enforce the load bounds.
+If the selected count is one, the adapter constructs the single-community
+candidate directly without calling the native backend. Every candidate still
+uses the original floating-point reduced-cost calculation.
+
 Automatic quantization applies only to edge weights, not node loads. Convert
 fractional loads and explicit load bounds to common integer units yourself;
 see :doc:`load_balancing` for scaling and weighted K/R semantics. Changing only
