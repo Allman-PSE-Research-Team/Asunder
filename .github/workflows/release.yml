@@ -155,7 +155,9 @@ jobs:
       - name: Test installed QMETIS and VFD outside the checkout
         shell: bash
         run: |
-          python -m pip install wheelhouse/*.whl highspy
+          # highspy 1.16 imports typing_extensions.Self on Python 3.10.
+          python -m pip install wheelhouse/*.whl highspy 'typing_extensions>=4.0; python_version < "3.11"'
+          python -c 'import highspy; print("HiGHS", highspy.Highs().version())'
           cd "${RUNNER_TEMP}"
           python "${GITHUB_WORKSPACE}/tools/qmetis_smoke.py"
           python "${GITHUB_WORKSPACE}/tools/vfd_smoke.py"
