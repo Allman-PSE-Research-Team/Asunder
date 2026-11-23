@@ -8,7 +8,7 @@ authors:
   given-names: "Andrew"
   orcid: "https://orcid.org/0000-0003-3531-2840"
 title: "Asunder: A Python Package for Constrained Network Structure Detection"
-version: 0.4.0
-doi: https://doi.org/10.5281/zenodo.23488523
+version: 0.4.2
+doi: https://doi.org/10.5281/zenodo.23488522
 date-released: 2026-09-24
 url: "https://github.com/Allman-PSE-Research-Team/Asunder"

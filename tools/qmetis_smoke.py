@@ -4,10 +4,6 @@ from __future__ import annotations
 
 import faulthandler
 
-# Enable before third-party imports: native dependencies can fail during import.
-faulthandler.enable()
-print("qmetis_smoke: importing dependencies", flush=True)
-
 import networkx as nx
 import numpy as np
 
@@ -20,6 +16,10 @@ from asunder.load_balancing.column_generation.subproblem import (
     qmetis_pricing_subproblem,
 )
 from asunder.solvers import create_solver, set_default_solver
+
+# Enable before third-party imports: native dependencies can fail during import.
+faulthandler.enable()
+print("qmetis_smoke: importing dependencies", flush=True)
 
 
 def main() -> int:
