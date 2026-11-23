@@ -8,6 +8,10 @@ from typing import Any
 _DEFAULT_SOLVER = None
 
 
+def _solver_type(solver: Any) -> str:
+    return str(getattr(solver, "type", getattr(solver, "name", ""))).lower()
+
+
 def create_solver(solver_name: str = "gurobi_direct", **solver_kwargs: Any):
     """
     Create a pyomo solver instance.

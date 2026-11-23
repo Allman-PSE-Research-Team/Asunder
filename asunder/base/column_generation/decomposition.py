@@ -170,7 +170,7 @@ def CSD_decomposition(
     max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
     *,
     node_weights=None,
-    persistent_master=False,
+    persistent_master: bool | None = None,
 ):
     """
     Function that does column generation (CG) and refinement given a master and subproblem function.
@@ -209,10 +209,10 @@ def CSD_decomposition(
         integer loads. ``balance_weights`` also supplies this
         vector when ``node_weights`` is omitted. Repeated weight arguments
         must agree; application-specific vectors need distinct argument names.
-    persistent_master : bool, default=False
-        Reuse and incrementally extend one restricted-master model during the
-        run. This opt-in path currently supports the built-in base and
-        load-balancing masters with a configured Gurobi solver.
+    persistent_master : bool or None, default=None
+        Automatically reuse the built-in base or load-balancing master with
+        a package default of ``gurobi_direct`` or ``gurobi_persistent``.
+        ``True`` requires a supported combination. ``False`` always rebuilds.
     additional_constraints : dict[str, Any]
         Additional settings passed to the master, such as worthy edges or
         balance bounds. Non-pairwise hook settings must also be supplied in
@@ -322,8 +322,8 @@ def CSD_decomposition(
         sparse_column_density_threshold,
         max_dense_working_bytes,
     )
-    if not isinstance(persistent_master, (bool, np.bool_)):
-        raise TypeError("persistent_master must be a boolean.")
+    if persistent_master is not None and not isinstance(persistent_master, (bool, np.bool_)):
+        raise TypeError("persistent_master must be a boolean or None.")
     if persistent_master:
         from asunder.base.column_generation.persistent_master import (
             validate_persistent_master_function,
@@ -451,12 +451,22 @@ def CSD_decomposition(
     additional_constraints = (
         {} if additional_constraints is None else dict(additional_constraints)
     )
+    # get rid of this if I decide to remove the solver parameter from built-in master problems
+    if "solver" in additional_constraints:
+        from asunder.base.column_generation.persistent_master import built_in_master_kind
+
+        if built_in_master_kind(mp_function) is not None:
+            raise TypeError(
+                "Built-in master solvers are configured with set_default_solver(). "
+                "Remove 'solver' from additional_constraints."
+            )
+    persistent_solver = None
     if persistent_master:
         from asunder.base.column_generation.persistent_master import (
             validate_persistent_solver,
         )
 
-        validate_persistent_solver(additional_constraints.get("solver"))
+        persistent_solver = validate_persistent_solver()
     # normalize node weights
     if node_weights is None:
         node_weights = additional_constraints.get("node_weights")
@@ -745,8 +755,13 @@ def CSD_decomposition(
                 for col in Z_star
             ]
 
+    if persistent_master is None:
+        from asunder.base.column_generation.persistent_master import select_persistent_solver
+
+        persistent_solver = select_persistent_solver(mp_function)
+
     persistent_session = None
-    if persistent_master:
+    if persistent_solver is not None:
         from asunder.base.column_generation.persistent_master import (
             create_persistent_master_session,
         )
@@ -759,6 +774,7 @@ def CSD_decomposition(
             cannot_link=cannot_link,
             must_link=[] if contract_graph else must_link,
             additional_constraints=additional_constraints,
+            source_solver=persistent_solver,
             verbose=verbose,
         )
         sessions = _PERSISTENT_SESSION_HOLDER.get()

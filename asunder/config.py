@@ -108,10 +108,10 @@ class CSDDecompositionConfig:
         Boolean that determines whether post-loop refinement is run after column generation terminates.
     final_master_solve : bool
         Boolean that determines whether a final master solve is executed or not.
-    persistent_master : bool
-        Whether to reuse and incrementally extend one Gurobi restricted-master
-        model. Disabled by default and limited to the built-in base and
-        load-balancing masters.
+    persistent_master : bool or None
+        ``None`` automatically reuses the built-in base and load-balancing
+        masters with ``gurobi_direct`` or ``gurobi_persistent``. ``True`` requires
+        a supported combination. ``False`` always rebuilds the master.
     max_iterations : int
         Maximum number of column generation iterations.
     disable_tqdm : bool
@@ -151,4 +151,4 @@ class CSDDecompositionConfig:
     sparse_column_density_threshold: float = DEFAULT_SPARSE_COLUMN_DENSITY_THRESHOLD
     max_dense_working_bytes: int | None = DEFAULT_MAX_DENSE_WORKING_BYTES
     node_weights: ArrayLike | None = None
-    persistent_master: bool = False
+    persistent_master: bool | None = None

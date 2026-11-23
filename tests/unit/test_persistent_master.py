@@ -4,14 +4,17 @@ import numpy as np
 import pytest
 from scipy import sparse
 
+from asunder import solvers
 from asunder.base.column_generation import decomposition as decomposition_module
 from asunder.base.column_generation import persistent_master as persistent_module
 from asunder.base.column_generation.decomposition import CSD_decomposition
 from asunder.base.column_generation.master import solve_master_problem as base_master
 from asunder.base.column_generation.pricing import build_dual_weight_matrix
+from asunder.config import CSDDecompositionConfig
 from asunder.load_balancing.column_generation.master import (
     solve_master_problem as load_balancing_master,
 )
+from asunder.orchestrator import run_csd_decomposition
 from asunder.solvers import create_solver
 
 
@@ -92,8 +95,9 @@ def gurobi_direct_solver():
 
 @pytest.mark.solver
 def test_base_persistent_master_matches_rebuild_before_and_after_append(
-    gurobi_direct_solver,
+    gurobi_direct_solver, monkeypatch,
 ):
+    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", gurobi_direct_solver)
     adjacency = _path_adjacency(5)
     strengths = adjacency.sum(axis=1)
     volume = float(strengths.sum())
@@ -108,7 +112,6 @@ def test_base_persistent_master_matches_rebuild_before_and_after_append(
     worthy_edges = [(0, 1), (2, 3), (3, 4)]
     master_kwargs = {
         "worthy_edges": worthy_edges,
-        "solver": gurobi_direct_solver,
     }
 
     session = persistent_module.create_persistent_master_session(
@@ -119,6 +122,7 @@ def test_base_persistent_master_matches_rebuild_before_and_after_append(
         cannot_link=cannot_link,
         must_link=must_link,
         additional_constraints=master_kwargs,
+        source_solver=gurobi_direct_solver,
         verbose=-1,
     )
     try:
@@ -189,8 +193,9 @@ def test_base_persistent_master_matches_rebuild_before_and_after_append(
 
 @pytest.mark.solver
 def test_load_balancing_persistent_master_matches_rebuild_after_append(
-    gurobi_direct_solver,
+    gurobi_direct_solver, monkeypatch,
 ):
+    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", gurobi_direct_solver)
     adjacency = _path_adjacency(5)
     strengths = adjacency.sum(axis=1)
     volume = float(strengths.sum())
@@ -208,7 +213,6 @@ def test_load_balancing_persistent_master_matches_rebuild_after_append(
         "K": 2,
         "R_bounds": (2, 3),
         "balance_weights": np.ones(5),
-        "solver": gurobi_direct_solver,
     }
 
     session = persistent_module.create_persistent_master_session(
@@ -219,6 +223,7 @@ def test_load_balancing_persistent_master_matches_rebuild_after_append(
         cannot_link=cannot_link,
         must_link=must_link,
         additional_constraints=master_kwargs,
+        source_solver=gurobi_direct_solver,
         verbose=-1,
     )
     try:
@@ -388,6 +393,7 @@ class _SpySession:
 
 
 def test_decomposition_syncs_all_new_columns_and_closes_one_session(monkeypatch):
+    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", SimpleNamespace(type="gurobi_direct"))
     adjacency = _path_adjacency()
     strengths = adjacency.sum(axis=1)
     initial = _partition([0, 0, 0, 0])
@@ -439,9 +445,6 @@ def test_decomposition_syncs_all_new_columns_and_closes_one_session(monkeypatch)
         refine_post_loop=True,
         final_master_solve=True,
         persistent_master=True,
-        additional_constraints={
-            "solver": SimpleNamespace(type="gurobi_direct", options={})
-        },
         check_flat_pricing=False,
         max_iterations=3,
         disable_tqdm=True,
@@ -471,6 +474,7 @@ def test_decomposition_syncs_all_new_columns_and_closes_one_session(monkeypatch)
 def test_decomposition_preserves_work_error_and_resets_owner_when_close_fails(
     monkeypatch,
 ):
+    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", SimpleNamespace(type="gurobi_direct"))
     adjacency = _path_adjacency()
     strengths = adjacency.sum(axis=1)
     session = _SpySession(
@@ -498,9 +502,6 @@ def test_decomposition_preserves_work_error_and_resets_owner_when_close_fails(
             refine_post_loop=False,
             final_master_solve=False,
             persistent_master=True,
-            additional_constraints={
-                "solver": SimpleNamespace(type="gurobi_direct", options={})
-            },
             disable_tqdm=True,
             verbose=-1,
         )
@@ -534,18 +535,86 @@ def test_persistent_master_rejects_custom_master_even_on_trivial_contraction():
         )
 
 
-def test_persistent_master_rejects_unsupported_solver():
-    adjacency = _path_adjacency()
+def test_persistent_master_rejects_unsupported_package_solver(monkeypatch):
+    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", SimpleNamespace(type="appsi_highs"))
     with pytest.raises(ValueError, match="gurobi_direct or gurobi_persistent"):
-        persistent_module.create_persistent_master_session(
-            base_master,
-            adjacency,
-            [_partition([0, 0, 1, 1])],
-            [0.0],
-            cannot_link=[],
-            must_link=[],
-            additional_constraints={
-                "solver": SimpleNamespace(type="appsi_highs", options={})
-            },
-            verbose=-1,
+        run_csd_decomposition(_path_adjacency(), persistent_master=True)
+
+
+@pytest.mark.parametrize("mode", [None, True, False])
+def test_decomposition_configures_built_in_master_solver_through_package_default(mode):
+    config = CSDDecompositionConfig(
+        additional_constraints={"solver": SimpleNamespace(type="gurobi_direct")},
+    )
+    with pytest.raises(TypeError, match="set_default_solver"):
+        run_csd_decomposition(
+            _path_adjacency(), config=config, persistent_master=mode,
         )
+
+
+@pytest.mark.parametrize(
+    ("master", "default_type", "mode", "expect_persistent"),
+    [
+        (base_master, "gurobi_direct", None, True),
+        (load_balancing_master, "gurobi_persistent", None, True),
+        (base_master, "appsi_highs", None, False),
+        (base_master, "gurobi_persistent", False, False),
+        (load_balancing_master, "gurobi_persistent", False, False),
+    ],
+)
+def test_decomposition_selects_persistence_from_the_package_solver(
+    monkeypatch, master, default_type, mode, expect_persistent
+):
+    from pyomo.environ import TerminationCondition
+
+    class Solver:
+        def __init__(self, solver_type):
+            self.type = solver_type
+            self.models = []
+            self.instance = None
+
+        def set_instance(self, model):
+            self.instance = model
+
+        def solve(self, model, **kwargs):
+            if self.type == "gurobi_persistent":
+                assert self.instance is model
+            self.models.append(model)
+            return SimpleNamespace(
+                solver=SimpleNamespace(termination_condition=TerminationCondition.infeasible)
+            )
+
+    default_solver = Solver(default_type)
+    monkeypatch.setattr(solvers, "_DEFAULT_SOLVER", default_solver)
+    sessions = []
+
+    def create_session(mp_function, A, columns, f_stars, *, source_solver, **kwargs):
+        assert mp_function is master
+        assert source_solver is default_solver
+        session = _SpySession(columns, infeasible=True)
+        sessions.append(session)
+        return session
+
+    def pricing(*args, **kwargs):
+        pytest.fail("an infeasible master must stop before pricing")
+
+    monkeypatch.setattr(persistent_module, "create_persistent_master_session", create_session)
+    config = CSDDecompositionConfig(disable_tqdm=True, verbose=-1)
+    result = run_csd_decomposition(
+        _path_adjacency(),
+        config=config,
+        master_fn=master,
+        subproblem_fn=pricing,
+        columns=[_partition([0, 0, 1, 1])],
+        f_stars=[0.0],
+        persistent_master=mode,
+    )
+
+    assert result.metadata["status"] == "infeasible"
+    if expect_persistent:
+        assert len(sessions) == 1
+        assert sessions[0].close_calls == 1
+        assert not default_solver.models
+    else:
+        assert not sessions
+        assert len(default_solver.models) == 1

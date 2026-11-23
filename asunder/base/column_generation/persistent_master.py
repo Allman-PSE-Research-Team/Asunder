@@ -10,7 +10,7 @@ from scipy import sparse
 
 from asunder.base.utils.matrix import matrix_scalar, structural_edge_pairs
 from asunder.load_balancing.utils.balance import resolve_balance_bounds
-from asunder.solvers import create_solver, get_default_solver
+from asunder.solvers import _solver_type, create_solver, get_default_solver
 from asunder.types import MatrixLike
 
 try:
@@ -35,18 +35,27 @@ except Exception:  # pragma: no cover - optional dependency
 MasterKind = Literal["base", "load_balancing"]
 
 
+def _supports_persistent_solver(source_solver: Any) -> bool:
+    return _solver_type(source_solver) in {"gurobi_direct", "gurobi_persistent"}
+
+
 def validate_persistent_solver(source_solver: Any = None) -> Any:
     """Return a supported source solver or raise before model construction."""
     source_solver = get_default_solver() if source_solver is None else source_solver
-    solver_type = str(
-        getattr(source_solver, "type", getattr(source_solver, "name", ""))
-    ).lower()
-    if solver_type not in {"gurobi_direct", "gurobi_persistent"}:
+    if not _supports_persistent_solver(source_solver):
         raise ValueError(
             "persistent_master=True currently requires a configured "
             "gurobi_direct or gurobi_persistent solver."
         )
     return source_solver
+
+
+def select_persistent_solver(mp_function: Any) -> Any | None:
+    """Select a solver for automatic mode when the master and solver support it."""
+    if built_in_master_kind(mp_function) is None:
+        return None
+    source_solver = get_default_solver()
+    return source_solver if _supports_persistent_solver(source_solver) else None
 
 
 def _configured_gurobi_solver(source_solver: Any = None):
@@ -466,17 +475,14 @@ def create_persistent_master_session(
     cannot_link: Sequence[tuple[int, int]],
     must_link: Sequence[tuple[int, int]],
     additional_constraints: dict[str, Any],
+    source_solver: Any,
     verbose: int | bool,
 ) -> PersistentMasterSession:
     """Create the persistent equivalent of a supported built-in master."""
-    from asunder.base.column_generation.master import solve_master_problem as base_master
-    from asunder.load_balancing.column_generation.master import (
-        solve_master_problem as load_balancing_master,
-    )
-
+    kind = built_in_master_kind(mp_function)
     options = dict(additional_constraints)
-    if mp_function is base_master:
-        supported = {"worthy_edges", "solver"}
+    if kind == "base":
+        supported = {"worthy_edges"}
         unexpected = set(options) - supported
         if unexpected:
             names = ", ".join(sorted(unexpected))
@@ -491,17 +497,16 @@ def create_persistent_master_session(
             cannot_link=cannot_link,
             must_link=must_link,
             worthy_edges=options.get("worthy_edges"),
-            solver=options.get("solver"),
+            solver=source_solver,
             verbose=verbose,
         )
-    if mp_function is load_balancing_master:
+    if kind == "load_balancing":
         supported = {
             "LB",
             "R",
             "K",
             "R_bounds",
             "balance_weights",
-            "solver",
         }
         unexpected = set(options) - supported
         if unexpected:
@@ -522,7 +527,7 @@ def create_persistent_master_session(
             K=options.get("K", 2),
             R_bounds=options.get("R_bounds"),
             balance_weights=options.get("balance_weights"),
-            solver=options.get("solver"),
+            solver=source_solver,
             verbose=verbose,
         )
     raise ValueError(
@@ -531,14 +536,22 @@ def create_persistent_master_session(
     )
 
 
-def validate_persistent_master_function(mp_function: Any) -> None:
-    """Reject unsupported custom masters before decomposition side effects."""
+def built_in_master_kind(mp_function: Any) -> MasterKind | None:
     from asunder.base.column_generation.master import solve_master_problem as base_master
     from asunder.load_balancing.column_generation.master import (
         solve_master_problem as load_balancing_master,
     )
 
-    if mp_function not in {base_master, load_balancing_master}:
+    if mp_function is base_master:
+        return "base"
+    if mp_function is load_balancing_master:
+        return "load_balancing"
+    return None
+
+
+def validate_persistent_master_function(mp_function: Any) -> None:
+    """Reject unsupported custom masters before decomposition side effects."""
+    if built_in_master_kind(mp_function) is None:
         raise ValueError(
             "persistent_master=True supports only Asunder's built-in base and "
             "load-balancing master functions."

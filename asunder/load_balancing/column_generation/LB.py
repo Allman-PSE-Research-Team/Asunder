@@ -216,7 +216,7 @@ def LoadBalancer(
     disable_tqdm=False,
     verbose=-1,
     resolution=1.0,
-    persistent_master=False,
+    persistent_master: bool | None = None,
     max_dense_working_bytes=DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> DecompositionResult:
     """
@@ -307,8 +307,10 @@ def LoadBalancer(
         Whether to run post-loop refinement after column generation terminates.
     final_master_solve : bool
         Whether to solve the final integer restricted master.
-    persistent_master : bool, default=False
-        Reuse and incrementally extend one Gurobi load-balancing master model.
+    persistent_master : bool or None, default=None
+        Automatically reuse the load-balancing master with ``gurobi_direct``
+        or ``gurobi_persistent``. ``True`` requires a supported solver.
+        ``False`` always rebuilds the master.
     max_dense_working_bytes : int or None, default=536870912
         Maximum estimated dense working set per operation, in bytes.
         Forwarded to decomposition and pricing. ``None`` disables the guard.
